@@ -9,6 +9,7 @@ rem                                  jamais embarque)
 rem          build.bat --check      (verifie seulement l'environnement)
 rem          build.bat --all        (paquets complet ET allege, puis controle
 rem                                  de fumee sur les deux executables)
+rem          build.bat --no-smoke   (compile sans lancer les controles de fumee)
 rem  Les options --lite et --no-smoke peuvent etre combinees.
 rem  Aucune variante n'embarque le Node.js du pilote Playwright : les outils
 rem  browser_* utilisent le Node.js 18+ du systeme (voir README).

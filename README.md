@@ -12,7 +12,7 @@ et index sémantique local. Interface CustomTkinter, backend LLM interchangeable
 
 | Sujet | Choix retenu | Raison |
 |---|---|---|
-| Interface | **CustomTkinter** (pas PySide6) | Aucune dépendance Qt à collecter dans PyInstaller, API `Text` suffisante pour le streaming token par token et le journal d'outils coloré. Build mesurée : 126,91 Mio au total, dont ~26 Mio de NumPy/OpenBLAS ; le reste vient des outils (pilote Playwright, bibliothèques), pas de l'interface (voir « Variantes de l'exécutable »). |
+| Interface | **CustomTkinter** (pas PySide6) | Aucune dépendance Qt à collecter dans PyInstaller, API `Text` suffisante pour le streaming token par token et le journal d'outils coloré. Build mesurée : 187,40 Mio au total, dont ~26 Mio de NumPy/OpenBLAS ; le reste vient des outils (pilote Playwright, bibliothèques), pas de l'interface (voir « Variantes de l'exécutable »). |
 | Index vectoriel | **SQLite FTS5 + cosinus NumPy**, `sqlite-vec` en accélérateur optionnel | Aucune extension native obligatoire : l'index fonctionne dès l'installation. Si `sqlite_vec` est présent (≥ 20 000 chunks), il prend le relais sans changement d'API. ChromaDB écarté (serveur + ~200 Mo pour un besoin mono-utilisateur). |
 | Recherche | DuckDuckGo HTML/Lite, SearxNG, Brave API optionnelle | Zéro clé API par défaut, plusieurs moteurs en secours automatique, extraction de contenu par `trafilatura`. |
 | Modèle local | Sélecteur dans l'UI, transport HTTP direct vers `/api/chat` d'Ollama | Pas de dépendance au SDK `ollama` ; streaming et annulation gérés par `httpx`. |
@@ -89,11 +89,56 @@ copy .env.example .env
 
 Prérequis externes :
 
-- **Tesseract OCR** (optionnel) : installer `tesseract-ocr-w64` puis renseigner
-  `files.tesseract_cmd` ou `OMNIAGENT_FILES_TESSERACT_CMD`. Sans lui, les images
-  sont indexées par métadonnées uniquement.
+- **Tesseract OCR** — **plus nécessaire** : les paquets embarquent le moteur
+  `tesserocr` (Tesseract 5.5 + Leptonica en DLL) et les données `eng`/`fra`, donc
+  `ocr_image` fonctionne sans rien installer. Le binaire système reste utile
+  pour d'autres langues, ou pour profiter des données déjà présentes :
+  installeur Windows officiel —
+  <https://github.com/UB-Mannheim/tesseract/wiki> (builds UB Mannheim). Après
+  installation, soit `tesseract` est dans le `PATH`, soit on renseigne la clé
+  `files.tesseract_cmd` dans `data\config.json` :
+
+  ```json
+  {
+    "files": {
+      "tesseract_cmd": "C:\\Program Files\\Tesseract-OCR\\tesseract.exe"
+    }
+  }
+  ```
+
+  ou la variable `OMNIAGENT_FILES_TESSERACT_CMD`. Vérification exacte :
+
+  ```bat
+  "%PROGRAMFILES%\Tesseract-OCR\tesseract.exe" --version
+  python app.py --check
+  ```
+
+  S'il est absent, le moteur embarqué prend le relais : `ocr_status` renvoie
+  `backend: "tesserocr"`. Le binaire n'est obligatoire que pour les langues qui
+  ne sont pas livrées dans `assets/tessdata`.
 - **Ollama** (optionnel) : `ollama pull qwen2.5:14b` + `ollama pull nomic-embed-text`
   pour un fonctionnement 100 % local sans filtre plateforme.
+
+---
+
+## Assistant de premier démarrage
+
+Au lancement, si aucune clé n'est disponible pour le fournisseur, la fenêtre
+ouvre **Configuration initiale — OmniAgent** en modal au-dessus d'elle. Le
+bouton **Plus tard** referme l'assistant : l'interface reste utilisable, mais
+chaque envoi échouera tant qu'aucune clé n'est renseignée.
+
+| Réglage | Où il est enregistré | Quand il prend effet |
+|---|---|---|
+| **Clé API** | variable `DEEPSEEK_API_KEY` (ou `llm.api_key_env`) de la session, et fichier `.env` du dossier d'installation : à côté de `OmniAgent.exe`, racine du projet en source. Jamais dans `config.json`. | immédiatement |
+| **Dossier de travail** | ajouté à `files.allowed_roots` dans `config.json` (`%LOCALAPPDATA%\OmniAgent\config.json` pour l'exe, `data\config.json` en source) | au prochain démarrage (il borne les outils fichiers) |
+| **Canal navigateur** | `browser.channel` dans le même `config.json` : vide = Chromium embarqué sinon Edge/Chrome du système, ou `msedge` / `chrome` | au prochain démarrage |
+| **Phrase du coffre** | crée `vault.enc` (Argon2id + AES-256-GCM) ; les phrases trop courtes ou non concordantes sont refusées, un coffre existant est conservé | immédiatement, coffre laissé déverrouillé |
+
+Le bouton **Assistant** de l'en-tête rouvre la même fenêtre avec les valeurs
+actuelles, pour changer d'avis sans éditer de fichier : la clé saisie est
+active tout de suite, le dossier et le canal s'appliquent au redémarrage
+suivant.
 
 ---
 
@@ -106,17 +151,18 @@ sur les paquets de `dist\` de ce poste :
 
 | Variante | Commande | Taille | Fichiers | Contenu |
 |---|---|---|---|---|
-| Complète | `build.bat` | 126,91 Mio | 1505 | NumPy/OpenBLAS (~26 Mio), Pillow, `pytesseract`, `pypdf`/`docx`/`openpyxl` ; navigateur pris dans le cache Playwright, sinon Edge/Chrome de la machine |
-| Lite | `build.bat --lite` | 98,67 Mio | 1466 | Sans NumPy (index vectoriel dégradé) ; Pillow, `pytesseract`, `pypdf`/`docx`/`openpyxl` conservés, donc OCR, indexation PDF/DOCX/XLSX et navigateurs fonctionnent à l'identique |
-| Slim | `build.bat --slim` | 98,67 Mio | 1466 | **Alias de `--lite`** : même recette, produite dans `dist\OmniAgent-slim` pour les scripts qui utilisent ce dossier |
+| Complète | `build.bat` | 187,40 Mio | 1536 | NumPy/OpenBLAS (~26 Mio), Pillow, `pytesseract`, moteur OCR `tesserocr` (DLL Tesseract/Leptonica/ICU, ~58 Mio) et données `eng`/`fra`, `pypdf`/`docx`/`openpyxl` ; navigateur pris dans le cache Playwright, sinon Edge/Chrome de la machine |
+| Lite | `build.bat --lite` | 159,16 Mio | 1497 | Sans NumPy (index vectoriel dégradé) ; Pillow, `pytesseract`, moteur OCR `tesserocr` et données de langue conservés, donc OCR, indexation PDF/DOCX/XLSX et navigateurs fonctionnent à l'identique |
+| Slim | `build.bat --slim` | 159,16 Mio | 1497 | **Alias de `--lite`** : même recette, produite dans `dist\OmniAgent-slim` pour les scripts qui utilisent ce dossier |
 
 Valeurs tronquées à deux décimales (somme réelle des tailles de fichiers) :
-133 076 042 octets pour le complet, 103 466 039 pour le lite. Aucun des deux
-paquets ne contient de `node.exe`. Le surcoût de ~2,6 Mio par rapport aux
-mesures précédentes vient de `pypdf`, `docx` et `openpyxl`, désormais déclarés
-en `hiddenimports` : `tools.file_manager._require` passe par `__import__`, donc
-PyInstaller ne les voyait pas et l'indexation PDF/DOCX/XLSX échouait dans le
-paquet.
+196 501 824 octets pour le complet, 166 891 821 pour le lite. Aucun des deux
+paquets ne contient de `node.exe`. Le surcoût de ~60 Mio par rapport aux mesures
+précédentes vient du moteur OCR en processus : DLL `tesserocr` (Tesseract 5.5,
+Leptonica, ICU, ~53 Mio après sélection de la fermeture des imports) et
+5,1 Mio de données `eng`/`fra`. `pypdf`, `docx`, `openpyxl` et `tesserocr` sont
+déclarés en `hiddenimports` : les imports dynamiques (`__import__`,
+imports en méthode) échappent à l'analyse statique de PyInstaller.
 
 Aucune variante n'embarque `playwright/driver/node.exe` (~95 Mio) : les outils
 `browser_*` pilotent Chromium avec le **Node.js 18+ du système** (voir
@@ -155,14 +201,46 @@ Contrôle navigateur réussi.
 Code 0 = le binaire pilote réellement le navigateur ; 1 = Node.js ou le
 navigateur manque (le message nomme la cause), 2 = exécutable absent.
 
+### Contrôle de fumée de l'OCR
+
+`build.bat` lance ce contrôle après celui du navigateur (sauf `--no-smoke`) :
+
+```bat
+python smoke_exe.py --ocr --exe dist\OmniAgent\OmniAgent.exe
+python smoke_exe.py --ocr --exe dist\OmniAgent-lite\OmniAgent.exe
+```
+
+L'exe rend une image avec Pillow, la fait lire au moteur retenu et exige
+`OCR_SMOKE_OK` :
+
+```
+  moteur : tesserocr
+  langue : fra+eng
+  texte  : 'ATLAS BUDGET 42'
+Contrôle OCR réussi (OCR_SMOKE_OK).
+```
+
+Aucun `tesseract.exe` n'est présent sur la machine de mesure : ce résultat
+prouve que le moteur embarqué et ses données de langue fonctionnent dans le
+paquet livré. `--check` l'affiche aussi :
+
+```
+ok  OCR : disponible (Tesseract 5.5.4 en processus (tesserocr), langues : eng, fra)
+```
+
 **Part des familles `doc_index_*`, `ocr_*` et `shell_*`** : environ 21,8 Kio de
 code source (`tools/doc_index.py` 10,1 Kio, `tools/ocr.py` 6,0 Kio,
 `tools/shell.py` 5,7 Kio), embarqués en bytecode dans l'archive PyInstaller.
-Le module `pytesseract` (pur Python) et Pillow sont embarqués dans les trois
-variantes : c'est ce qui permet à `ocr_status` de répondre dans l'exe. **Aucun
-moteur Tesseract n'est livré** : `tesseract.exe` doit être installé sur la
-machine cible (ou désigné par `files.tesseract_cmd`), sinon `ocr_status` répond
-`available: false` avec la raison exacte. Leur poids reste négligeable devant
+Pillow, `pytesseract` **et le moteur en processus `tesserocr`** sont embarqués
+dans les deux variantes. `Ocr` essaye d'abord un `tesseract.exe` (installé ou
+`files.tesseract_cmd`), puis bascule sur `tesserocr` avec les données de
+`assets/tessdata` : `ocr_status` renvoie `backend: "tesseract-cli"` ou
+`"tesserocr"`, et si les deux échouent, `detail` cite **les deux causes**
+(`--check` ajoute alors le lien officiel
+<https://github.com/UB-Mannheim/tesseract/wiki>, la clé `files.tesseract_cmd` et
+la commande de vérification). Le paquet ne dépend donc plus d'une installation
+système ; le binaire reste prioritaire pour les langues supplémentaires. Leur
+poids reste négligeable devant
 NumPy/OpenBLAS (~26 Mio).
 
 Autres options :

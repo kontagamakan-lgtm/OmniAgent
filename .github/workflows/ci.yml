@@ -1,8 +1,14 @@
 name: CI Windows
 
 # Vérifie chaque poussée et chaque pull request : style/lint, suite de tests,
-# puis construction des deux paquets avec leurs contrôles de fumée (fenêtre,
-# navigateur système et indexation d'un PDF).
+# puis construction des deux paquets et contrôles de fumée.
+#
+# Les contrôles lancés ici ne dépendent d'AUCUNE fenêtre affichée : un runner
+# GitHub windows-latest peut démarrer sans session interactive, et le smoke qui
+# attend une fenêtre visible (smoke_exe.py sans option) y échouerait sans que
+# l'application soit en cause. La construction utilise donc --no-smoke et la CI
+# appelle explicitement les auto-contrôles : navigateur système, indexation
+# d'un PDF et OCR en processus.
 
 on:
   push:
@@ -64,27 +70,46 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt -r requirements-dev.txt
 
-      # Le script enchaîne, pour chaque paquet : contrôle de fenêtre
-      # (smoke_exe.py) puis contrôle navigateur (--browser-smoke).
-      - name: Construire les deux paquets (smoke tests inclus)
+      # --no-smoke : pas de recherche de fenêtre visible, impossible à garantir
+      # sur un runner sans session interactive. Les contrôles bloquants suivent.
+      - name: Construire les deux paquets
         shell: cmd
         env:
           PYTHONUTF8: "1"
-        run: build.bat --all
+        run: build.bat --all --no-smoke
 
-      # Preuve que l'indexation d'un PDF fonctionne dans les binaires livrés.
-      - name: Indexation d'un PDF dans les deux binaires
+      # L'alias --slim est utilisé par d'anciens scripts : le construire ici
+      # garantit qu'il ne casse pas sans que personne ne s'en aperçoive. Il ne
+      # touche que dist\OmniAgent-slim et reprend la recette de --lite.
+      - name: Construire l'alias --slim
         shell: cmd
         env:
           PYTHONUTF8: "1"
         run: |
-          python smoke_exe.py --doc-index --exe dist\OmniAgent\OmniAgent.exe
-          python smoke_exe.py --doc-index --exe dist\OmniAgent-lite\OmniAgent.exe
+          build.bat --slim --no-smoke || exit /b 1
+          if not exist dist\OmniAgent-slim\OmniAgent.exe exit /b 1
+
+      # Chaque contrôle exécute l'exe construit avec son auto-test et exige un
+      # marqueur : navigateur réel, PDF indexé, OCR sur une image rendue.
+      - name: Contrôles de fumée sans fenêtre (navigateur, index, OCR)
+        shell: cmd
+        env:
+          PYTHONUTF8: "1"
+        run: |
+          python smoke_exe.py --browser --exe dist\OmniAgent\OmniAgent.exe || exit /b 1
+          python smoke_exe.py --doc-index --exe dist\OmniAgent\OmniAgent.exe || exit /b 1
+          python smoke_exe.py --ocr --exe dist\OmniAgent\OmniAgent.exe || exit /b 1
+          python smoke_exe.py --browser --exe dist\OmniAgent-lite\OmniAgent.exe || exit /b 1
+          python smoke_exe.py --doc-index --exe dist\OmniAgent-lite\OmniAgent.exe || exit /b 1
+          python smoke_exe.py --ocr --exe dist\OmniAgent-lite\OmniAgent.exe || exit /b 1
+          python smoke_exe.py --browser --exe dist\OmniAgent-slim\OmniAgent.exe || exit /b 1
+          python smoke_exe.py --doc-index --exe dist\OmniAgent-slim\OmniAgent.exe || exit /b 1
+          python smoke_exe.py --ocr --exe dist\OmniAgent-slim\OmniAgent.exe || exit /b 1
 
       - name: Taille des paquets
         shell: cmd
         run: >-
-          python -c "import os;[(print(d, round(sum(os.path.getsize(os.path.join(r,f)) for r,_,ns in os.walk(d) for f in ns)/1048576,2),'Mio', sum(len(ns) for _,_,ns in os.walk(d)),'fichiers')) for d in ('dist/OmniAgent','dist/OmniAgent-lite')]"
+          python -c "import os;[(print(d, round(sum(os.path.getsize(os.path.join(r,f)) for r,_,ns in os.walk(d) for f in ns)/1048576,2),'Mio', sum(len(ns) for _,_,ns in os.walk(d)),'fichiers')) for d in ('dist/OmniAgent','dist/OmniAgent-lite','dist/OmniAgent-slim')]"
 
       - name: Conserver les paquets
         uses: actions/upload-artifact@v4
@@ -93,4 +118,5 @@ jobs:
           path: |
             dist/OmniAgent/
             dist/OmniAgent-lite/
+            dist/OmniAgent-slim/
           retention-days: 7
