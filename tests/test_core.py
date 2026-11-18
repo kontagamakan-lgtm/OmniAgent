@@ -24,7 +24,12 @@ from core.errors import (
 from core.events import EventBus, EventType
 from core.llm_client import LLMClient, LLMResponse
 from core.prompts import FINAL_ANSWER_PREFIX, system_prompt, tool_catalogue
-from core.react_parser import ParsedToolCall, decode_arguments, parse_tool_calls
+from core.react_parser import (
+    ParsedToolCall,
+    decode_arguments,
+    parse_model_json,
+    parse_tool_calls,
+)
 from core.tool_registry import ToolRegistry
 from tools.base import FunctionTool, ToolResult, object_schema, param
 
@@ -677,6 +682,61 @@ def test_trimming_keeps_the_original_task() -> None:
         # La consigne ne doit jamais disparaître, même si la fenêtre n'a pas de tour user.
         assert messages[1]["role"] == "user"
         assert "LA TÂCHE ORIGINALE" in str(messages[1]["content"])
+
+
+def test_trimming_mid_loop_keeps_a_summary_without_a_user_turn() -> None:
+    """Boucle d'outils à un seul tour user : le repli résume au lieu de tout jeter."""
+    with tmpdir("core") as tmp:
+        settings = _settings(tmp, history_max=6)
+        seen: list[str] = []
+        script = [_call("echo", text=f"t{index}") for index in range(5)] + [_text("fini")]
+        llm = FakeLLM(script)
+        core = AgentCore(settings, llm, ToolRegistry([_echo_tool(seen)]))
+
+        assert core.run("TÂCHE UNIQUE").ok
+
+        # 4e appel : l'historique a dépassé 6 messages et vient d'être replié.
+        messages = llm.calls[3]["messages"]
+        assert len(messages) <= 6
+        assert messages[0]["role"] == "system"
+        assert messages[1]["role"] == "user" and "TÂCHE UNIQUE" in str(messages[1]["content"])
+        summaries = [message for message in messages[2:] if message["role"] == "system"]
+        assert summaries, "un tour abandonné doit être résumé, même sans tour user"
+        assert "- OUTIL: echo" in str(summaries[0]["content"])
+        assert messages[2]["role"] != "tool", "la queue ne peut pas ouvrir sur un résultat d'outil"
+
+
+def test_context_budget_folds_old_turns_into_a_summary() -> None:
+    with tmpdir("core") as tmp:
+        settings = _settings(tmp, history_max=8, max_context_tokens=1500)
+        seen: list[str] = []
+        script = [
+            _call("echo", text=f"t{index} " + "x" * 400) for index in range(10)
+        ] + [_text("fini")]
+        llm = FakeLLM(script)
+        core = AgentCore(settings, llm, ToolRegistry([_echo_tool(seen)]))
+
+        reply = core.run("TÂCHE LONGUE")
+
+        assert reply.ok, reply.to_dict()
+        messages = llm.calls[-1]["messages"]
+        assert messages[0]["role"] == "system"
+        assert messages[1]["role"] == "user"
+        assert "TÂCHE LONGUE" in str(messages[1]["content"])
+        summaries = [message for message in messages[2:] if message["role"] == "system"]
+        assert summaries, "le repli doit laisser un résumé des tours abandonnés"
+        assert "- OUTIL: echo" in str(summaries[0]["content"])
+        # Un message `tool` ne doit jamais ouvrir l'historique tronqué.
+        assert messages[2]["role"] != "tool"
+
+
+def test_parse_model_json_reads_fenced_and_noisy_output() -> None:
+    assert parse_model_json('```json\n{"action": "list"}\n```') == {"action": "list"}
+    assert parse_model_json(
+        'Bien sûr : {"action": {"nested": "}"}} et voilà.'
+    ) == {"action": {"nested": "}"}}
+    assert parse_model_json("aucun objet ici") is None
+    assert parse_model_json("[1, 2, 3]") is None
 
 
 def test_dangerous_tool_requires_confirmation() -> None:

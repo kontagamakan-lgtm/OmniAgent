@@ -92,6 +92,8 @@ def system_prompt(
         "Appelle les outils avec des arguments complets et valides (voir les schémas JSON).",
         "Après chaque résultat, décide : continuer, corriger, ou conclure.",
         "Si un outil échoue, lis le code d'erreur et change de stratégie plutôt que de répéter.",
+        "Un message système peut résumer des tours antérieurs : appuie-toi dessus "
+        "au lieu de redemander une information déjà obtenue.",
         f"Tu disposes d'au plus {max_steps} étapes ; regroupe les lectures indépendantes.",
         "",
         "## Règles",

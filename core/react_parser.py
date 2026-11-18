@@ -23,6 +23,7 @@ __all__ = [
     "extract_json_objects",
     "final_text",
     "has_final_answer",
+    "parse_model_json",
     "parse_tool_calls",
     "strip_final_prefix",
 ]
@@ -220,6 +221,65 @@ def parse_tool_calls(text: str) -> list[ParsedToolCall]:
         seen.add(signature)
         unique.append(call)
     return unique
+
+
+def parse_model_json(raw: str) -> dict[str, Any] | None:
+    """Extrait un objet JSON d'une réponse modèle, même entourée de bruit.
+
+    Utilisé pour relire une sortie de modèle hors du format natif : bloc
+    Markdown, phrase d'introduction, ou objet noyé dans la prose. Retourne
+    ``None`` plutôt que de lever : l'appelant décide quoi faire du silence.
+    """
+    text = str(raw or "").strip()
+    if text.startswith("```"):
+        stripped = text.strip("`")
+        if stripped.lower().startswith("json"):
+            stripped = stripped[4:]
+        text = stripped.strip()
+
+    candidates = [text]
+    first = _first_object_span(text)
+    if first and first != text:
+        candidates.append(first)
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
+def _first_object_span(text: str) -> str:
+    """Premier objet `{…}` équilibré du texte, accolades des chaînes ignorées."""
+    start = text.find("{")
+    if start < 0:
+        return ""
+    depth = 0
+    in_string = False
+    escaped = False
+    for index in range(start, len(text)):
+        char = text[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : index + 1]
+    return ""
 
 
 def has_final_answer(text: str) -> bool:

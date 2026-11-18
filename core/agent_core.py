@@ -23,11 +23,13 @@ import json
 import logging
 import threading
 import time
+import uuid
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Callable, Sequence
 
 from config import APP_ID, Settings
+from core.context_manager import trim_messages
 from core.errors import (
     AgentError,
     BudgetExhausted,
@@ -151,12 +153,14 @@ class AgentCore:
         self.settings = settings
         self.llm = llm
         self.registry = registry
-        self.bus = bus or EventBus()
+        # `bus or …` serait un piège : un bus vide est faux (via __len__).
+        self.bus = bus if bus is not None else EventBus()
         self._sleep = sleep
         self._cancel = threading.Event()
         self._lock = threading.Lock()
         self._schemas: list[dict[str, Any]] | None = None
         self.run_count = 0
+        self.run_id = ""
 
     # -- pilotage -----------------------------------------------------------
 
@@ -203,6 +207,7 @@ class AgentCore:
         cfg = self.settings.agent
         limit = max(1, int(max_steps or cfg.max_steps))
         self.run_count += 1
+        self.run_id = uuid.uuid4().hex[:12]
         with self._lock:
             self.reset_cancel()
 
@@ -525,22 +530,11 @@ class AgentCore:
         Couper au hasard séparerait un message assistant porteur de
         `tool_calls` de ses réponses `tool`, ce que le fournisseur rejette.
         """
-        limit = max(4, int(self.settings.agent.history_max_messages))
-        if len(messages) <= limit:
-            return list(messages)
-
-        system = messages[0]
-        task = dict(messages[1]) if len(messages) > 1 else {"role": "user", "content": ""}
-        if task.get("role") != "user":
-            task = {"role": "user", "content": "(historique tronqué)"}
-        rest = list(messages[2:])
-        keep = max(1, limit - 2)
-        # La consigne initiale est toujours conservée : sans elle, une synthèse
-        # de clôture ne saurait plus de quoi elle parle.
-        for start in range(max(0, len(rest) - keep), len(rest)):
-            if rest[start].get("role") == "user":
-                return [system, task, *rest[start:]]
-        return [system, task]
+        return trim_messages(
+            messages,
+            max_messages=max(4, int(self.settings.agent.history_max_messages)),
+            max_tokens=int(self.settings.agent.max_context_tokens),
+        )
 
     def _cancelled(self, steps: list[AgentStep], recoveries: int) -> AgentReply:
         text = "Exécution interrompue à la demande de l'utilisateur."
@@ -582,7 +576,7 @@ class AgentCore:
         return reply
 
     def _emit(self, event_type: str, payload: dict[str, Any] | None = None) -> None:
-        self.bus.emit(event_type, payload)
+        self.bus.emit(event_type, payload, run_id=self.run_id)
 
 
 def _safe_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
