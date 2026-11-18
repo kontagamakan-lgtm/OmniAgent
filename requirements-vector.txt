@@ -1,0 +1,13 @@
+# =============================================================================
+# Accélérateur vectoriel optionnel.
+#
+# L'index sémantique (Livrable 2/4) fonctionne SANS ce paquet : il bascule
+# automatiquement sur le classement FTS5 (BM25) + cosinus NumPy.
+# Installez-le seulement si vous indexez plus de ~20 000 chunks et que le
+# classement exact devient trop lent.
+#
+# Attention packaging : l'extension native sqlite_vec.dll doit être collectée
+# par PyInstaller (`collect_dynamic_libs("sqlite_vec")` dans le .spec).
+# =============================================================================
+
+sqlite-vec>=0.1.4,<1

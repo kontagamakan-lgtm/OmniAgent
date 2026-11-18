@@ -1,0 +1,10 @@
+# =============================================================================
+# OmniAgent Windows — dépendances de développement et de test
+#   pip install -r requirements.txt -r requirements-dev.txt
+# =============================================================================
+
+pytest>=8.2,<10
+pytest-cov>=5.0,<8
+pytest-asyncio>=0.23,<2
+ruff>=0.5,<1
+mypy>=1.10,<2

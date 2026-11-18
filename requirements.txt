@@ -1,0 +1,53 @@
+# =============================================================================
+# OmniAgent Windows — dépendances de production
+# Cible : Windows 10/11 x64, Python 3.11+ (3.12 recommandé pour PyInstaller)
+#
+# Installation :
+#   python -m venv .venv
+#   .venv\Scripts\activate
+#   pip install -r requirements.txt
+#   python -m playwright install chromium
+#
+# Les bornes hautes évitent les ruptures d'API majeures ; après une première
+# compilation réussie, figez l'état exact avec `pip freeze > requirements.lock.txt`.
+# =============================================================================
+
+# --- Interface graphique -----------------------------------------------------
+customtkinter>=5.2.2,<6
+Pillow>=10.3,<13
+darkdetect>=0.8,<1
+
+# --- Moteur LLM (API DeepSeek / compatible OpenAI) ---------------------------
+openai>=1.40,<2
+httpx>=0.27,<1
+tenacity>=8.5,<10
+tiktoken>=0.7,<1
+
+# --- Automatisation navigateur ----------------------------------------------
+playwright>=1.45,<2
+
+# --- Recherche et extraction web --------------------------------------------
+beautifulsoup4>=4.12,<5
+lxml>=5.2,<7
+trafilatura>=1.12,<3
+ddgs>=9.0,<10
+
+# --- Documents et indexation ------------------------------------------------
+pypdf>=4.2,<7
+python-docx>=1.1,<2
+openpyxl>=3.1,<4
+numpy>=1.26,<3
+
+# --- OCR (nécessite tesseract.exe, voir README) -----------------------------
+pytesseract>=0.3.10,<0.4
+
+# --- Cryptographie du coffre-fort -------------------------------------------
+cryptography>=43,<47
+argon2-cffi>=23.1,<26
+keyring>=25,<26
+
+# --- Surveillance de répertoires --------------------------------------------
+watchdog>=4.0,<7
+
+# --- Packaging --------------------------------------------------------------
+pyinstaller>=6.6,<7
