@@ -72,6 +72,14 @@ class DocIndex:
                 "CREATE VIRTUAL TABLE IF NOT EXISTS documents "
                 "USING fts5(path, ordinal UNINDEXED, text)"
             )
+            # Empreinte du dernier passage : date (ns) et taille. Elle rend
+            # `index_path` incrémental — un fichier inchangé n'est pas relu, et
+            # donc pas reconverti (un PDF coûte une extraction complète).
+            self._db.execute(
+                "CREATE TABLE IF NOT EXISTS document_files ("
+                "path TEXT PRIMARY KEY, mtime_ns INTEGER NOT NULL, "
+                "size INTEGER NOT NULL, chunk_count INTEGER NOT NULL DEFAULT 0)"
+            )
             self._db.commit()
         except sqlite3.OperationalError as exc:  # pragma: no cover - Python sans FTS5
             raise ToolError(
@@ -118,10 +126,14 @@ class DocIndex:
         max_files: int = 200,
         max_chars: int = 200_000,
     ) -> dict[str, Any]:
-        """Indexe un fichier ou un répertoire.
+        """Indexe un fichier ou un répertoire, de façon incrémentale.
 
         Sans `pattern`, tous les formats de `INDEXABLE_SUFFIXES` sont pris :
-        texte, Markdown, PDF, DOCX et XLSX.
+        texte, Markdown, PDF, DOCX et XLSX. Un fichier dont la date de
+        modification (ns) et la taille n'ont pas changé depuis le dernier
+        passage n'est pas relu : il sort dans `unchanged` au lieu d'être
+        reconverti. Un index créé avant cette table réindexe une fois chaque
+        document, puis devient incrémental.
         """
         root = self._resolve(path)
         if root.is_file():
@@ -140,21 +152,43 @@ class DocIndex:
 
         documents = 0
         chunks_written = 0
+        unchanged = 0
         skipped: list[str] = []
         with self._db:
             for file in candidates:
+                key = str(file)
+                try:
+                    stat = file.stat()
+                except OSError as exc:
+                    skipped.append(f"{key} : {exc}")
+                    continue
+                previous = self._db.execute(
+                    "SELECT mtime_ns, size FROM document_files WHERE path = ?", (key,)
+                ).fetchone()
+                if previous and int(previous[0]) == stat.st_mtime_ns and int(previous[1]) == stat.st_size:
+                    # Même date et même taille : rien n'a bougé, on ne lit pas.
+                    unchanged += 1
+                    continue
                 try:
                     text = self._read(file, max(1, int(max_chars)))
                 except Exception as exc:  # noqa: BLE001 - un fichier illisible n'arrête pas l'index
-                    skipped.append(f"{file} : {exc}")
+                    skipped.append(f"{key} : {exc}")
                     continue
                 chunks = _chunk_text(text)
-                self._db.execute("DELETE FROM documents WHERE path = ?", (str(file),))
-                if not chunks:
-                    continue
-                self._db.executemany(
-                    "INSERT INTO documents (path, ordinal, text) VALUES (?, ?, ?)",
-                    [(str(file), index, chunk) for index, chunk in enumerate(chunks)],
+                self._db.execute("DELETE FROM documents WHERE path = ?", (key,))
+                if chunks:
+                    self._db.executemany(
+                        "INSERT INTO documents (path, ordinal, text) VALUES (?, ?, ?)",
+                        [(key, index, chunk) for index, chunk in enumerate(chunks)],
+                    )
+                # L'empreinte est écrite même sans morceau : un fichier vide ne
+                # sera pas relu à chaque passage.
+                self._db.execute(
+                    "INSERT INTO document_files (path, mtime_ns, size, chunk_count) "
+                    "VALUES (?, ?, ?, ?) "
+                    "ON CONFLICT(path) DO UPDATE SET mtime_ns = excluded.mtime_ns, "
+                    "size = excluded.size, chunk_count = excluded.chunk_count",
+                    (key, stat.st_mtime_ns, stat.st_size, len(chunks)),
                 )
                 documents += 1
                 chunks_written += len(chunks)
@@ -163,6 +197,7 @@ class DocIndex:
             "pattern": pattern,
             "documents": documents,
             "chunks": chunks_written,
+            "unchanged": unchanged,
             "skipped": skipped,
             "index": str(self.db_path),
         }
@@ -231,8 +266,9 @@ def build_doc_tools(index: DocIndex) -> list[Tool]:
         FunctionTool(
             "doc_index_build",
             "Indexe un fichier ou un répertoire pour la recherche locale (SQLite "
-            "FTS5) : .txt, .md, .pdf, .docx et .xlsx. Un motif restreint le choix "
-            "(par exemple « *.pdf »).",
+            "FTS5) : .txt, .md, .pdf, .docx et .xlsx. Incrémental : seuls les "
+            "fichiers nouveaux ou modifiés (date + taille) sont relus. Un motif "
+            "restreint le choix (par exemple « *.pdf »).",
             object_schema(
                 {
                     "path": param("string", "Fichier ou répertoire à indexer", default="."),

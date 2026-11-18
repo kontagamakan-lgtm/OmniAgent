@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 
 from support import make_settings, run, serve, tmpdir  # noqa: I001
@@ -410,6 +411,52 @@ def test_pdf_is_indexed_and_a_passage_is_found() -> None:
             best = found["results"][0]
             assert best["path"].endswith("rapport.pdf"), best
             assert "Atlas" in best["excerpt"], best
+
+
+def test_doc_index_build_skips_unchanged_files() -> None:
+    """Incrémental : date et taille identiques ⇒ le fichier n'est pas relu."""
+    with tmpdir("int") as tmp:
+        settings = make_settings(tmp)
+        docs = tmp / "docs"
+        docs.mkdir()
+        note = docs / "note.txt"
+        note.write_text("Le budget du projet Atlas est de 42 EUR.", encoding="utf-8")
+
+        with DocIndex(settings, FileManager(settings)) as index:
+            first = index.index_path(str(docs))
+            assert first["documents"] == 1, first
+            assert first["unchanged"] == 0, first
+
+            reads: list[str] = []
+            original = index._read
+
+            def counting(file, max_chars):
+                reads.append(str(file))
+                return original(file, max_chars)
+
+            index._read = counting  # type: ignore[method-assign]
+
+            second = index.index_path(str(docs))
+            assert second["documents"] == 0, second
+            assert second["unchanged"] == 1, second
+            assert reads == [], "un fichier inchangé ne doit pas être relu"
+            assert index.search("Atlas")["count"] == 1, "pas de doublon dans l'index"
+
+            # Même contenu mais date avancée : la date seule déclenche la relecture.
+            stamp = note.stat().st_mtime_ns + 2_000_000_000
+            os.utime(note, ns=(stamp, stamp))
+            third = index.index_path(str(docs))
+            assert third["documents"] == 1, third
+            assert third["unchanged"] == 0, third
+            assert reads == [str(note)], reads
+
+            # Contenu modifié : relu, et l'ancien morceau est remplacé.
+            note.write_text("Le budget du projet Atlas est de 43 EUR.", encoding="utf-8")
+            fourth = index.index_path(str(docs))
+            assert fourth["documents"] == 1, fourth
+            assert len(reads) == 2, reads
+            assert index.search("43")["count"] == 1, index.search("43")
+            assert index.stats()["documents"] == 1, index.stats()
 
 
 def test_ocr_probe_names_the_configured_tesseract_binary() -> None:
