@@ -160,6 +160,12 @@ if not "%NOSMOKE%"=="1" (
         echo [ERREUR] Le navigateur du systeme ne repond pas depuis l'executable.
         exit /b 1
     )
+    echo [OmniAgent] Controle OCR : lecture d'une image, sans Tesseract systeme...
+    python smoke_exe.py --exe "%EXE%" --ocr
+    if errorlevel 1 (
+        echo [ERREUR] L'OCR ne lit pas d'image depuis l'executable.
+        exit /b 1
+    )
 )
 
 echo.

@@ -132,6 +132,17 @@ def _browser_check(exe: Path, timeout: float) -> int:
     )
 
 
+def _ocr_check(exe: Path, timeout: float) -> int:
+    """Exige que l'exe lise une image, avec ou sans Tesseract système."""
+    return _run_check(
+        exe,
+        ["--ocr-smoke"],
+        timeout=timeout,
+        marker="OCR_SMOKE_OK",
+        label="OCR",
+    )
+
+
 def _doc_index_check(exe: Path, timeout: float) -> int:
     """Exige que l'exe indexe un PDF et le retrouve par un passage."""
     return _run_check(
@@ -163,6 +174,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="vérifie en plus l'indexation d'un PDF par l'index documentaire",
     )
     parser.add_argument(
+        "--ocr",
+        action="store_true",
+        help="vérifie en plus la reconnaissance de texte sur une image",
+    )
+    parser.add_argument(
         "--appear-timeout",
         type=float,
         default=45.0,
@@ -185,12 +201,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Exécutable introuvable : {exe} (lancer d'abord build.bat)", file=sys.stderr)
         return 2
 
-    if args.browser or args.doc_index:
+    if args.browser or args.doc_index or args.ocr:
         code = 0
         if args.browser:
             code = _browser_check(exe, args.browser_timeout)
         if args.doc_index:
             code = _doc_index_check(exe, args.browser_timeout) or code
+        if args.ocr:
+            code = _ocr_check(exe, args.browser_timeout) or code
         return code
 
     print(f"Contrôle de {exe}")

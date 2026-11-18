@@ -421,14 +421,17 @@ def test_ocr_probe_names_the_configured_tesseract_binary() -> None:
         missing = tmp / "tesseract-absent.exe"
         settings.files.tesseract_cmd = str(missing)
 
-        ready, reason = Ocr(settings).probe(str(missing))
+        ready, reason = Ocr.probe_cli(str(missing))
         assert ready is False, reason
         assert "chemin configuré" in reason, reason
         assert "tesseract-absent.exe" in reason, reason
 
+        # Le binaire configuré échoue, mais le moteur embarqué prend le relais :
+        # `ocr_status` doit rester disponible et dire lequel travaille.
         status = Ocr(settings).status()
-        assert status["available"] is False
-        assert "tesseract-absent.exe" in status["detail"], status
+        assert status["available"] is True, status
+        assert status["backend"] == "tesserocr", status
+        assert "tesserocr" in status["detail"], status
 
 
 def test_document_ocr_and_shell_schemas_are_exposed_safely() -> None:

@@ -179,6 +179,31 @@ def test_console_stream_drops_the_abandoned_fragment_after_a_retry() -> None:
     assert stream.covers("Salut")
 
 
+def test_check_lists_the_tesseract_hint_when_the_binary_is_missing(monkeypatch) -> None:
+    """Binaire absent : `--check` donne le lien, la clé et la vérification."""
+    with tmpdir("app") as tmp:
+        settings = make_settings(tmp)
+
+        from tools.ocr import Ocr
+
+        monkeypatch.setattr(
+            Ocr,
+            "probe",
+            staticmethod(lambda executable=None: (False, "binaire Tesseract introuvable")),
+        )
+
+        lines = [line for ok, line in app.diagnostics(settings) if line.startswith("OCR - ")]
+        text = "\n".join(lines)
+
+        assert len(lines) == 3, lines
+        assert "https://github.com/UB-Mannheim/tesseract/wiki" in text, text
+        assert "files.tesseract_cmd" in text, text
+        assert str(settings.paths.config_file) in text, text
+        assert 'C:\\Program Files\\Tesseract-OCR\\tesseract.exe' in text, text
+        assert "--version" in text, text
+        assert "python app.py --check" in text, text
+
+
 def test_diagnostics_reports_the_ocr_state_without_blocking() -> None:
     """L'OCR est signalé avec sa cause précise, et reste optionnel."""
     with tmpdir("app") as tmp:

@@ -21,7 +21,62 @@ _DATA_PACKAGES = ("playwright", "certifi", "tiktoken")
 #: `tools.file_manager._require` passe par `__import__` : PyInstaller ne voit
 #: ni pypdf (PDF), ni docx (DOCX), ni openpyxl (XLSX) sans cette déclaration —
 #: l'indexation et la conversion de ces formats échouaient dans le paquet.
-_EXTRA_HIDDENIMPORTS = ("darkdetect", "pytesseract", "pypdf", "docx", "openpyxl")
+_EXTRA_HIDDENIMPORTS = ("darkdetect", "pytesseract", "tesserocr", "pypdf", "docx", "openpyxl")
+
+#: DLL du moteur OCR en processus. Les roues `tesserocr` sont patchées par
+#: delvewheel : le module charge ses dépendances depuis `tesserocr.libs/`, un
+#: dossier que l'analyse PyInstaller ne voit pas (noms hachés, import dynamique).
+#: On copie la fermeture utile des imports PE, sans ICU de libcurl ni libcrypto.
+_TESSEROCR_LIB_PREFIXES = (
+    "tesseract55-",
+    "leptonica-",
+    "archive-",
+    "libcurl-",
+    "gif-",
+    "jpeg8-",
+    "libpng16-",
+    "libwebp",
+    "openjp2-",
+    "tiff-",
+    "zlib-",
+    "charset-",
+    "iconv-",
+    "libbz2-",
+    "liblzma-",
+    "libxml2-",
+    "lz4-",
+    "zstd-",
+    "libssh2-",
+    "psl-",
+    "icuuc78-",
+    "icudt78-",
+    "msvcp140-",
+    "vcruntime140",
+)
+
+
+def _tesserocr_binaries() -> list[tuple[str, str]]:
+    """DLL de `tesserocr.libs` à livrer avec le paquet (vide si absent)."""
+    try:
+        import tesserocr
+    except Exception:  # paquet non installé : la compilation reste possible
+        return []
+    libs = Path(tesserocr.__file__).resolve().parent.parent / "tesserocr.libs"
+    if not libs.is_dir():
+        return []
+    return [
+        (str(path), "tesserocr.libs")
+        for path in sorted(libs.iterdir())
+        if path.name.lower().startswith(_TESSEROCR_LIB_PREFIXES)
+    ]
+
+
+def _ocr_assets(root: Path) -> list[tuple[str, str]]:
+    """Données de langue livrées avec l'application (`assets/tessdata`)."""
+    data = root / "assets" / "tessdata"
+    if not data.is_dir():
+        return []
+    return [(str(path), "assets/tessdata") for path in sorted(data.glob("*.traineddata"))]
 
 
 def build_package(
@@ -63,6 +118,10 @@ def build_package(
         if candidate.is_file():
             datas.append((str(candidate), "data"))
 
+    # OCR sans installation système : DLL du moteur et données de langue.
+    ocr_binaries = _tesserocr_binaries()
+    datas += _ocr_assets(root)
+
     hiddenimports = collect_submodules("customtkinter") + list(_EXTRA_HIDDENIMPORTS)
     if "PIL" not in excluded:
         # Uniquement utile quand Pillow est présent : il ferait sinon rentrer
@@ -82,7 +141,7 @@ def build_package(
     analysis = analysis_cls(
         [str(root / "app.py")],
         pathex=[str(root)],
-        binaries=[],
+        binaries=ocr_binaries,
         datas=datas,
         hiddenimports=hiddenimports,
         hookspath=[],

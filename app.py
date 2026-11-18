@@ -36,6 +36,7 @@ __all__ = [
     "diagnostics",
     "doc_index_smoke",
     "main",
+    "ocr_smoke",
 ]
 
 
@@ -73,6 +74,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--doc-index-smoke",
         action="store_true",
         help="vérifie l'indexation d'un PDF par l'index documentaire, puis quitte",
+    )
+    parser.add_argument(
+        "--ocr-smoke",
+        action="store_true",
+        help="vérifie que l'OCR lit une image (binaire ou moteur embarqué), puis quitte",
     )
     parser.add_argument(
         "--unlock-keyring",
@@ -122,19 +128,26 @@ def diagnostics(settings: Settings) -> list[tuple[bool, str]]:
     # OCR : optionnel, donc jamais bloquant. La distinction entre le module
     # `pytesseract` manquant et le binaire Tesseract absent évite de chercher au
     # mauvais endroit quand `ocr_status` répond `ocr_unavailable`.
+    hints: list[str] = []
     try:
         from tools.ocr import Ocr
 
         ocr_ready, ocr_reason = Ocr.probe(getattr(settings.files, "tesseract_cmd", "") or "")
+        if not ocr_ready:
+            # Diagnostic autosuffisant : lien officiel, clé exacte, vérification.
+            hints = Ocr.install_hint(
+                getattr(settings.files, "tesseract_cmd", "") or "", config_file=str(config_file)
+            )
     except Exception:  # noqa: BLE001 - paquet incomplet : on rapporte, on ne plante pas
         ocr_ready, ocr_reason = False, "module pytesseract introuvable dans le paquet"
     checks.append(
         (
             True,
-            "OCR : "
-            + (f"disponible (Tesseract {ocr_reason})" if ocr_ready else f"indisponible — {ocr_reason}"),
+            "OCR : " + (f"disponible ({ocr_reason})" if ocr_ready else f"indisponible — {ocr_reason}"),
         )
     )
+    # Préfixe ASCII : la console Windows (cp1252) ne sait pas écrire « → ».
+    checks.extend((True, f"OCR - {hint}") for hint in hints)
 
     vault = settings.paths.vault_file
     checks.append((True, f"coffre : {vault}" + ("" if vault.is_file() else " (à créer)")))
@@ -288,6 +301,49 @@ def doc_index_smoke(settings: Settings) -> int:
         shutil.rmtree(workdir, ignore_errors=True)
 
 
+def ocr_smoke(settings: Settings) -> int:
+    """Vérifie que l'OCR lit réellement du texte, binaire système ou non.
+
+    L'image est rendue localement (Pillow), donc le contrôle ne dépend ni du
+    réseau ni d'un fichier fourni par l'utilisateur. Il passe par le moteur en
+    processus quand `tesseract.exe` est absent : c'est ce qui prouve que le
+    paquet sait faire de l'OCR sans installation système.
+    """
+    from PIL import Image, ImageDraw, ImageFont
+
+    from tools.ocr import Ocr
+
+    marker = "OCR_SMOKE_OK"
+    workdir = Path(tempfile.mkdtemp(prefix="omniagent-ocrsmoke-"))
+    try:
+        image = Image.new("RGB", (900, 160), "white")
+        font = ImageFont.load_default(size=64)
+        ImageDraw.Draw(image).text((20, 40), "ATLAS BUDGET 42", fill="black", font=font)
+        target = workdir / "facture.png"
+        image.save(target)
+
+        ocr = Ocr(settings)
+        status = ocr.status()
+        print(f"  moteur : {status['backend'] or 'aucun'}")
+        if not status["available"]:
+            print(f"  !!   OCR indisponible : {status['detail']}", file=sys.stderr)
+            return 1
+        result = ocr.image_to_text(str(target), max_chars=2000)
+        print(f"  langue : {result['language']}")
+        print(f"  texte  : {result['text'][:60]!r}")
+        text = result["text"].upper()
+        if "ATLAS" not in text or "42" not in text:
+            print(f"  !!   texte inattendu : {result['text']!r}", file=sys.stderr)
+            return 1
+        print(f"Contrôle OCR réussi ({marker}).")
+        return 0
+    except Exception as exc:  # noqa: BLE001 - un contrôle rapporte, il ne plante pas
+        print(f"  !!   {exc}", file=sys.stderr)
+        return 1
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
 def browser_smoke(settings: Settings) -> int:
     """Vérifie que ce processus sait piloter le navigateur du système.
 
@@ -426,6 +482,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.doc_index_smoke:
         return doc_index_smoke(settings)
+
+    if args.ocr_smoke:
+        return ocr_smoke(settings)
 
     config.configure_logging(settings, redact)
     if args.task is not None:
