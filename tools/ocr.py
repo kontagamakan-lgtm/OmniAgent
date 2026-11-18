@@ -15,6 +15,7 @@ moteur retenu ou les deux causes d'échec.
 from __future__ import annotations
 
 import logging
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -82,7 +83,13 @@ class Ocr:
         except Exception as exc:  # noqa: BLE001 - binaire absent ou illisible
             where = f" (chemin configuré : {configured})" if configured else ""
             return False, f"binaire Tesseract introuvable ou en échec{where} : {exc}"
-        return True, f"Tesseract {version} (binaire)"
+        # Chemin réellement exécuté : la valeur configurée, résolue dans le PATH
+        # quand elle n'en contient pas. `--check` doit dire quel fichier tourne.
+        command = str(pytesseract.pytesseract.tesseract_cmd or "tesseract")
+        resolved = shutil.which(command)
+        if not resolved and Path(command).is_file():
+            resolved = command
+        return True, f"Tesseract {version} (binaire : {resolved or command})"
 
     @staticmethod
     def probe_inprocess() -> tuple[bool, str]:

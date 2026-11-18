@@ -68,6 +68,23 @@ def test_cli_wins_when_both_backends_are_available(monkeypatch) -> None:
         assert "9.9" in status["detail"], status
 
 
+def test_cli_probe_names_the_binary_path(monkeypatch) -> None:
+    """Le diagnostic dit quel `tesseract.exe` est réellement exécuté."""
+    import pytesseract
+
+    with tmpdir("ocr") as tmp:
+        make_settings(tmp)
+        binary = tmp / "tesseract.exe"
+        binary.write_bytes(b"")
+        monkeypatch.setattr(pytesseract, "get_tesseract_version", lambda: "9.9.9")
+
+        available, detail = Ocr.probe_cli(str(binary))
+
+        assert available is True, detail
+        assert "9.9.9" in detail, detail
+        assert str(binary) in detail, detail
+
+
 def test_unknown_language_falls_back_to_a_bundled_one() -> None:
     """Demander une langue absente des données ne casse pas la reconnaissance."""
     with tmpdir("ocr") as tmp:
