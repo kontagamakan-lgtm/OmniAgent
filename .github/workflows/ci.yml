@@ -1,0 +1,96 @@
+name: CI Windows
+
+# Vérifie chaque poussée et chaque pull request : style/lint, suite de tests,
+# puis construction des deux paquets avec leurs contrôles de fumée (fenêtre,
+# navigateur système et indexation d'un PDF).
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Ruff et pytest
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Installer les dépendances
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Ruff (F, B, E9)
+        run: >-
+          python -m ruff check --select F,B,E9 security tools config.py core
+          tests ui app.py smoke_exe.py pyinstaller_recipe.py
+
+      - name: Pytest
+        run: python -m pytest -q
+
+  build:
+    name: build.bat --all et contrôles de fumée
+    needs: tests
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Installer les dépendances
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-dev.txt
+
+      # Le script enchaîne, pour chaque paquet : contrôle de fenêtre
+      # (smoke_exe.py) puis contrôle navigateur (--browser-smoke).
+      - name: Construire les deux paquets (smoke tests inclus)
+        shell: cmd
+        env:
+          PYTHONUTF8: "1"
+        run: build.bat --all
+
+      # Preuve que l'indexation d'un PDF fonctionne dans les binaires livrés.
+      - name: Indexation d'un PDF dans les deux binaires
+        shell: cmd
+        env:
+          PYTHONUTF8: "1"
+        run: |
+          python smoke_exe.py --doc-index --exe dist\OmniAgent\OmniAgent.exe
+          python smoke_exe.py --doc-index --exe dist\OmniAgent-lite\OmniAgent.exe
+
+      - name: Taille des paquets
+        shell: cmd
+        run: >-
+          python -c "import os;[(print(d, round(sum(os.path.getsize(os.path.join(r,f)) for r,_,ns in os.walk(d) for f in ns)/1048576,2),'Mio', sum(len(ns) for _,_,ns in os.walk(d)),'fichiers')) for d in ('dist/OmniAgent','dist/OmniAgent-lite')]"
+
+      - name: Conserver les paquets
+        uses: actions/upload-artifact@v4
+        with:
+          name: omniagent-windows
+          path: |
+            dist/OmniAgent/
+            dist/OmniAgent-lite/
+          retention-days: 7
