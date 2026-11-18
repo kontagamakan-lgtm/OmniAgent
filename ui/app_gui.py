@@ -101,6 +101,10 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             self._build_widgets()
             self._append("système", "Prêt. Décrivez une tâche, Ctrl+Entrée pour envoyer.")
             self._pump()
+            # Après la boucle : l'assistant s'ouvre au-dessus de la fenêtre déjà
+            # construite, ce qui évite un second interpréteur Tk (deux `Tk()`
+            # successifs cassent les images de CustomTkinter).
+            self.after(150, self._first_run_check)
 
         # -- construction ---------------------------------------------------
 
@@ -121,6 +125,9 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 header, text="prêt", anchor="w", text_color="#9CA3AF"
             )
             self.status.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 8))
+            ctk.CTkButton(
+                header, text="Assistant", width=110, command=self._open_assistant
+            ).grid(row=0, column=1, rowspan=2, padx=10, pady=8)
 
             self.transcript = ctk.CTkTextbox(self, wrap="word", state="disabled")
             self.transcript.grid(row=1, column=0, sticky="nsew", padx=12, pady=6)
@@ -176,6 +183,44 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 self._buffer.write(f"\n• {reason}\n\n")
 
         # -- actions --------------------------------------------------------
+
+        def _first_run_check(self) -> None:
+            """Ouvre l'assistant si l'application ne peut pas encore générer."""
+            try:
+                from ui.setup_wizard import needs_setup
+
+                if not needs_setup(self.settings):
+                    return
+            except Exception as exc:  # noqa: BLE001 - jamais bloquant
+                logger.exception("Assistant de démarrage indisponible")
+                self._append("erreur", f"assistant indisponible : {exc}")
+                return
+            self._append(
+                "système",
+                "premier démarrage : la clé API manque. L'assistant s'ouvre pour la "
+                "renseigner, avec le dossier de travail, le navigateur et le coffre.",
+            )
+            self._open_assistant()
+
+        def _open_assistant(self) -> None:
+            """Rouvre l'assistant de premier démarrage avec les valeurs actuelles."""
+            try:
+                from ui.setup_wizard import run_setup
+
+                saved = run_setup(self.settings, parent=self)
+            except Exception as exc:  # noqa: BLE001 - l'interface reste utilisable
+                logger.exception("Assistant de démarrage en échec")
+                self._append("erreur", f"assistant indisponible : {exc}")
+                return
+
+            if saved:
+                self._append(
+                    "système",
+                    "assistant : réglages enregistrés — clé active tout de suite, "
+                    "dossier et canal au prochain démarrage",
+                )
+            else:
+                self._set_status("assistant fermé sans modification")
 
         def _send(self) -> None:
             task = self.prompt.get("1.0", "end").strip()
