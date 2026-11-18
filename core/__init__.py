@@ -20,13 +20,16 @@ from core.events import Event, EventBus, EventType
 from core.factory import AgentBundle, build_agent
 from core.llm_client import LLMClient, LLMResponse
 from core.react_parser import ParsedToolCall, parse_tool_calls
-from core.tool_registry import ToolRegistry
+from core.runner import AgentResult, AgentRunner, run_task
+from core.tool_registry import ToolError, ToolRegistry, ToolSpec
 
 __all__ = [
     "AgentBundle",
     "AgentCore",
     "AgentError",
     "AgentReply",
+    "AgentResult",
+    "AgentRunner",
     "AgentStep",
     "BudgetExhausted",
     "Cancelled",
@@ -45,7 +48,10 @@ __all__ = [
     "RecoveryExhausted",
     "StepCall",
     "ToolCallError",
+    "ToolError",
     "ToolRegistry",
+    "ToolSpec",
     "build_agent",
     "parse_tool_calls",
+    "run_task",
 ]

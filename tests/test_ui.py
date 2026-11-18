@@ -118,6 +118,36 @@ def test_controller_runs_agent_in_a_thread() -> None:
             bundle.close()
 
 
+def test_controller_drains_events_from_the_bus_it_was_given() -> None:
+    """Le bus fourni à `build_agent` doit être celui de l'agent et du contrôleur."""
+    with tmpdir("ui") as tmp:
+        settings = make_settings(tmp)
+        bus = EventBus()
+        bundle = build_agent(
+            settings,
+            llm=_ScriptedLLM(LLMResponse(text="fini", finish_reason="stop")),
+            bus=bus,
+            with_web=False,
+            with_browser=False,
+        )
+        try:
+            assert bundle.agent.bus is bus, "le bus injecté doit être conservé"
+            controller = AgentController(bundle.agent)
+            assert controller.start("compte")
+            reply = controller.wait(10)
+            assert reply is not None and reply.ok
+
+            events = controller.drain()
+            types = [event.type for event in events]
+            assert types[:1] == [EventType.RUN_STARTED], types
+            assert EventType.FINAL in types and EventType.RUN_FINISHED in types
+            assert all(event.run_id == bundle.agent.run_id for event in events)
+            assert controller.current is not None
+            assert controller.current.events == events
+        finally:
+            bundle.close()
+
+
 def test_controller_refuses_a_second_run() -> None:
     with tmpdir("ui") as tmp:
         settings = make_settings(tmp)

@@ -16,9 +16,10 @@ from typing import Any, Callable, Iterable, Mapping
 
 from config import APP_ID
 from core.prompts import tool_catalogue
-from tools.base import Tool, ToolResult, ToolSet
+from tools.base import Tool, ToolError, ToolResult, ToolSet
+from tools.spec import ToolSpec
 
-__all__ = ["ToolRegistry"]
+__all__ = ["ToolError", "ToolRegistry", "ToolSpec"]
 
 logger = logging.getLogger(f"{APP_ID}.registry")
 
@@ -30,12 +31,15 @@ class ToolRegistry:
 
     def __init__(
         self,
-        tools: Iterable[Tool] | ToolSet,
+        tools: Iterable[Tool | ToolSpec] | ToolSet = (),
         *,
         max_output_chars: int = 12000,
         confirm: ConfirmHandler | None = None,
     ) -> None:
-        self._tools = tools if isinstance(tools, ToolSet) else ToolSet(tools)
+        if isinstance(tools, ToolSet):
+            self._tools = tools
+        else:
+            self._tools = ToolSet(_as_tool(item) for item in tools)
         self.max_output_chars = max(0, int(max_output_chars))
         self._confirm = confirm
         self._calls: dict[str, int] = {}
@@ -108,9 +112,9 @@ class ToolRegistry:
             logger.exception("confirmation impossible pour %s", tool.name)
             return False
 
-    def observation(self, result: ToolResult) -> str:
+    def observation(self, result: ToolResult, max_chars: int | None = None) -> str:
         """Texte transmis au modèle pour un résultat d'outil."""
-        return result.to_text(max_chars=self.max_output_chars)
+        return result.to_text(max_chars=self.max_output_chars if max_chars is None else max_chars)
 
     # -- statistiques -------------------------------------------------------
 
@@ -130,3 +134,8 @@ class ToolRegistry:
         self._calls.clear()
         self._failures.clear()
         self._total_ms.clear()
+
+
+def _as_tool(item: Tool | ToolSpec) -> Tool:
+    """Accepte indifféremment un `Tool` déjà formé ou une `ToolSpec`."""
+    return item.as_tool() if isinstance(item, ToolSpec) else item

@@ -61,6 +61,7 @@ class Event:
     payload: dict[str, Any] = field(default_factory=dict)
     seq: int = 0
     timestamp: float = field(default_factory=time.time)
+    run_id: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -68,6 +69,7 @@ class Event:
             "payload": self.payload,
             "seq": self.seq,
             "timestamp": self.timestamp,
+            "run_id": self.run_id,
         }
 
 
@@ -87,11 +89,22 @@ class EventBus:
 
     # -- émission -----------------------------------------------------------
 
-    def emit(self, event_type: str, payload: dict[str, Any] | None = None) -> Event:
+    def emit(
+        self,
+        event_type: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        run_id: str = "",
+    ) -> Event:
         """Publie un événement depuis n'importe quel thread."""
         with self._cond:
             self._seq += 1
-            event = Event(type=event_type, payload=dict(payload or {}), seq=self._seq)
+            event = Event(
+                type=event_type,
+                payload=dict(payload or {}),
+                seq=self._seq,
+                run_id=run_id,
+            )
             self._history.append(event)
             if len(self._queue) >= self._queue_limit:
                 self._queue.popleft()
@@ -159,6 +172,11 @@ class EventBus:
         if limit and len(items) > limit:
             return items[-limit:]
         return items
+
+    def history(self, run_id: str | None = None) -> list[Event]:
+        """Historique complet, éventuellement restreint à une exécution."""
+        items = self.events()
+        return items if run_id is None else [e for e in items if e.run_id == run_id]
 
     def close(self) -> None:
         """Réveille les consommateurs bloqués et vide les abonnés."""
