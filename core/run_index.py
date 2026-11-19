@@ -6,10 +6,11 @@ chaque fichier, et pour distinguer un run tué d'un run encore en cours
 d'écriture, il faut une vue latérale : chaque ligne de l'index décrit un
 changement d'état (`started`, `finished`, `interrupted`, `archived`).
 
-Le journal est append-only, mais il est compacté à chaque application de la
-rétention (`compact`) : une ligne par exécution dont la trace existe encore.
-Sans cela, il garderait les états de runs purgés et grossirait sans fin alors
-que le dossier des traces, lui, reste borné.
+Le journal est append-only, mais il est compacté à la fin d'un run, à chaque
+application de la rétention et par la CLI de maintenance (`compact`) : une
+ligne par exécution dont la trace existe encore. Sans cela, il garderait les
+états de runs purgés et grossirait sans fin alors que le dossier des traces,
+lui, reste borné. Une compaction déjà propre ne réécrit rien.
 
 L'index est un cache, jamais une source de vérité : s'il est absent ou
 tronqué, il se reconstruit en balayant les traces (`rebuild`). Chaque lecture
@@ -185,16 +186,9 @@ class RunIndex:
             return
         with handle:
             for line in handle:
-                body = line.strip()
-                if not body:
-                    continue
-                try:
-                    data = json.loads(body)
-                except ValueError:
-                    logger.debug("ligne d'index ignorée", exc_info=True)
-                    continue
-                if isinstance(data, dict):
-                    yield RunRecord.from_dict(data)
+                record = self._parse(line)
+                if record is not None:
+                    yield record
 
     def entries(self) -> dict[str, RunRecord]:
         """Dernier état par exécution, du plus récent au plus ancien.
@@ -211,13 +205,39 @@ class RunIndex:
             )
         )
 
-    def _physical_lines(self) -> int:
-        """Lignes non vides du fichier, JSON valide ou non."""
+    @staticmethod
+    def _parse(line: str) -> RunRecord | None:
+        """Un enregistrement, ou `None` pour une ligne vide ou illisible."""
+        body = line.strip()
+        if not body:
+            return None
+        try:
+            data = json.loads(body)
+        except ValueError:
+            logger.debug("ligne d'index ignorée", exc_info=True)
+            return None
+        return RunRecord.from_dict(data) if isinstance(data, dict) else None
+
+    def _scan(self) -> tuple[list[RunRecord], int]:
+        """Enregistrements valides et lignes physiques, en une seule lecture.
+
+        Compter les lignes physiques évite de croire l'index propre alors qu'il
+        contient encore du JSON invalide, que `records()` ignore par nature.
+        """
         try:
             text = self.path.read_text(encoding="utf-8", errors="replace")
         except OSError:
-            return 0
-        return sum(1 for line in text.splitlines() if line.strip())
+            return [], 0
+        records: list[RunRecord] = []
+        physical = 0
+        for line in text.splitlines():
+            if not line.strip():
+                continue
+            physical += 1
+            record = self._parse(line)
+            if record is not None:
+                records.append(record)
+        return records, physical
 
     def _present_run_ids(self) -> set[str]:
         """Identifiants des traces encore sur disque (archives comprises)."""
@@ -249,21 +269,21 @@ class RunIndex:
             before = self.path.stat()
         except OSError:
             return False
-        records = list(self.records())
-        latest = _latest(records)
+        records, physical = self._scan()
+        latest = _latest(iter(records))
         present = self._present_run_ids()
         kept = {
             run_id: record for run_id, record in latest.items() if run_id in present
         }
         # Une ligne illisible n'apparaît pas dans `records` : sans compter les
         # lignes physiques, un index déjà dédupliqué mais corrompu ne serait
-        # jamais nettoyé.
+        # jamais nettoyé. Déjà propre : ne rien réécrire.
         if (
             len(kept) == len(latest)
             and len(records) == len(kept)
-            and self._physical_lines() == len(records)
+            and physical == len(records)
         ):
-            return False  # déjà une ligne par run présent, et rien d'illisible
+            return False
         tmp = self.path.with_name(self.path.name + ".tmp")
         try:
             with tmp.open("w", encoding="utf-8") as handle:

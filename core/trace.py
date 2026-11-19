@@ -325,11 +325,10 @@ class RunTrace:
         if event.type == EventType.RUN_FINISHED:
             self._index_finish(event.payload)
             self.close(finished=True)
-            if self.index:
-                # Après une exécution terminée, l'index ne doit pas garder
-                # `started` + `finished` : une installation inactive n'ouvrira
-                # peut-être plus de run pour le compacter.
-                RunIndex(self.directory).compact()
+            # Après une exécution terminée, l'index ne doit pas garder
+            # `started` + `finished` : une installation inactive n'ouvrira
+            # peut-être plus de run pour le compacter.
+            self._compact_index()
 
     # -- contenu ------------------------------------------------------------
 
@@ -644,6 +643,10 @@ class RunTrace:
                 total -= entry[1]
         # L'index suit la même rétention : une ligne par trace encore présente,
         # pas une ligne par run historique, sinon il grossirait sans fin.
+        self._compact_index()
+
+    def _compact_index(self) -> None:
+        """Compacte l'index s'il n'a plus une ligne par run ; sinon ne réécrit rien."""
         if self.index:
             RunIndex(self.directory).compact()
 
