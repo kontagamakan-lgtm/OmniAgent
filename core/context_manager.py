@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from typing import Any, Mapping, Sequence
+from typing import Any, Collection, Mapping, Sequence
 
 log = logging.getLogger(__name__)
 
@@ -61,35 +61,82 @@ def messages_tokens(messages: Sequence[Mapping[str, Any]]) -> int:
     return sum(count_tokens(_content_text(m)) + _MESSAGE_OVERHEAD for m in messages)
 
 
-def _tool_signatures(messages: Sequence[Mapping[str, Any]]) -> list[str]:
+def _call_parts(call: Any) -> tuple[str, Any]:
+    """Nom et arguments d'un appel, qu'il soit enveloppé de `function` ou non."""
+    function = call.get("function") if isinstance(call, Mapping) else None
+    function = function if isinstance(function, Mapping) else call
+    if not isinstance(function, Mapping):
+        return "?", None
+    return str(function.get("name") or "?"), function.get("arguments")
+
+
+def _argument_keys(arguments: Any) -> list[str]:
+    """Noms des clés d'un argument d'appel, sans jamais rendre ses valeurs."""
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments)
+        except (TypeError, ValueError):
+            return []
+    if isinstance(arguments, Mapping):
+        return [str(key) for key in arguments]
+    return []
+
+
+def _call_signature(call: Any, sensitive_tools: Collection[str]) -> str:
+    """Une ligne de rappel : arguments complets, ou clés seules si sensible."""
+    name, arguments = _call_parts(call)
+    if name in sensitive_tools:
+        # Le nom et les clés suffisent à reconnaître l'action ; une valeur sous
+        # une clé au nom neutre ne doit jamais rejoindre le prompt.
+        return f"- {name}({', '.join(_argument_keys(arguments))})"
+    if not isinstance(arguments, str):
+        arguments = json.dumps(arguments or {}, ensure_ascii=False, default=str)
+    arguments = " ".join(arguments.split())
+    if len(arguments) > _SIGNATURE_ITEM_MAX_CHARS:
+        arguments = arguments[:_SIGNATURE_ITEM_MAX_CHARS] + "…"
+    return f"- {name}({arguments})"
+
+
+def _tool_signatures(
+    messages: Sequence[Mapping[str, Any]], sensitive_tools: Collection[str]
+) -> list[str]:
     """Signatures `nom(arguments)` des appels de la zone repliée.
 
     Sans elles, le modèle oublie qu'il a déjà tenté une action et la répète
     jusqu'au garde-fou anti-boucle : le résumé doit porter les gestes, pas
-    seulement les textes.
+    seulement les textes. Pour un outil sensible, seuls le nom et les clés
+    d'arguments sont repris, jamais les valeurs.
     """
     found: list[str] = []
     for message in reversed(messages):
         for call in reversed(message.get("tool_calls") or []):
-            function = call.get("function") if isinstance(call, Mapping) else None
-            function = function if isinstance(function, Mapping) else call
-            name = str(function.get("name") or "?")
-            arguments = function.get("arguments")
-            if not isinstance(arguments, str):
-                arguments = json.dumps(arguments or {}, ensure_ascii=False, default=str)
-            arguments = " ".join(arguments.split())
-            if len(arguments) > _SIGNATURE_ITEM_MAX_CHARS:
-                arguments = arguments[:_SIGNATURE_ITEM_MAX_CHARS] + "…"
-            found.append(f"- {name}({arguments})")
+            found.append(_call_signature(call, sensitive_tools))
     unique = list(dict.fromkeys(found))
     return list(reversed(unique[:_SIGNATURE_LIMIT]))
 
 
-def summarize(messages: Sequence[Mapping[str, Any]]) -> str:
+def _summary_body(message: Mapping[str, Any], sensitive_tools: Collection[str]) -> str:
+    """Texte d'un message pour le résumé, appels sensibles réduits à leurs clés."""
+    body = " ".join(_content_text({**message, "tool_calls": None}).split())
+    calls = message.get("tool_calls") or []
+    if calls:
+        parts = [
+            _call_signature(call, sensitive_tools).removeprefix("- ")
+            if _call_parts(call)[0] in sensitive_tools
+            else json.dumps(call, ensure_ascii=False, default=str)
+            for call in calls
+        ]
+        body = " ".join(filter(None, [body, " ".join(parts)]))
+    return body
+
+
+def summarize(
+    messages: Sequence[Mapping[str, Any]], *, sensitive_tools: Collection[str] = ()
+) -> str:
     """Résumé ligne à ligne des messages repliés, borné en taille."""
     lines: list[str] = []
     for message in messages:
-        body = " ".join(_content_text(message).split())
+        body = _summary_body(message, sensitive_tools)
         if not body:
             continue
         if len(body) > _ITEM_MAX_CHARS:
@@ -98,7 +145,7 @@ def summarize(messages: Sequence[Mapping[str, Any]]) -> str:
         lines.append(f"- {label}: {body}")
 
     text = "\n".join(lines)
-    signatures = _tool_signatures(messages)
+    signatures = _tool_signatures(messages, sensitive_tools)
     if signatures:
         # Les signatures passent en priorité : elles évitent une boucle, alors
         # que le détail ligne à ligne est du confort.
@@ -135,6 +182,7 @@ def trim_messages(
     max_messages: int,
     max_tokens: int = 0,
     reserved_tokens: int = 0,
+    sensitive_tools: Collection[str] = (),
 ) -> list[dict[str, Any]]:
     """Comme `plan_trim`, mais ne retourne que l'historique retenu."""
     return plan_trim(
@@ -142,6 +190,7 @@ def trim_messages(
         max_messages=max_messages,
         max_tokens=max_tokens,
         reserved_tokens=reserved_tokens,
+        sensitive_tools=sensitive_tools,
     ).messages
 
 
@@ -151,6 +200,7 @@ def plan_trim(
     max_messages: int,
     max_tokens: int = 0,
     reserved_tokens: int = 0,
+    sensitive_tools: Collection[str] = (),
 ) -> TrimResult:
     """Retourne un historique conforme au budget, ou une copie inchangée.
 
@@ -211,7 +261,7 @@ def plan_trim(
                     "role": "system",
                     "content": (
                         "Résumé des tours précédents, repliés pour tenir dans le "
-                        f"budget de contexte :\n{summarize(rest[:start])}"
+                        f"budget de contexte :\n{summarize(rest[:start], sensitive_tools=sensitive_tools)}"
                     ),
                 }
             )

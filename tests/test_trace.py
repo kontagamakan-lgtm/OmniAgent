@@ -3,19 +3,23 @@
 from __future__ import annotations
 
 import json
+import os
+import time
+from pathlib import Path
 
 from support import make_settings, tmpdir  # noqa: I001
 
 from core.agent_core import AgentCore
-from core.events import EventBus
+from core.events import Event, EventBus, EventType
 from core.llm_client import LLMResponse, ParsedToolCall
 from core.tool_registry import ToolRegistry
-from core.trace import RunTrace
+from core.trace import RunTrace, read_events
 from tools.base import FunctionTool, object_schema, param
 
 RESULT_SECRET = "vault-value-42-ne-doit-pas-fuiter"
 ARGUMENT_SECRET = "sk-test-1234567890"
 CREDENTIAL_SECRET = "plain-credential-value"
+NOTE_SECRET = "valeur-libre-sous-cle-neutre"
 
 
 class _ScriptedLLM:
@@ -35,8 +39,8 @@ def _call(name: str, **arguments) -> LLMResponse:
 
 
 def _secret_tool() -> FunctionTool:
-    def read_secret(credential: str = "", passphrase: str = "") -> str:
-        return f"{RESULT_SECRET} / {credential} / {passphrase}"
+    def read_secret(credential: str = "", passphrase: str = "", note: str = "") -> str:
+        return f"{RESULT_SECRET} / {credential} / {passphrase} / {note}"
 
     return FunctionTool(
         "read_secret",
@@ -45,6 +49,7 @@ def _secret_tool() -> FunctionTool:
             {
                 "credential": param("string", "Justificatif", default=""),
                 "passphrase": param("string", "Phrase secrète", default=""),
+                "note": param("string", "Note libre", default=""),
             },
         ),
         read_secret,
@@ -74,6 +79,7 @@ def test_trace_writes_one_redacted_file_per_run() -> None:
                     "read_secret",
                     credential=CREDENTIAL_SECRET,
                     passphrase=f"Authorization: Bearer {ARGUMENT_SECRET}",
+                    note=NOTE_SECRET,
                 ),
                 LLMResponse(text="fait", finish_reason="stop"),
             ),

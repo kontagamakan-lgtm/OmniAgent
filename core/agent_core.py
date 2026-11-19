@@ -513,9 +513,19 @@ class AgentCore:
 
     def _execute(self, call: ParsedToolCall, step_index: int) -> tuple[StepCall, str]:
         """Exécute un appel d'outil, publie le résultat et retourne son observation."""
+        tool = self.registry.get(call.name)
+        sensitive = bool(getattr(tool, "sensitive", False))
         self._emit(
             EventType.TOOL_STARTED,
-            {"step": step_index, "tool": call.name, "arguments": _safe_arguments(call.arguments)},
+            {
+                "step": step_index,
+                "tool": call.name,
+                "sensitive": sensitive,
+                # Un outil sensible ne publie aucun argument : le masquage par
+                # nom de champ ne couvre pas une valeur libre passée sous une
+                # clé au nom neutre, et la trace est un fichier durable.
+                "arguments": {} if sensitive else _safe_arguments(call.arguments),
+            },
         )
         result: ToolResult = self.registry.dispatch(call.name, call.arguments)
         record = StepCall(
@@ -561,6 +571,7 @@ class AgentCore:
             max_messages=max(4, int(self.settings.agent.history_max_messages)),
             max_tokens=int(self.settings.agent.max_context_tokens),
             reserved_tokens=self._reserved_tokens(),
+            sensitive_tools=self._sensitive_tool_names(),
         )
         if plan.trimmed:
             # Sans cet événement, l'utilisateur voit l'agent « oublier » sans
@@ -577,6 +588,14 @@ class AgentCore:
                 },
             )
         return plan.messages
+
+    def _sensitive_tool_names(self) -> frozenset[str]:
+        """Outils dont les valeurs d'arguments ne doivent pas rejoindre le prompt."""
+        return frozenset(
+            name
+            for name in self.registry.names()
+            if getattr(self.registry.get(name), "sensitive", False)
+        )
 
     def _reserved_tokens(self) -> int:
         """Coût fixe des schémas d'outils, calculé une fois par agent."""

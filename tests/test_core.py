@@ -906,6 +906,52 @@ def test_summary_carries_attempted_tool_signatures() -> None:
     assert len(summary) <= SUMMARY_MAX_CHARS
 
 
+def test_summary_keeps_only_keys_for_sensitive_tools() -> None:
+    """Un argument d'outil sensible : le nom et les clés, jamais les valeurs."""
+    secret = "valeur-secrete-9f2"
+    messages = [
+        {"role": "system", "content": "consigne"},
+        {"role": "user", "content": "tâche"},
+        *_tool_round("read_secret", "a", credential=secret, note=f"libre {secret}"),
+        *_tool_round("echo", "b", text="visible"),
+    ]
+
+    summary = summarize(messages[2:], sensitive_tools={"read_secret"})
+
+    assert secret not in summary, "une valeur sensible a réapparu dans le résumé"
+    assert "read_secret(credential, note)" in summary
+    assert "visible" in summary, "les outils non sensibles gardent leurs arguments"
+
+
+def test_agent_trim_never_repeats_sensitive_argument_values() -> None:
+    """`_trim` déduit la sensibilité du registre et la transmet au résumé."""
+    with tmpdir("core") as tmp:
+        secret = "valeur-secrete-b7c"
+        tool = FunctionTool(
+            "read_secret",
+            "Lit un secret.",
+            object_schema({}),
+            lambda: "ok",
+            sensitive=True,
+        )
+        settings = _settings(tmp, history_max=5)
+        core = AgentCore(settings, FakeLLM([]), ToolRegistry([tool]))
+        messages = [
+            {"role": "system", "content": "consigne"},
+            {"role": "user", "content": "tâche"},
+            *_tool_round("read_secret", "a", credential=secret),
+            {"role": "assistant", "content": "x" * 300},
+            {"role": "user", "content": "relance"},
+            {"role": "assistant", "content": "y" * 300},
+        ]
+
+        trimmed = core._trim(messages)
+        raw = json.dumps(trimmed, ensure_ascii=False)
+
+        assert secret not in raw, "le prompt replié contient encore la valeur sensible"
+        assert "read_secret(credential)" in raw, "le geste tenté doit rester reconnaissable"
+
+
 def test_trim_summary_lists_tool_calls_already_attempted() -> None:
     """Après un repli, le modèle voit ce qu'il a déjà lancé."""
     messages = [
