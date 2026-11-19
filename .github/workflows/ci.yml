@@ -106,6 +106,19 @@ jobs:
           python smoke_exe.py --doc-index --exe dist\OmniAgent-slim\OmniAgent.exe || exit /b 1
           python smoke_exe.py --ocr --exe dist\OmniAgent-slim\OmniAgent.exe || exit /b 1
 
+      # Hors-ligne : un faux fournisseur local fait tourner la boucle d'outils
+      # pour vérifier le budget de contexte, et --compat-smoke exerce
+      # AgentRunner/run_task/history(run_id)/ToolSpec depuis l'exe. Aucun réseau,
+      # aucune fenêtre : compatible avec un runner sans session interactive.
+      - name: Budget de contexte et compatibilité dans les exes
+        shell: cmd
+        env:
+          PYTHONUTF8: "1"
+        run: |
+          python build_smoke\offline_smoke.py dist\OmniAgent\OmniAgent.exe || exit /b 1
+          python build_smoke\offline_smoke.py dist\OmniAgent-lite\OmniAgent.exe || exit /b 1
+          python build_smoke\offline_smoke.py dist\OmniAgent-slim\OmniAgent.exe || exit /b 1
+
       - name: Taille des paquets
         shell: cmd
         run: >-
