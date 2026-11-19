@@ -17,7 +17,7 @@ from typing import Any
 from config import APP_ID
 from core.agent_core import AgentCore, AgentReply
 from core.events import Event, EventType
-from core.trace import RunTrace
+from core.trace import RunTrace, build_trace
 
 __all__ = ["AgentController", "AgentRun"]
 
@@ -60,8 +60,12 @@ class AgentController:
             self._collect, types=(EventType.STREAM_CHUNK,)
         )
         # Une trace par exécution, consultable après coup depuis l'interface.
-        self.trace = RunTrace(self.agent.settings.paths.log_dir / "runs")
-        self._unsubscribe_trace = self.agent.bus.subscribe(self.trace)
+        # `build_trace` respecte `trace.enabled` : désactivée, elle vaut None et
+        # rien n'est écrit sur disque.
+        self.trace: RunTrace | None = build_trace(self.agent.settings)
+        self._unsubscribe_trace = (
+            self.agent.bus.subscribe(self.trace) if self.trace is not None else (lambda: None)
+        )
 
     # -- état ---------------------------------------------------------------
 
@@ -73,6 +77,28 @@ class AgentController:
     @property
     def current(self) -> AgentRun | None:
         return self._current
+
+    @property
+    def tracing(self) -> bool:
+        """Vrai si les exécutions sont actuellement tracées sur disque."""
+        return self.trace is not None
+
+    def set_tracing(self, enabled: bool) -> None:
+        """Active ou coupe la trace, sans recréer le contrôleur.
+
+        L'utilisateur peut ne pas vouloir laisser le contenu d'une session sur
+        disque ; le basculer ici évite de redémarrer l'application. Une trace
+        déjà ouverte est refermée, ce qui retire aussi son marqueur d'activité.
+        """
+        if enabled and self.trace is None:
+            self.trace = build_trace(self.agent.settings)
+            if self.trace is not None:
+                self._unsubscribe_trace = self.agent.bus.subscribe(self.trace)
+        elif not enabled and self.trace is not None:
+            self._unsubscribe_trace()
+            self._unsubscribe_trace = lambda: None
+            self.trace.close()
+            self.trace = None
 
     @property
     def reply(self) -> AgentReply | None:
@@ -133,7 +159,8 @@ class AgentController:
         """Se désabonne du bus (à appeler lorsque la fenêtre se ferme)."""
         self._unsubscribe()
         self._unsubscribe_trace()
-        self.trace.close()
+        if self.trace is not None:
+            self.trace.close()
 
     # -- exécution ----------------------------------------------------------
 

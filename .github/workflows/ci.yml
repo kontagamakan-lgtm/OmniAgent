@@ -35,16 +35,17 @@ jobs:
           cache-dependency-path: |
             requirements.txt
             requirements-dev.txt
+            requirements-ci.txt
 
-      - name: Installer les dépendances
+      - name: Installer les dépendances (versions figées)
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt -r requirements-dev.txt
+          python -m pip install -r requirements-dev.txt -r requirements-ci.txt
 
       - name: Ruff (F, B, E9)
         run: >-
           python -m ruff check --select F,B,E9 security tools config.py core
-          tests ui app.py smoke_exe.py pyinstaller_recipe.py
+          tests ui app.py smoke_exe.py pyinstaller_recipe.py build_smoke
 
       - name: Pytest
         run: python -m pytest -q
@@ -64,11 +65,12 @@ jobs:
           cache-dependency-path: |
             requirements.txt
             requirements-dev.txt
+            requirements-ci.txt
 
-      - name: Installer les dépendances
+      - name: Installer les dépendances (versions figées)
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt -r requirements-dev.txt
+          python -m pip install -r requirements-dev.txt -r requirements-ci.txt
 
       # --no-smoke : pas de recherche de fenêtre visible, impossible à garantir
       # sur un runner sans session interactive. Les contrôles bloquants suivent.
@@ -124,6 +126,14 @@ jobs:
         run: >-
           python -c "import os;[(print(d, round(sum(os.path.getsize(os.path.join(r,f)) for r,_,ns in os.walk(d) for f in ns)/1048576,2),'Mio', sum(len(ns) for _,_,ns in os.walk(d)),'fichiers')) for d in ('dist/OmniAgent','dist/OmniAgent-lite','dist/OmniAgent-slim')]"
 
+      # Empreintes SHA-256 et versions de build : un binaire publié reste
+      # identifiable et comparable sans reconstruire pour savoir ce qu'il contient.
+      - name: Empreintes et versions de build
+        shell: cmd
+        env:
+          PYTHONUTF8: "1"
+        run: python build_smoke\record_build.py || exit /b 1
+
       - name: Conserver les paquets
         uses: actions/upload-artifact@v4
         with:
@@ -132,4 +142,6 @@ jobs:
             dist/OmniAgent/
             dist/OmniAgent-lite/
             dist/OmniAgent-slim/
+            dist/SHA256SUMS.txt
+            dist/BUILD-INFO.txt
           retention-days: 7

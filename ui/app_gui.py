@@ -9,6 +9,7 @@ l'agent ne vit ici — la fenêtre ne fait qu'afficher les événements du
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from config import APP_ID, APP_NAME, APP_VERSION, Settings
@@ -148,6 +149,19 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 actions, text="Annuler", command=self._cancel, state="disabled"
             )
             self.cancel_button.pack(fill="x")
+            ctk.CTkButton(
+                actions, text="Traces", width=110, command=self._open_traces
+            ).pack(fill="x", pady=(6, 0))
+            # Trace sur disque : l'utilisateur doit pouvoir refuser qu'une
+            # session laisse la tâche et les réponses en clair sur la machine.
+            self.trace_switch = ctk.CTkSwitch(
+                actions, text="trace", command=self._toggle_trace
+            )
+            self.trace_switch.pack(fill="x", pady=(6, 0))
+            if self.controller.tracing:
+                self.trace_switch.select()
+            else:
+                self.trace_switch.deselect()
 
         # -- affichage ------------------------------------------------------
 
@@ -243,6 +257,66 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             self.controller.cancel()
             self._set_status("arrêt demandé…")
 
+        def _toggle_trace(self) -> None:
+            enabled = bool(self.trace_switch.get())
+            self.controller.set_tracing(enabled)
+            self._set_status(
+                "trace active"
+                if enabled
+                else "trace désactivée : rien n'est écrit sur disque"
+            )
+
+        def _open_traces(self) -> None:
+            """Liste les exécutions enregistrées et en relit une à la demande."""
+            directory = self.settings.paths.log_dir / "runs"
+            window = ctk.CTkToplevel(self)
+            window.title("Traces d'exécution")
+            window.geometry("760x480")
+            window.transient(self)
+            frame = ctk.CTkScrollableFrame(window, label_text=str(directory))
+            frame.pack(fill="both", expand=True, padx=10, pady=10)
+            files: list[Any] = []
+            if directory.is_dir():
+                try:
+                    files = sorted(
+                        directory.glob("*.jsonl"),
+                        key=lambda item: item.stat().st_mtime,
+                        reverse=True,
+                    )[:50]
+                except OSError as exc:
+                    self._append("erreur", f"dossier de traces illisible : {exc}")
+            if not files:
+                ctk.CTkLabel(frame, text="Aucune trace enregistrée.").pack(pady=20)
+                return
+            for path in files:
+                try:
+                    stat = path.stat()
+                except OSError:
+                    continue
+                row = ctk.CTkFrame(frame)
+                row.pack(fill="x", pady=2)
+                stamp = time.strftime("%d/%m %H:%M", time.localtime(stat.st_mtime))
+                ctk.CTkLabel(
+                    row,
+                    text=f"{path.stem}   {stamp}   {max(1, stat.st_size // 1024)} Kio",
+                    anchor="w",
+                ).pack(side="left", padx=8, fill="x", expand=True)
+                ctk.CTkButton(
+                    row, text="Lire", width=70, command=lambda p=path: self._show_trace(p)
+                ).pack(side="right", padx=6, pady=4)
+
+        def _show_trace(self, path: Any) -> None:
+            """Rejoue une trace dans la conversation, sans relancer l'agent."""
+            from core.replay import format_run, replay
+
+            try:
+                run = replay(path)
+            except Exception as exc:  # noqa: BLE001 - une trace cassée ne doit rien casser
+                self._append("erreur", f"trace illisible : {exc}")
+                return
+            self._buffer.write(format_run(run) + "\n\n")
+            self._set_status(f"trace relue : {path.stem}")
+
         def _pump(self) -> None:
             for event in self.controller.drain():
                 self._render(event)
@@ -269,6 +343,17 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                     status += f" · {reply.tool_calls} outil(s)"
                 if reply.recoveries:
                     status += f" · {reply.recoveries} reprise(s)"
+                # `getattr` : l'interface doit rester utilisable avec un
+                # contrôleur de test qui n'expose pas de trace.
+                trace = getattr(self.controller, "trace", None)
+                if trace is not None and trace.truncated:
+                    # Une trace incomplète ne doit pas ressembler à un run propre.
+                    self._append(
+                        "système",
+                        "trace incomplète : plafond de taille atteint, la fin de "
+                        "l'exécution n'est pas enregistrée",
+                    )
+                    status += " · trace tronquée"
                 self._set_status(status)
                 self.send_button.configure(state="normal")
                 self.cancel_button.configure(state="disabled")
