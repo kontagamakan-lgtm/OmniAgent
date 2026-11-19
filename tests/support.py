@@ -55,6 +55,9 @@ def make_settings(root: Path) -> config.Settings:
         browser_profile_dir=root / "browser_profile",
     )
     settings.files.allowed_roots = [str(root)]
+    # Les tests unitaires ne créent ni vault Obsidian ni installation externe.
+    settings.obsidian.enabled = False
+    settings.obsidian.auto_install = False
     # KDF volontairement allégé : les tests ne mesurent pas la résistance au bruteforce.
     settings.vault.argon2_time_cost = 1
     settings.vault.argon2_memory_kib = 8192

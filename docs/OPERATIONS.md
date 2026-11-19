@@ -268,6 +268,25 @@ python -m core.memory --delete <id>
 python -m core.memory --forget   :: supprime expirées et sources disparues
 ```
 
+## Cerveau Obsidian
+
+Le vault `data/Obsidian/OmniAgent_Brain/` est la mémoire longue durée
+Markdown. `00_CORTEX_INDEX.md` est régénéré après chaque note ; les outils
+`obsidian_remember`, `obsidian_search` et `obsidian_status` permettent à
+l'agent de l'enrichir et de le consulter. Les lectures web, fichiers, OCR et
+recherches documentaires sont transformées automatiquement en notes dans
+`01_Sources/` ; une note de journal est ajoutée à la fin de chaque run.
+
+Au premier lancement graphique, `obsidian.auto_install` lance si nécessaire
+`winget install --id Obsidian.Obsidian --exact --silent`. Si winget est absent
+ou échoue, le vault reste utilisable et l'application continue ;
+`python app.py --install-obsidian` relance explicitement le bootstrap. Le
+`--check` affiche le vault et la présence de l'application sans installer.
+
+Les résultats sensibles (coffre, cookies) ne sont jamais mémorisés ; les
+contenus sont passés par le `Redactor`. Les fichiers du vault sont des données
+utilisateur : ne les versionnez pas et ne les incluez pas dans un paquet.
+
 ## Isolation par run
 
 `isolation.profile` (ou `--profile`) choisit les familles d'outils exposées :

@@ -654,6 +654,27 @@ class MemoryConfig:
 
 
 @dataclass(slots=True)
+class ObsidianConfig:
+    """Cerveau Markdown : vault Obsidian, installation et mémorisation."""
+
+    #: Activer les outils `obsidian_*` et les notes automatiques.
+    enabled: bool = True
+    #: Au premier lancement graphique, tenter l'installation via winget.
+    auto_install: bool = True
+    #: Nom du vault créé sous `data/Obsidian/` quand `vault_dir` est vide.
+    vault_name: str = "OmniAgent_Brain"
+    #: Chemin explicite du vault (prioritaire sur `vault_name`).
+    vault_dir: str = ""
+    #: Transformer les résultats des lectures web/fichiers en notes.
+    auto_memory: bool = True
+    #: Écrire une note de journal à la fin de chaque run.
+    auto_journal: bool = True
+    max_note_chars: int = 12000
+    max_index_links: int = 500
+    install_timeout_s: int = 600
+
+
+@dataclass(slots=True)
 class IsolationConfig:
     """Profil de capacités par run et liste blanche de domaines."""
 
@@ -711,6 +732,7 @@ class Settings:
     metrics: MetricsConfig = field(default_factory=MetricsConfig)
     budget: BudgetConfig = field(default_factory=BudgetConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
+    obsidian: ObsidianConfig = field(default_factory=ObsidianConfig)
     isolation: IsolationConfig = field(default_factory=IsolationConfig)
     approvals: ApprovalConfig = field(default_factory=ApprovalConfig)
 
@@ -898,6 +920,13 @@ class Settings:
                 "enabled": self.memory.enabled,
                 "max_notes": self.memory.max_notes,
                 "max_chars": self.memory.max_chars,
+            },
+            "obsidian": {
+                "enabled": self.obsidian.enabled,
+                "auto_install": self.obsidian.auto_install,
+                "vault_name": self.obsidian.vault_name,
+                "auto_memory": self.obsidian.auto_memory,
+                "auto_journal": self.obsidian.auto_journal,
             },
             "budget": {
                 "enabled": self.budget.enabled,
@@ -1194,6 +1223,22 @@ class Settings:
             err("memory.max_notes", "doit etre comprise entre 1 et 10000")
         if not (100 <= self.memory.max_chars <= 20000):
             err("memory.max_chars", "doit etre comprise entre 100 et 20000")
+
+        # --- Cerveau Obsidian
+        obsidian = self.obsidian
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}", obsidian.vault_name.strip()):
+            err(
+                "obsidian.vault_name",
+                "nom de vault simple attendu (lettres, chiffres, espaces, . _ -)",
+            )
+        if obsidian.vault_dir and any(part == ".." for part in Path(obsidian.vault_dir).parts):
+            err("obsidian.vault_dir", "chemin avec '..' refuse")
+        if not (1000 <= obsidian.max_note_chars <= 200000):
+            err("obsidian.max_note_chars", "doit etre comprise entre 1000 et 200000")
+        if not (1 <= obsidian.max_index_links <= 10000):
+            err("obsidian.max_index_links", "doit etre comprise entre 1 et 10000")
+        if not (30 <= obsidian.install_timeout_s <= 3600):
+            err("obsidian.install_timeout_s", "doit etre comprise entre 30 et 3600 secondes")
 
         # --- Budget global
         budget = self.budget

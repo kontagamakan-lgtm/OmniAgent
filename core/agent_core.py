@@ -299,6 +299,17 @@ class AgentCore:
         if memory_text:
             user_content = f"{user_content}\n\n{memory_text}"
 
+        brain_extra = ""
+        if getattr(getattr(self.settings, "obsidian", None), "enabled", False):
+            brain_extra = (
+                "## Mémoire Obsidian\n"
+                "Un cerveau Markdown persistant est disponible. Avant de refaire une "
+                "recherche ou une analyse, appelle `obsidian_search`. Après une "
+                "découverte, une préférence durable ou une information sur "
+                "l'utilisateur, appelle `obsidian_remember` avec un titre court, "
+                "des tags et des `[[liens]]` vers les notes liées. N'écris jamais "
+                "de secret dans une note."
+            )
         messages: list[dict[str, Any]] = [
             {
                 "role": "system",
@@ -307,6 +318,7 @@ class AgentCore:
                     tools=self.registry.toolset.tools(),
                     max_steps=limit,
                     action_first=cfg.action_first,
+                    extra=brain_extra,
                 ),
             },
             {"role": "user", "content": user_content},

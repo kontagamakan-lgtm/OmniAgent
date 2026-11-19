@@ -59,6 +59,7 @@ OmniAgent/
 │   ├── browser_agent.py       # LIVRABLE 3 — Playwright, login, formulaires
 │   ├── web_search.py          # LIVRABLE 3 — multi-moteurs + extraction
 │   ├── doc_index.py           #    RAG : découpage, FTS5, vecteurs
+│   ├── obsidian.py            #    vault Markdown, liens, mémoire automatique
 │   ├── ocr.py                 #    OCR images / PDF scannés (Tesseract)
 │   └── shell.py               #    exécution PowerShell/cmd contrôlée
 ├── security/
@@ -72,6 +73,7 @@ OmniAgent/
 └── data/                      # généré à l'exécution, ignoré par git
     ├── config.json            #    configuration persistée
     ├── vault.enc              #    coffre chiffré
+    ├── Obsidian/OmniAgent_Brain/ # cerveau Markdown (notes, index, journal)
     ├── index/  logs/  downloads/  cache/  reports/  browser_profile/
 ```
 
@@ -120,6 +122,40 @@ Prérequis externes :
   pour un fonctionnement 100 % local sans filtre plateforme.
 
 ---
+
+## Cerveau Obsidian
+
+Au premier lancement graphique, OmniAgent vérifie la présence d'Obsidian et
+lance si nécessaire `winget install --id Obsidian.Obsidian --exact --silent`.
+Si winget est absent ou refuse, l'agent continue : le vault Markdown reste
+utilisable, et `python app.py --install-obsidian` permet de relancer le
+bootstrap explicitement. Le vault est créé sous
+`data/Obsidian/OmniAgent_Brain/` (ou `obsidian.vault_dir`).
+
+Le vault est la mémoire longue durée :
+
+- `00_CORTEX_INDEX.md` est la note maîtresse, régénérée après chaque écriture ;
+- les lectures web, fichiers, OCR et recherches documentaires deviennent des
+  notes dans `01_Sources/` ;
+- les faits, préférences et connaissances durables sont écrits par l'outil
+  `obsidian_remember` dans `02_Knowledge/`, avec des `[[Wikilinks]]` et des
+  `#tags` ;
+- une note de journal est ajoutée dans `04_Journal/` à la fin d'un run.
+
+L'agent reçoit l'instruction de chercher dans `obsidian_search` avant de
+redécouvrir un fait, et de mémoriser ce qu'il apprend. Les résultats sensibles
+(coffre, cookies) ne sont jamais transformés en notes ; les écritures sont
+passées par le `Redactor`.
+
+```bat
+python app.py --install-obsidian      :: bootstrap winget explicite
+python app.py --check                 :: vault et présence d'Obsidian
+```
+
+Réglages `config.json` : `obsidian.enabled`, `auto_install`, `vault_name`,
+`vault_dir`, `auto_memory`, `auto_journal`, `max_note_chars` et
+`max_index_links`. Les variables correspondantes suivent
+`OMNIAGENT_OBSIDIAN_*`.
 
 ## Assistant de premier démarrage
 

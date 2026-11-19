@@ -36,6 +36,7 @@ from tools.browser_agent import BrowserAgent, build_browser_tools
 from tools.capabilities import assert_capabilities
 from tools.doc_index import DocIndex, build_doc_tools
 from tools.file_manager import FileManager, build_file_tools
+from tools.obsidian import ObsidianBrain, build_obsidian_tools
 from tools.ocr import Ocr, build_ocr_tools
 from tools.shell import ShellRunner, build_shell_tools
 from tools.vault import Vault, build_vault_tools
@@ -60,11 +61,13 @@ class AgentBundle:
     index: DocIndex | None = None
     ocr: Ocr | None = None
     shell: ShellRunner | None = None
+    brain: Any = None
     owns_llm: bool = False
     metrics: Any = None
     _unsubscribe_metrics: Any = field(default=None, repr=False)
     _unsubscribe_budget: Any = field(default=None, repr=False)
     _unsubscribe_file_tx: Any = field(default=None, repr=False)
+    _unsubscribe_brain: Any = field(default=None, repr=False)
     _closed: bool = field(default=False, repr=False)
 
     def tool_names(self) -> list[str]:
@@ -93,6 +96,12 @@ class AgentBundle:
             except Exception:  # noqa: BLE001 - désabonnement best effort
                 logger.debug("désabonnement des métriques impossible", exc_info=True)
             self._unsubscribe_metrics = None
+        if self._unsubscribe_brain is not None:
+            try:
+                self._unsubscribe_brain()
+            except Exception:  # noqa: BLE001
+                logger.debug("désabonnement du cerveau impossible", exc_info=True)
+            self._unsubscribe_brain = None
         if self.browser is not None:
             try:
                 self.browser.stop()
@@ -152,6 +161,12 @@ def build_agent(
     # désactivé la reconnaissance de texte.
     ocr = Ocr(settings, files) if settings.files.ocr_enabled else None
     shell = ShellRunner(settings, files)
+    brain: ObsidianBrain | None = None
+    if settings.obsidian.enabled:
+        try:
+            brain = ObsidianBrain(settings)
+        except (OSError, ValueError):
+            logger.warning("vault Obsidian indisponible", exc_info=True)
 
     tools: list[Tool] = []
     tools.extend(build_file_tools(files))
@@ -160,6 +175,8 @@ def build_agent(
     if ocr is not None:
         tools.extend(build_ocr_tools(ocr))
     tools.extend(build_shell_tools(shell))
+    if brain is not None:
+        tools.extend(build_obsidian_tools(brain))
 
     searcher: WebSearcher | None = None
     if with_web:
@@ -202,6 +219,7 @@ def build_agent(
         confirm=confirm,
         network_guard=build_network_guard(settings, run_profile),
         approval=approval,
+        on_result=brain.remember_tool_result if brain is not None else None,
     )
     owns_llm = llm is None
     client = llm or LLMClient(settings.llm)
@@ -224,6 +242,11 @@ def build_agent(
     # Transaction par run : journal et instantanés des seuls fichiers touchés,
     # ouverts au début de l'exécution et refermés à la fin.
     unsubscribe_file_tx = files.attach_transactions(agent.bus)
+    unsubscribe_brain = (
+        agent.bus.subscribe(brain.on_event, types=("run_started", "final"))
+        if brain is not None
+        else None
+    )
     return AgentBundle(
         agent=agent,
         registry=registry,
@@ -231,6 +254,7 @@ def build_agent(
         _unsubscribe_metrics=unsubscribe_metrics,
         _unsubscribe_budget=unsubscribe_budget,
         _unsubscribe_file_tx=unsubscribe_file_tx,
+        _unsubscribe_brain=unsubscribe_brain,
         settings=settings,
         vault=vault,
         files=files,
@@ -239,5 +263,6 @@ def build_agent(
         index=index,
         ocr=ocr,
         shell=shell,
+        brain=brain,
         owns_llm=owns_llm,
     )

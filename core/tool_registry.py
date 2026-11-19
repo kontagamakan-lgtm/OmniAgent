@@ -28,6 +28,7 @@ logger = logging.getLogger(f"{APP_ID}.registry")
 
 ConfirmHandler = Callable[[Tool, Mapping[str, Any]], bool]
 NetworkGuard = Callable[[str, Mapping[str, Any]], tuple[bool, str]]
+ResultHook = Callable[[str, Mapping[str, Any], ToolResult], None]
 
 
 class ToolRegistry:
@@ -41,6 +42,7 @@ class ToolRegistry:
         confirm: ConfirmHandler | None = None,
         network_guard: NetworkGuard | None = None,
         approval: "ApprovalGate | None" = None,
+        on_result: ResultHook | None = None,
     ) -> None:
         if isinstance(tools, ToolSet):
             self._tools = tools
@@ -50,6 +52,7 @@ class ToolRegistry:
         self._confirm = confirm
         self._network_guard = network_guard
         self._approval = approval
+        self._on_result = on_result
         # Décideur propre à la porte (souvent la boîte de dialogue de
         # l'interface), distinct du confirmateur historique que le mode
         # autonome remplace puis restaure.
@@ -125,6 +128,11 @@ class ToolRegistry:
 
         self._calls[tool.name] = self._calls.get(tool.name, 0) + 1
         result = tool.execute(**payload)
+        if self._on_result is not None:
+            try:
+                self._on_result(tool.name, payload, result)
+            except Exception:  # noqa: BLE001 - la persistance ne casse pas l'outil
+                logger.exception("hook de résultat en échec pour %s", tool.name)
         self._total_ms[tool.name] = self._total_ms.get(tool.name, 0.0) + result.duration_ms
         if not result.ok:
             self._failures[tool.name] = self._failures.get(tool.name, 0) + 1

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import logging
 import os
 import platform
 import shutil
@@ -129,6 +130,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--notify-install",
         action="store_true",
         help="crée le raccourci du menu Démarrer et déclare le protocole omniagent://",
+    )
+    parser.add_argument(
+        "--install-obsidian",
+        action="store_true",
+        help="installe Obsidian via winget si nécessaire, puis quitte",
     )
     parser.add_argument(
         "--notify-action",
@@ -347,6 +353,21 @@ def diagnostics(settings: Settings) -> list[tuple[bool, str]]:
     vault = settings.paths.vault_file
     checks.append((True, f"coffre : {vault}" + ("" if vault.is_file() else " (à créer)")))
     checks.append((True, f"journal : {settings.paths.log_dir / 'omniagent.log'}"))
+    try:
+        from tools.obsidian import ObsidianBrain, find_obsidian
+
+        brain = ObsidianBrain(settings, create=False)
+        app_path = find_obsidian()
+        checks.append(
+            (
+                True,
+                f"Obsidian : vault {brain.root}" + (
+                    f" ; application {app_path}" if app_path else " ; application absente"
+                ),
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 - diagnostic non bloquant
+        checks.append((False, f"Obsidian : indisponible ({type(exc).__name__}: {exc})"))
     if settings.trace.encrypt:
         from core.trace_crypto import TraceKeyError, load_key
 
@@ -1159,6 +1180,16 @@ def _run_gui(settings: Settings) -> int:
             file=sys.stderr,
         )
         return 2
+    if settings.obsidian.enabled and settings.obsidian.auto_install:
+        try:
+            from tools.obsidian import ensure_obsidian
+
+            _installed, detail = ensure_obsidian(settings)
+            logging.getLogger(f"{APP_NAME}.bootstrap").info("Obsidian : %s", detail)
+        except Exception:  # noqa: BLE001 - une installation ne bloque pas l'agent
+            logging.getLogger(f"{APP_NAME}.bootstrap").debug(
+                "bootstrap Obsidian impossible", exc_info=True
+            )
     bundle = build_agent(settings)
     try:
         return run_gui(settings, bundle)
@@ -1178,6 +1209,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.check:
         return _report(settings, fix=args.fix)
+    if args.install_obsidian:
+        from tools.obsidian import ensure_obsidian
+
+        installed, detail = ensure_obsidian(settings, force=True)
+        print(detail)
+        return 0 if installed else 1
     if args.fix:
         print("--fix s'utilise avec --check", file=sys.stderr)
         return 2

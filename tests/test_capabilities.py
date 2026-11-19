@@ -28,6 +28,7 @@ from tools.capabilities import (  # noqa: E402
 )
 from tools.doc_index import DocIndex, build_doc_tools  # noqa: E402
 from tools.file_manager import FileManager, build_file_tools  # noqa: E402
+from tools.obsidian import ObsidianBrain, build_obsidian_tools  # noqa: E402
 from tools.ocr import Ocr, build_ocr_tools  # noqa: E402
 from tools.shell import ShellRunner, build_shell_tools  # noqa: E402
 from tools.vault import Vault, build_vault_tools  # noqa: E402
@@ -48,6 +49,7 @@ def _all_family_tools(tmp: Path) -> list:
         *build_vault_tools(vault),
         *build_doc_tools(index),
         *build_ocr_tools(Ocr(settings, files)),
+        *build_obsidian_tools(ObsidianBrain(settings)),
         *build_shell_tools(ShellRunner(settings, files)),
         *build_web_tools(WebSearcher(settings)),
         *build_browser_tools(browser),
@@ -66,7 +68,7 @@ def test_every_built_tool_is_classified_and_matches_the_contract() -> None:
     # Aucune entrée orpheline : un outil renommé ne doit pas rester classé
     # sous son ancien nom pendant que le nouveau passe inaperçu.
     assert names == set(CAPABILITIES)
-    assert len(names) == 53
+    assert len(names) == 56
 
 
 def test_an_unclassified_tool_is_refused() -> None:

@@ -144,6 +144,10 @@ CAPABILITIES: Mapping[str, ToolCapabilities] = MappingProxyType(
         "fs_convert": _write(),
         "fs_disk_usage": _read(replay=True),
         "fs_hash": _read(replay=True),
+        # -- cerveau Obsidian
+        "obsidian_remember": _write(),
+        "obsidian_search": _read(replay=True),
+        "obsidian_status": _read(replay=True),
         # -- coffre-fort
         "vault_status": _read(scope="vault", replay=True),
         "vault_services": _read(scope="vault", replay=True),
