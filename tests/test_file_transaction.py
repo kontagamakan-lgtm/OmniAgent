@@ -121,6 +121,9 @@ def test_failed_run_undo_restores_exact_bytes_and_only_its_files() -> None:
         assert preview is not None and preview.ok
         assert notes.read_bytes() == b"remplacement"
         assert created.exists()
+        preview_text = preview.format()
+        assert "restaurerait" in preview_text and "notes.txt" in preview_text
+        assert "59 -> 12 octets" in preview_text, "l'aperçu doit chiffrer le diff"
 
         report = undo_run(settings, run_id, apply=True)
         assert report is not None and report.ok

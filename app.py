@@ -1183,9 +1183,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.notify_install:
         from core.notify import install_notifications
 
-        target = sys.executable
+        target = Path(sys.executable)
+        # `pythonw.exe` évite une console derrière le raccourci du menu Démarrer.
+        windowed = target.with_name("pythonw.exe")
+        if windowed.is_file():
+            target = windowed
         script = str(Path(__file__).resolve())
-        ok, message = install_notifications(target, f'"{script}"', icon=target)
+        ok, message = install_notifications(str(target), f'"{script}"', icon=str(target))
         print(message, file=sys.stdout if ok else sys.stderr)
         return 0 if ok else 1
 

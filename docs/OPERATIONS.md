@@ -98,12 +98,121 @@ outil, elle dit s'il **écrit** (sinon il lit), s'il est **dangereux** (donc
 confirmé, et refusé en autonomie sans règle de politique) et s'il manipule des
 **secrets** (résultat et arguments retenus hors du prompt et de la trace).
 
+Chaque entrée déclare aussi sa **portée** (fichiers, coffre, web, navigateur,
+shell, index, OCR), son accès **réseau** et son droit de **rejeu**. La liste
+blanche de `core.resume` est calculée depuis ce manifeste : elle n'est plus
+recopiée à la main, ce qui avait laissé `fs_read` (nom disparu) dans l'ancienne
+liste.
+
 `build_agent` valide cette table contre les outils réellement construits et
 lève `ToolContractError` au démarrage si un outil n'est pas classé ou si ses
 drapeaux ne correspondent plus à sa déclaration : un oubli ne peut donc pas
 hériter silencieusement du défaut `read_only=True`. Ajouter une famille
 d'outils implique d'ajouter ses entrées dans cette table ; le test
 `tests/test_capabilities.py` vérifie aussi qu'aucune entrée n'est orpheline.
+`python -m tools.capabilities` affiche la table, aussi disponible dans
+`docs/TOOLS.md`.
+
+## Approbation au niveau de l'outil
+
+Avant tout outil à effet, l'interface affiche l'aperçu exact : diff pour
+`fs_write_text`, arborescence et taille pour `fs_delete`, commande pour
+`shell_run`, hôte pour le web. La décision vaut **une fois**, **pour la
+session** (même outil, sans nouvelle demande) ou **refus** ; un refus, une
+fenêtre fermée ou une panne refuse par défaut, et l'outil n'est jamais
+dispatché avant la décision. Chaque décision est journalisée dans
+`data/approvals.jsonl` (outil, portée, décision, empreinte des arguments), sans
+contenu de fichier ni secret.
+
+Mode dans `config.json` : `approvals.mode` = `dangerous` (défaut, seuls les
+outils destructeurs), `write` (toute écriture), `all` ou `none` ;
+`approvals.session_grants` désactive l'autorisation de session. En CLI, un
+confirmateur booléen vaut « une fois » ; le mode autonome continue de refuser
+les outils dangereux sans règle de politique.
+
+## Budget global
+
+`data/budget/ledger.jsonl` garde un enregistrement par run (tokens, coût
+estimé) : le cumul survit aux redémarrages. `budget.daily_cost`,
+`weekly_cost`, `monthly_cost`, `daily_tokens` et `monthly_tokens` fixent les
+plafonds (0 = aucun). Le budget est vérifié avant le run et avant chaque appel
+au modèle ; un dépassement arrête avec `stop_reason = "budget"` sans envoyer la
+requête suivante. L'interface affiche la jauge du jour et la marge restante.
+
+```bat
+python app.py --budget
+```
+
+## Mémoire projet
+
+Les notes durables vivent dans `data/memory/notes.json` : texte, portée,
+confiance, date, expiration facultative et **source** avec une empreinte. Seules
+les notes actives sont injectées dans le prompt, avec leur provenance. Si la
+source change, la note passe `stale` : elle n'est plus présentée comme une
+vérité, mais reste consultable avec sa provenance.
+
+```bat
+python -m core.memory --list
+python -m core.memory --add "les rapports vont dans rapports/" --source docs\conventions.md --confidence 0.9 --ttl-days 90
+python -m core.memory --edit <id> --text "nouvelle formulation" --source docs\conventions.md
+python -m core.memory --delete <id>
+python -m core.memory --forget   :: supprime expirées et sources disparues
+```
+
+## Isolation par run
+
+`isolation.profile` (ou `--profile`) choisit les familles d'outils exposées :
+`read-only`, `files`, `files-web` ou `full`. Un outil hors profil n'est ni
+proposé au modèle ni exécutable (`unknown_tool`), même si le modèle l'appelle.
+`isolation.allowed_domains` restreint les hôtes des outils réseautés (sous-domaines
+acceptés) ; chaque tentative est écrite dans `data/network.jsonl`.
+
+```bat
+python app.py --task "resume mes notes" --profile read-only
+```
+
+C'est une isolation au niveau des outils : un outil conservé garde les droits
+du processus, ce n'est pas un bac à sable système.
+
+## Journal d'audit
+
+Chaque trace scellée enregistre dans `data/audit/chain.jsonl` le nombre de ses
+enregistrements et la racine SHA-256 de leurs empreintes **dans l'ordre**,
+reliée au scellement précédent. Une ligne modifiée, supprimée ou réordonnée est
+détectée ; les décisions de politique sont chaînées de la même façon.
+
+```bat
+python app.py --audit-seal      :: migre les traces existantes
+python app.py --verify-audit
+```
+
+Un attaquant qui possède la clé peut réécrire la trace et tout le journal :
+recopiez régulièrement `chain.jsonl` hors de la machine pour un ancrage externe.
+
+## Notifications Windows
+
+```bat
+python app.py --notify-install  :: raccourci du menu Demarrer + protocole omniagent://
+python app.py --notify-action omniagent://trace/<run_id>
+python app.py --notify-action omniagent://stop
+```
+
+Le raccourci porte l'AppUserModelID `OmniAgent.Desktop` ; les toasts de fin de
+session proposent « Ouvrir la trace » et « Arrêter ». Si Windows refuse la
+version avec boutons, une toast simple est affichée ; si PowerShell est
+indisponible, la session continue et l'échec est journalisé.
+
+## Répétition de restauration
+
+```bat
+python app.py --restore-drill data\backups\omniagent-....ombak
+```
+
+L'archive est d'abord inspectée (refus avant toute écriture), puis restaurée
+dans `data/.restore-drill-*`, où les traces sont relues, la base passe
+`PRAGMA integrity_check`, l'index et la configuration sont parsés. Le dossier
+est supprimé ensuite ; les données vivantes ne sont jamais modifiées.
+`--keep` conserve le dossier pour inspection.
 
 ## Arrêt d'urgence
 
@@ -143,7 +252,12 @@ lecture ne créent ni copie ni entrée.
 python -m core.file_tx --list
 python -m core.file_tx --undo <run_id>          :: apercu, aucune écriture
 python -m core.file_tx --undo <run_id> --apply  :: restaure
+python app.py --undo-run <run_id>               :: meme annulation via la CLI
+python app.py --undo-run <run_id> --undo-apply
 ```
+
+L'interface expose **Annuler ce run** : elle affiche l'aperçu du journal et ne
+restaure qu'après confirmation.
 
 L'annulation rejoue les intentions à l'envers : elle restaure les octets
 d'origine, supprime ce que le run a créé et remet en place ce qu'il a déplacé.

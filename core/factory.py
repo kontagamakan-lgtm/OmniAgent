@@ -171,15 +171,12 @@ def build_agent(
         browser = BrowserAgent(settings, vault, file_manager=files)
         tools.extend(build_browser_tools(browser))
 
-    # Profil de capacités : les outils hors profil ne sont ni proposés au
-    # modèle ni exécutables. Le filtrage précède le contrat, qui ne juge donc
-    # que les outils réellement exposés.
-    tools = apply_profile(tools, run_profile)
     # Contrat des capacités : un outil non classé, ou dont les drapeaux ne
     # correspondent plus à `tools/capabilities.py`, bloque le démarrage plutôt
-    # que d'hériter silencieusement des valeurs par défaut. Les ressources déjà
-    # ouvertes (index SQLite, navigateur) sont refermées avant de lever : sinon
-    # un échec de contrat laisse des fichiers verrouillés derrière lui.
+    # que d'hériter silencieusement des valeurs par défaut. Il est vérifié
+    # **avant** le profil : sinon un outil inconnu serait filtré sans bruit.
+    # Les ressources déjà ouvertes (index SQLite, navigateur) sont refermées
+    # avant de lever : sinon un échec de contrat laisse des fichiers verrouillés.
     try:
         assert_capabilities(tools)
     except Exception:
@@ -193,6 +190,9 @@ def build_agent(
                 logger.debug("fermeture après contrat invalide impossible", exc_info=True)
         raise
 
+    # Profil de capacités : les outils hors profil ne sont ni proposés au
+    # modèle ni exécutables.
+    tools = apply_profile(tools, run_profile)
     # Confirmateur historique (booléen) : une approbation vaut « une fois ».
     approval = build_approval_gate(settings, confirm)
     registry = ToolRegistry(

@@ -246,7 +246,14 @@ class ApprovalGate:
             self._journal(request, DENY, "aucun decideur")
             return False, "confirmation requise : aucun decideur disponible"
         try:
-            answer = self.decide(request)
+            # Deux signatures vivent encore : `(request)` pour l'interface et
+            # `(tool, arguments)` pour le confirmateur historique et l'autonomie.
+            arity = _positional_arity(self.decide)
+            answer = (
+                self.decide(request)
+                if arity <= 1
+                else self.decide(tool, arguments)
+            )
         except Exception:  # noqa: BLE001 - un decideur defaillant refuse
             logger.exception("approbation impossible pour %s", name)
             self._journal(request, DENY, "decideur en echec")
@@ -299,6 +306,22 @@ def build_approval_gate(
         enabled=bool(getattr(cfg, "enabled", True)),
         session_grants=bool(getattr(cfg, "session_grants", True)),
         settings=settings,
+    )
+
+
+def _positional_arity(callback: Callable[..., Any]) -> int:
+    """Nombre de paramètres positionnels, pour choisir la signature d'appel."""
+    import inspect
+
+    try:
+        parameters = inspect.signature(callback).parameters
+    except (TypeError, ValueError):  # pragma: no cover - callable exotique
+        return 1
+    return sum(
+        1
+        for parameter in parameters.values()
+        if parameter.kind
+        in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
     )
 
 

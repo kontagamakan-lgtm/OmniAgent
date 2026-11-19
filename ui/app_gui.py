@@ -1114,7 +1114,10 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
         def _refresh_budget(self) -> None:
             """Met à jour la jauge au plus toutes les trente secondes."""
             now = time.monotonic()
-            if now - float(getattr(self, "_budget_at", 0.0)) < 30.0:
+            # `vars` et non `getattr` : les tests construisent la fenêtre avec
+            # `object.__new__`, dont le `__getattr__` Tk récurserait.
+            local = vars(self)
+            if now - float(local.get("_budget_at", 0.0)) < 30.0:
                 return
             self._budget_at = now
             try:
@@ -1130,7 +1133,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 text += f" · reste {remaining:.2f} USD"
             if not state.allowed:
                 text += " · plafond atteint"
-            label = getattr(self, "budget_label", None)
+            label = local.get("budget_label")
             if label is not None:
                 label.configure(text=text)
 

@@ -27,6 +27,7 @@ n'est pas une sauvegarde : la transaction couvre un run, pas l'historique.
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import logging
 import os
@@ -377,6 +378,34 @@ def _restore(snapshot: Path, target: Path, *, mtime_ns: int = 0) -> None:
             pass
 
 
+def _preview_hint(snapshot: Path, target: Path) -> str:
+    """Résumé du diff pour l'aperçu, sans écrire ni charger un gros binaire."""
+    try:
+        before = snapshot.read_bytes()
+        after = target.read_bytes() if target.is_file() else b""
+    except OSError:
+        return ""
+    if (
+        max(len(before), len(after)) > 2_000_000
+        or b"\x00" in before[:4096]
+        or b"\x00" in after[:4096]
+    ):
+        return f"{len(before)} -> {len(after)} octets"
+    diff = difflib.unified_diff(
+        after.decode("utf-8", errors="replace").splitlines(),
+        before.decode("utf-8", errors="replace").splitlines(),
+        lineterm="",
+        n=0,
+    )
+    added = removed = 0
+    for line in diff:
+        if line.startswith("+") and not line.startswith("+++"):
+            added += 1
+        elif line.startswith("-") and not line.startswith("---"):
+            removed += 1
+    return f"{added} ligne(s) a retablir, {removed} a retirer"
+
+
 def _remove(path: Path, roots: list[Path]) -> str:
     if path in roots:
         return "refuse: racine autorisee"
@@ -428,6 +457,7 @@ def undo_transaction(
                     detail = "fichier trop gros ou copie ratee"
                 elif not apply:
                     status = "restaurerait"
+                    detail = _preview_hint(snapshot, path)
                 else:
                     _restore(snapshot, path, mtime_ns=int(record.get("mtime_ns") or 0))
                     status = "restaure"
