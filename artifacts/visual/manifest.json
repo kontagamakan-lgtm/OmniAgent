@@ -1,0 +1,141 @@
+{
+  "captured_at": "2026-11-19T17:17:24+0000",
+  "machine": "DESKTOP-D7O1SEG",
+  "session": "Console",
+  "screen": [
+    1920,
+    1080
+  ],
+  "dpi_awareness": "per-monitor",
+  "capture_backend": "PIL.ImageGrab (Win32 GDI)",
+  "approval": {
+    "title": "Confirmation requise — fs_delete",
+    "window": [
+      760,
+      451,
+      1180,
+      707
+    ],
+    "geometry": [
+      420,
+      256
+    ],
+    "buttons": [
+      {
+        "label": "Oui",
+        "rect": [
+          819,
+          656,
+          923,
+          685
+        ],
+        "width": 104,
+        "height": 29
+      },
+      {
+        "label": "Non",
+        "rect": [
+          934,
+          656,
+          1038,
+          685
+        ],
+        "width": 104,
+        "height": 29
+      },
+      {
+        "label": "Annuler",
+        "rect": [
+          1046,
+          656,
+          1150,
+          685
+        ],
+        "width": 104,
+        "height": 29
+      }
+    ],
+    "ocr": "@ Confirmation requise — fs_delete\n\nSuppression definitive de C:\\tmp\\rapport.trt\n(1 fichier, 42 octet{s)).\n\nOui : autoriser une fois\nNon : autoriser pour la session\nAnnuler: refuser\n\n",
+    "pixels": {
+      "size": [
+        420,
+        256
+      ],
+      "stddev": 47.466,
+      "mean": 231.103,
+      "unique_colors": 5629,
+      "dark_fraction": 0.2272
+    },
+    "files": {
+      "crop": "artifacts/visual/approval_dialog.png"
+    }
+  },
+  "notification_path": {
+    "shortcut": "C:\\Users\\user\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\OmniAgent.lnk",
+    "target": "C:\\Python314\\pythonw.exe",
+    "arguments": "\"C:\\Users\\user\\Downloads\\Mon app K\\app.py\"",
+    "protocol": "\"C:\\Python314\\pythonw.exe\" --notify-action \"%1\"",
+    "aumid": "OmniAgent.Desktop",
+    "aumid_in_shortcut": true,
+    "window": [
+      711,
+      443,
+      1230,
+      716
+    ],
+    "geometry": [
+      519,
+      273
+    ],
+    "ocr": "@ OmniAgent — chemin des notifications x\n\nRaccourci:\nC\\Users\\user\\AppData\\Roaming\\Microsoft\\Windows\\start\nMenu\\Programs\\OmniAgent.ink\n\nCible : C:\\Python314\\pythonw.exe\n“CAUsers\\user\\Downloads\\Mon app K\\app.py”\n\nProtocole : °C:\\Python314\\pythonw.exe” —-notify-action \"961\"\nAUMID : OmniAgent.Desktop (True)\n\nOK\n\n",
+    "pixels": {
+      "size": [
+        519,
+        273
+      ],
+      "stddev": 48.18,
+      "mean": 230.603,
+      "unique_colors": 11709,
+      "dark_fraction": 0.1913
+    },
+    "files": {
+      "crop": "artifacts/visual/notification_path.png"
+    }
+  },
+  "toast": {
+    "title": "OmniAgent — vérification visuelle",
+    "message": "Les notifications fonctionnent.",
+    "region": [
+      1300,
+      760,
+      1920,
+      1040
+    ],
+    "crop": [
+      133,
+      103,
+      612,
+      266
+    ],
+    "geometry": [
+      479,
+      163
+    ],
+    "changed_pixels": 63064,
+    "ocr": "®_ OmniAgent\n\nOmniAgent — verification visuelle\nLes notifications fonctionnent.\n\n",
+    "words": [],
+    "pixels": {
+      "size": [
+        479,
+        163
+      ],
+      "stddev": 27.572,
+      "mean": 84.776,
+      "unique_colors": 1215,
+      "dark_fraction": 0.9828
+    },
+    "files": {
+      "crop": "artifacts/visual/toast.png"
+    }
+  }
+}

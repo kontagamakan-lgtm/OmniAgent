@@ -195,8 +195,9 @@ du processus, ce n'est pas un bac à sable système. `shell_run` est seulement
 durci : son répertoire reste confiné, il n'hérite pas des variables qui
 ressemblent à des secrets (ni de la clé du fournisseur), et son arbre de
 processus est tué au délai. Pour retirer réellement les droits, il faut un
-runtime séparé (conteneur, AppContainer ou machine virtuelle), hors du périmètre
-de ce module.
+runtime séparé (conteneur, AppContainer ou machine virtuelle) : c'est une
+décision ouverte qui demande de choisir l'image, les montages et le réseau. Ce
+n'est pas implémenté dans ce passage.
 
 ## Journal d'audit
 
@@ -232,6 +233,10 @@ Le raccourci porte l'AppUserModelID `OmniAgent.Desktop` ; les toasts de fin de
 session proposent « Ouvrir la trace » et « Arrêter ». Si Windows refuse la
 version avec boutons, une toast simple est affichée ; si PowerShell est
 indisponible, la session continue et l'échec est journalisé.
+
+La preuve visuelle de la toast et du chemin `.lnk`/protocole est versionnée :
+`artifacts/visual/toast.png`, `artifacts/visual/notification_path.png` et
+leurs entrées dans `artifacts/visual/manifest.json`.
 
 ## Répétition de restauration
 
@@ -289,6 +294,19 @@ python app.py --undo-run <run_id> --undo-apply
 
 L'interface expose **Annuler ce run** : elle affiche l'aperçu du journal et ne
 restaure qu'après confirmation.
+
+**Preuve visuelle Windows** (images versionnées) :
+
+- `artifacts/visual/approval_dialog.png` : boîte native réelle avec les trois
+  boutons, géométrie et OCR ;
+- `artifacts/visual/notification_path.png` : `.lnk` et commande du protocole
+  lus dans Windows ;
+- `artifacts/visual/toast.png` : toast réellement affichée.
+
+`artifacts/visual/manifest.json` contient les rectangles des boutons, les
+statistiques de pixels et les textes OCR ; `tests/test_visual_artifacts.py`
+vérifie ces artefacts. Régénération : `python tools/visual_check.py --capture`
+(Windows interactif uniquement).
 
 L'annulation rejoue les intentions à l'envers : elle restaure les octets
 d'origine, supprime ce que le run a créé et remet en place ce qu'il a déplacé.
