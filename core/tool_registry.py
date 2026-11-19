@@ -102,6 +102,17 @@ class ToolRegistry:
             self._failures[tool.name] = self._failures.get(tool.name, 0) + 1
         return result
 
+    def set_confirm(self, confirm: ConfirmHandler | None) -> ConfirmHandler | None:
+        """Remplace le confirmateur et retourne le précédent.
+
+        Le mode autonome refuse les outils dangereux pendant sa session, puis
+        restaure le confirmateur de l'interface : l'utilisateur ne doit pas
+        hériter d'un refus silencieux après l'arrêt.
+        """
+        previous = self._confirm
+        self._confirm = confirm
+        return previous
+
     def _authorize(self, tool: Tool, arguments: Mapping[str, Any]) -> bool:
         if self._confirm is None:
             logger.warning("outil dangereux %s refusé faute de confirmation", tool.name)

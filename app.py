@@ -4,6 +4,7 @@ Trois usages :
 
     python app.py                      # interface graphique
     python app.py --task "…"           # une tâche, en console, puis sortie
+    python app.py --autonomy           # session autonome bornée, puis sortie
     python app.py --check              # diagnostic d'installation
     python app.py --replay TRACE       # rejoue une trace, hors-ligne
 
@@ -55,6 +56,23 @@ def build_parser() -> argparse.ArgumentParser:
         "--task",
         metavar="TEXTE",
         help="exécute une tâche en console, sans interface, puis quitte",
+    )
+    parser.add_argument(
+        "--autonomy",
+        action="store_true",
+        help="session autonome en console, guidée par data/autonomy/goals.md, puis quitte",
+    )
+    parser.add_argument(
+        "--autonomy-cycles",
+        type=int,
+        metavar="N",
+        help="nombre de cycles de la session (défaut : autonomy.max_cycles)",
+    )
+    parser.add_argument(
+        "--autonomy-interval",
+        type=float,
+        metavar="MIN",
+        help="minutes entre deux cycles (défaut : autonomy.interval_minutes)",
     )
     parser.add_argument(
         "--config",
@@ -603,6 +621,68 @@ def _run_task(settings: Settings, args: argparse.Namespace) -> int:
         bundle.close()
 
 
+def _run_autonomy(settings: Settings, args: argparse.Namespace) -> int:
+    """Session autonome en console : objectifs dans goals.md, journal JSONL."""
+    from core.autonomy import AutonomySession, goals_path, journal_path, read_goals
+
+    goals = goals_path(settings)
+    if not read_goals(goals):
+        print(
+            f"Aucun objectif : renseignez {goals} avant de lancer l'autonomie.",
+            file=sys.stderr,
+        )
+        return 2
+
+    bundle = build_agent(settings, with_browser=not args.no_browser)
+    trace = None if getattr(args, "no_trace", False) else build_trace(settings)
+    unsubscribe_trace = (
+        bundle.agent.bus.subscribe(trace) if trace is not None else (lambda: None)
+    )
+    session = AutonomySession(settings, bundle.agent)
+    cycles = (
+        args.autonomy_cycles
+        if args.autonomy_cycles is not None
+        else settings.autonomy.max_cycles
+    )
+    interval = (
+        None if args.autonomy_interval is None else args.autonomy_interval * 60.0
+    )
+    failures = 0
+
+    def report(record: dict) -> None:
+        nonlocal failures
+        if record.get("type") == "no_goals":
+            print("Aucun objectif : session terminée.", file=sys.stderr)
+            return
+        status = "ok" if record.get("ok") else "echec"
+        reason = record.get("stop_reason") or "?"
+        print(
+            f"Cycle {record.get('cycle')} : {status} "
+            f"({reason}, {record.get('duration_s')} s, run {record.get('run_id') or '?'})"
+        )
+        excerpt = str(record.get("excerpt") or "")
+        if excerpt:
+            print(f"  {excerpt[:300]}")
+        if record.get("error"):
+            print(f"  erreur : {record['error']}", file=sys.stderr)
+        if not record.get("ok"):
+            failures += 1
+
+    try:
+        session.run(cycles=cycles, interval_s=interval, on_cycle=report)
+    except KeyboardInterrupt:
+        session.request_stop()
+        print("Session autonome interrompue.", file=sys.stderr)
+        return 130
+    finally:
+        unsubscribe_trace()
+        if trace is not None:
+            trace.close()
+        bundle.close()
+    print(f"Journal : {journal_path(settings)}")
+    return 1 if failures else 0
+
+
 def _run_gui(settings: Settings) -> int:
     from ui.app_gui import available, run_gui
 
@@ -656,6 +736,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     config.configure_logging(settings, redact, filters=(RunIdFilter(),))
+    if args.autonomy:
+        return _run_autonomy(settings, args)
     if args.task is not None:
         return _run_task(settings, args)
     return _run_gui(settings)

@@ -9,6 +9,8 @@ l'agent ne vit ici — la fenêtre ne fait qu'afficher les événements du
 from __future__ import annotations
 
 import logging
+import queue
+import threading
 import time
 from typing import Any
 
@@ -77,6 +79,11 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
     class OmniAgentWindow(ctk.CTk):  # type: ignore[misc, name-defined]
         """Fenêtre principale : conversation, journal d'outils, statut."""
 
+        #: Défaut de classe : les tests qui construisent la fenêtre sans Tk
+        #: (`object.__new__`) n'ont pas cette file, et `getattr` sur un objet Tk
+        #: sans attribut déclenche sa recherche dynamique récursive.
+        _autonomy_messages: queue.Queue[str] | None = None
+
         def __init__(self, settings: Settings, bundle: AgentBundle) -> None:
             ctk.set_appearance_mode(settings.ui.appearance)
             ctk.set_default_color_theme("blue")
@@ -89,6 +96,11 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             self._step = 0
             self._reported = False
             self._streaming = False
+            # Session autonome : le thread de travail n'écrit jamais dans Tk, il
+            # dépose ses nouvelles dans cette file, vidée par `_pump`.
+            self._autonomy_thread: threading.Thread | None = None
+            self._autonomy_session: Any = None
+            self._autonomy_messages: queue.Queue[str] = queue.Queue()
             # Fragments en attente, par étape : un tour qui appelle un outil ne
             # s'affiche pas, seul le tour qui conclut est libéré (règle identique
             # à `_ConsoleStream` en mode `--task`).
@@ -152,6 +164,10 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             ctk.CTkButton(
                 actions, text="Traces", width=110, command=self._open_traces
             ).pack(fill="x", pady=(6, 0))
+            self.autonomy_button = ctk.CTkButton(
+                actions, text="Autonomie", width=110, command=self._toggle_autonomy
+            )
+            self.autonomy_button.pack(fill="x", pady=(6, 0))
             # Trace sur disque : l'utilisateur doit pouvoir refuser qu'une
             # session laisse la tâche et les réponses en clair sur la machine.
             self.trace_switch = ctk.CTkSwitch(
@@ -237,6 +253,9 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 self._set_status("assistant fermé sans modification")
 
         def _send(self) -> None:
+            if self._autonomy_thread is not None and self._autonomy_thread.is_alive():
+                self._set_status("session autonome en cours : arrêtez-la d'abord")
+                return
             task = self.prompt.get("1.0", "end").strip()
             if not task:
                 return
@@ -265,6 +284,72 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 if enabled
                 else "trace désactivée : rien n'est écrit sur disque"
             )
+
+        def _toggle_autonomy(self) -> None:
+            """Démarre ou arrête une session autonome, sans quitter l'interface."""
+            thread = self._autonomy_thread
+            if thread is not None and thread.is_alive():
+                session = self._autonomy_session
+                if session is not None:
+                    session.request_stop()
+                self._set_status("autonomie : arrêt demandé")
+                return
+
+            from core.autonomy import AutonomySession, goals_path, read_goals
+
+            goals = goals_path(self.settings)
+            if not read_goals(goals):
+                self._append(
+                    "système",
+                    f"autonomie : renseignez {goals} avant de lancer une session",
+                )
+                return
+            if self.controller.busy:
+                self._set_status("une tâche est déjà en cours")
+                return
+
+            session = AutonomySession(self.settings, self.controller.agent)
+            self._autonomy_session = session
+            self.autonomy_button.configure(text="Arrêter")
+            self._append(
+                "système",
+                f"autonomie : {self.settings.autonomy.max_cycles} cycle(s), "
+                f"toutes les {self.settings.autonomy.interval_minutes:g} min",
+            )
+            self._set_status("autonomie en cours…")
+            self._autonomy_thread = threading.Thread(
+                target=self._autonomy_loop,
+                args=(session,),
+                name="omniagent-autonomy",
+                daemon=True,
+            )
+            self._autonomy_thread.start()
+
+        def _autonomy_loop(self, session: Any) -> None:
+            """Thread de la session : ne touche jamais aux widgets directement."""
+
+            def report(record: dict) -> None:
+                if record.get("type") == "no_goals":
+                    message = "autonomie : aucun objectif, session terminée"
+                else:
+                    status = (
+                        "ok"
+                        if record.get("ok")
+                        else f"échec ({record.get('stop_reason') or '?'})"
+                    )
+                    message = f"autonomie, cycle {record.get('cycle')} : {status}"
+                    excerpt = str(record.get("excerpt") or "")
+                    if excerpt:
+                        message += f" — {excerpt[:200]}"
+                self._autonomy_messages.put(message)
+
+            try:
+                session.run(on_cycle=report)
+            except Exception as exc:  # noqa: BLE001 - l'interface doit rester vivante
+                logger.exception("session autonome interrompue")
+                self._autonomy_messages.put(f"autonomie interrompue : {exc}")
+            finally:
+                self._autonomy_messages.put("__autonomy_done__")
 
         def _open_traces(self) -> None:
             """Liste les exécutions enregistrées et en relit une à la demande."""
@@ -356,6 +441,20 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
         def _pump(self) -> None:
             for event in self.controller.drain():
                 self._render(event)
+
+            # Après les événements : « terminée » ne doit pas être écrasé par le
+            # dernier « étape n/… » émis juste avant la fin de la session.
+            messages = getattr(self, "_autonomy_messages", None)
+            while messages is not None:
+                try:
+                    message = messages.get_nowait()
+                except queue.Empty:
+                    break
+                if message == "__autonomy_done__":
+                    self.autonomy_button.configure(text="Autonomie")
+                    self._set_status("autonomie terminée")
+                else:
+                    self._append("système", message)
 
             reply = self.controller.reply
             if reply is not None and not self.controller.busy and not self._reported:
@@ -457,6 +556,8 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
 
         def _on_close(self) -> None:
             try:
+                if self._autonomy_session is not None:
+                    self._autonomy_session.request_stop()
                 if self.controller.busy:
                     self.controller.cancel()
                 self.controller.close()

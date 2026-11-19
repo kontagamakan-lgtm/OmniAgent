@@ -460,6 +460,22 @@ class TraceConfig:
 
 
 @dataclass(slots=True)
+class AutonomyConfig:
+    """Mode autonome à la demande : objectifs, cadence et bornes.
+
+    Désactivé par défaut au sens où rien ne tourne sans un lancement explicite
+    (bouton ou `--autonomy`). L'agent ne fait rien tant que `goals.md` est vide.
+    """
+
+    #: Fichier d'objectifs relu à chaque cycle ; vide = `data/autonomy/goals.md`.
+    goals_file: str = ""
+    #: Cycles par session (un cycle = une tâche choisie puis exécutée).
+    max_cycles: int = 3
+    #: Attente entre deux cycles ; 0 enchaîne sans pause (tests, une tâche).
+    interval_minutes: float = 30.0
+
+
+@dataclass(slots=True)
 class LoggingConfig:
     """Journalisation et masquage des secrets."""
 
@@ -494,6 +510,7 @@ class Settings:
     ui: UIConfig = field(default_factory=UIConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     trace: TraceConfig = field(default_factory=TraceConfig)
+    autonomy: AutonomyConfig = field(default_factory=AutonomyConfig)
 
     # -- persistance --------------------------------------------------------
 
@@ -636,6 +653,11 @@ class Settings:
                 "encrypt": self.trace.encrypt,
                 "per_workspace": self.trace.per_workspace,
                 "trace_format": TRACE_FORMAT_VERSION,
+            },
+            "autonomy": {
+                "max_cycles": self.autonomy.max_cycles,
+                "interval_minutes": self.autonomy.interval_minutes,
+                "goals_file": self.autonomy.goals_file,
             },
             "agent": {
                 "action_first": self.agent.action_first,
@@ -840,6 +862,16 @@ class Settings:
                 "trace.key_env",
                 f"variable {trace.key_env} absente : les traces seront désactivées "
                 "(aucun repli en clair)",
+            )
+
+        # --- Autonomie
+        autonomy = self.autonomy
+        if not (1 <= autonomy.max_cycles <= 100):
+            err("autonomy.max_cycles", "doit être comprise entre 1 et 100")
+        if not (0.0 <= autonomy.interval_minutes <= 1440.0):
+            err(
+                "autonomy.interval_minutes",
+                "doit être comprise entre 0 et 1440 minutes (0 = enchaîner)",
             )
 
         return issues
