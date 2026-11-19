@@ -12,6 +12,12 @@ l'état réellement relu, pas d'un simple souvenir de trace. Par défaut, rien
 n'est exécuté : `--resume` affiche le plan ; `--resume --resume-apply` rejoue
 les lectures puis lance l'agent.
 
+**Dérive des lectures** : la trace enregistre une empreinte légère des fichiers
+lus (taille et SHA-256 des premiers 64 Kio, `core.fingerprint`). Au rejeu,
+l'empreinte est recalculée et comparée : le modèle apprend si le contenu est
+identique, modifié ou disparu depuis la trace, et ne se fie qu'à l'observation
+fraîche. Sans empreinte (trace antérieure), aucune conclusion n'est tirée.
+
 Les appels d'outils sont classés :
 
 * lecture seule (`fs_read_text`, `fs_list`, `web_search`, ...) : rejoués ;
@@ -29,6 +35,7 @@ from pathlib import Path
 from typing import Any
 
 from config import APP_ID
+from core.fingerprint import MISSING, MODIFIED, compare_fingerprint, drift_label
 from core.replay import ReplayRun, replay
 from core.tool_registry import ToolRegistry
 
@@ -85,6 +92,8 @@ class ResumeCall:
     tool: str
     arguments: dict[str, Any] = field(default_factory=dict)
     ok: bool = True
+    #: Empreinte légère du fichier lu, enregistrée dans la trace.
+    fingerprint: dict[str, Any] | None = None
 
 
 @dataclass(slots=True)
@@ -96,6 +105,12 @@ class ReplayObservation:
     ok: bool = False
     text: str = ""
     refused: str = ""
+    #: Dérive depuis la trace : `identical`, `modified`, `missing`, ou vide.
+    drift: str = ""
+
+    @property
+    def drift_label(self) -> str:
+        return drift_label(self.drift)
 
 
 @dataclass(slots=True)
@@ -153,12 +168,14 @@ def build_plan(path: Path | str, *, key: bytes | None = None) -> ResumePlan:
             line = f"etape {step.index} : {name}"
             plan.completed.append(line)
             arguments = call.get("arguments")
+            fingerprint = call.get("fingerprint")
             plan.calls.append(
                 ResumeCall(
                     step=step.index,
                     tool=name,
                     arguments=dict(arguments) if isinstance(arguments, dict) else {},
                     ok=bool(call.get("ok", True)),
+                    fingerprint=dict(fingerprint) if isinstance(fingerprint, dict) else None,
                 )
             )
             if name not in READ_ONLY_TOOLS:
@@ -199,6 +216,9 @@ def replay_read_only(plan: ResumePlan, registry: ToolRegistry) -> ResumeReplay:
                 )
             )
             continue
+        # Comparaison faite avant l'exécution : le fichier peut disparaître
+        # pendant la lecture, mais l'écart signalé reste celui observé au rejeu.
+        drift, _current = compare_fingerprint(call.fingerprint)
         result = registry.dispatch(call.tool, call.arguments)
         outcome.observations.append(
             ReplayObservation(
@@ -206,6 +226,7 @@ def replay_read_only(plan: ResumePlan, registry: ToolRegistry) -> ResumeReplay:
                 tool=call.tool,
                 ok=result.ok,
                 text=registry.observation(result),
+                drift=drift,
             )
         )
     return outcome
@@ -234,9 +255,22 @@ def resume_prompt(
         )
         for item in replay.executed[:20]:
             status = "ok" if item.ok else "echec"
+            drift = f", {item.drift_label}" if item.drift_label else ""
             lines.append(
-                f"- etape {item.step} : {item.tool} ({status}) : "
+                f"- etape {item.step} : {item.tool} ({status}{drift}) : "
                 f"{_one_line(item.text, 1200)}"
+            )
+        changed = [
+            item for item in replay.executed if item.drift in {MODIFIED, MISSING}
+        ]
+        if changed:
+            lines.append(
+                "Derive depuis la trace : ces lectures n'ont plus le contenu "
+                "d'origine ; utilise uniquement l'observation fraiche ci-dessus."
+            )
+            lines.extend(
+                f"- etape {item.step} : {item.tool} ({item.drift_label})"
+                for item in changed[:20]
             )
     if replay is not None and replay.refused:
         lines.append(

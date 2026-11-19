@@ -114,6 +114,16 @@ python app.py --resume data\logs\runs\<run>.jsonl
 python app.py --resume ... --resume-apply
 ```
 
+**Dérive des lectures.** Pour `fs_read_text`, `fs_hash` et `ocr_image`, la
+trace enregistre une empreinte légère du fichier : taille et SHA-256 des
+premiers 64 Kio. À la reprise, l'empreinte est recalculée et comparée ; le
+modèle reçoit `contenu identique a la lecture d'origine`, `contenu modifie
+depuis la trace` ou `fichier disparu depuis la trace`, avec la consigne de ne
+se fier qu'à l'observation fraîche. Une trace antérieure sans empreinte ne
+produit aucune conclusion. Une réécriture à taille constante au-delà des
+64 Kio peut échapper à l'empreinte : elle signale une dérive probable, elle ne
+prouve pas l'identité du contenu.
+
 L'aperçu classe les appels déjà faits. Avec `--resume-apply`, les appels de
 lecture seule (`fs_read_text`, `fs_list`, `web_search`, etc.) sont réellement
 rejoués avant le premier appel au modèle, et leurs observations fraîches sont

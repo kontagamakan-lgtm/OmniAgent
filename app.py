@@ -1007,7 +1007,8 @@ def _resume(
             f"{len(replayed.refused)} refuse(s)."
         )
         for item in replayed.executed:
-            print(f"  {'ok' if item.ok else 'echec'} {item.tool} (etape {item.step})")
+            drift = f" [{item.drift_label}]" if item.drift_label else ""
+            print(f"  {'ok' if item.ok else 'echec'} {item.tool} (etape {item.step}){drift}")
         for item in replayed.refused:
             print(f"  refuse {item.tool} : {item.refused}")
         reply = bundle.agent.run(resume_prompt(plan, replay=replayed))

@@ -215,6 +215,7 @@ def replay(
                     "tool": str(payload.get("tool") or ""),
                     "sensitive": bool(payload.get("sensitive")),
                     "arguments": payload.get("arguments") or {},
+                    "fingerprint": payload.get("fingerprint"),
                     "ok": True,
                     "error_code": "",
                     "duration_ms": 0.0,

@@ -48,7 +48,7 @@ pas leur contenu, et la clé d'API n'y figure jamais.
 | `llm_retry` | `attempt`, `delay_s`, `error` |
 | `stream_chunk` | `step`, `text` (jamais en mode métadonnées) |
 | `context_trimmed` | `dropped`, `kept`, `tokens_before`, `tokens_after` |
-| `tool_started` / `tool_finished` | `step`, `tool`, `arguments` / `ok`, `error_code`, `duration_ms` |
+| `tool_started` / `tool_finished` | `step`, `tool`, `arguments`, `fingerprint` (fichiers lus : `path`, `size`, `head_bytes`, `head_sha256`) / `ok`, `error_code`, `duration_ms` |
 | `thought` | `step`, `text` |
 | `final` | `text` |
 | `error` | `code`, `message` |

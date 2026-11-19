@@ -43,6 +43,7 @@ from core.errors import (
     retry_delay,
 )
 from core.events import EventBus, EventType
+from core.fingerprint import read_fingerprint
 from core.llm_client import LLMClient, LLMResponse
 from core.observability import reset_run_id, set_run_id
 from core.prompts import budget_notice, finalization_prompt, recovery_notice, system_prompt
@@ -585,18 +586,22 @@ class AgentCore:
         """Exécute un appel d'outil, publie le résultat et retourne son observation."""
         tool = self.registry.get(call.name)
         sensitive = bool(getattr(tool, "sensitive", False))
-        self._emit(
-            EventType.TOOL_STARTED,
-            {
-                "step": step_index,
-                "tool": call.name,
-                "sensitive": sensitive,
-                # Un outil sensible ne publie aucun argument : le masquage par
-                # nom de champ ne couvre pas une valeur libre passée sous une
-                # clé au nom neutre, et la trace est un fichier durable.
-                "arguments": {} if sensitive else _safe_arguments(call.arguments),
-            },
-        )
+        payload: dict[str, Any] = {
+            "step": step_index,
+            "tool": call.name,
+            "sensitive": sensitive,
+            # Un outil sensible ne publie aucun argument : le masquage par
+            # nom de champ ne couvre pas une valeur libre passée sous une
+            # clé au nom neutre, et la trace est un fichier durable.
+            "arguments": {} if sensitive else _safe_arguments(call.arguments),
+        }
+        if not sensitive:
+            # Empreinte legere des fichiers lus : elle permet a la reprise de
+            # dire au modele si le contenu a change depuis la trace.
+            fingerprint = read_fingerprint(call.name, call.arguments)
+            if fingerprint is not None:
+                payload["fingerprint"] = fingerprint
+        self._emit(EventType.TOOL_STARTED, payload)
         result: ToolResult = self.registry.dispatch(call.name, call.arguments)
         record = StepCall(
             name=call.name,
