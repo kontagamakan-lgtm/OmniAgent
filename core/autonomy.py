@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 import time
 from datetime import datetime, timezone
@@ -110,10 +111,23 @@ def format_history(records: list[dict[str, Any]], limit: int = HISTORY_CYCLES) -
 
 
 class AutonomyJournal:
-    """Journal JSONL append-only des cycles autonomes."""
+    """Journal JSONL des cycles autonomes, borné aux derniers cycles.
 
-    def __init__(self, path: Path | str) -> None:
+    Deux bornes, cohérentes avec la cadence du mode autonome : un nombre
+    d'entrées et une taille. Sans elles, une session régulière ferait grossir
+    `journal.jsonl` sans fin, comme `runs.index` avant sa compaction.
+    """
+
+    def __init__(
+        self,
+        path: Path | str,
+        *,
+        max_entries: int = 200,
+        max_bytes: int = 256 * 1024,
+    ) -> None:
         self.path = Path(path)
+        self.max_entries = max(1, int(max_entries))
+        self.max_bytes = max(1, int(max_bytes))
 
     def append(self, record: dict[str, Any]) -> bool:
         """Écrit une ligne ; un journal inaccessible ne casse pas la session."""
@@ -124,6 +138,41 @@ class AutonomyJournal:
                 handle.write(json.dumps(body, ensure_ascii=False, default=str) + "\n")
         except OSError:
             logger.debug("journal d'autonomie non écrit", exc_info=True)
+            return False
+        self.prune()
+        return True
+
+    def prune(self) -> bool:
+        """Réécrit le journal avec les derniers cycles, sous les deux bornes.
+
+        La dernière entrée est toujours conservée, même si elle dépasse à elle
+        seule la taille maximale : mieux vaut un journal trop gros qu'un cycle
+        dont il ne reste aucune trace. Retourne vrai si le fichier a été réécrit.
+        """
+        try:
+            raw = self.path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return False
+        lines = [line for line in raw.splitlines() if line.strip()]
+        if len(lines) <= self.max_entries and len(raw.encode("utf-8")) <= self.max_bytes:
+            return False
+        kept = lines[-self.max_entries :]
+        total = sum(len(line.encode("utf-8")) + 1 for line in kept)
+        while len(kept) > 1 and total > self.max_bytes:
+            total -= len(kept[0].encode("utf-8")) + 1
+            kept.pop(0)
+        temp = self.path.with_name(self.path.name + ".tmp")
+        try:
+            with temp.open("w", encoding="utf-8") as handle:
+                for line in kept:
+                    handle.write(line + "\n")
+            os.replace(temp, self.path)
+        except OSError:
+            logger.debug("compaction du journal impossible", exc_info=True)
+            try:
+                temp.unlink(missing_ok=True)
+            except OSError:
+                pass
             return False
         return True
 
@@ -156,7 +205,11 @@ class AutonomySession:
     ) -> None:
         self.settings = settings
         self.agent = agent
-        self.journal = journal or AutonomyJournal(journal_path(settings))
+        self.journal = journal or AutonomyJournal(
+            journal_path(settings),
+            max_entries=settings.autonomy.journal_max_entries,
+            max_bytes=settings.autonomy.journal_max_bytes,
+        )
         self.stop = threading.Event()
 
     def request_stop(self) -> None:

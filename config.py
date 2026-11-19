@@ -473,6 +473,10 @@ class AutonomyConfig:
     max_cycles: int = 3
     #: Attente entre deux cycles ; 0 enchaîne sans pause (tests, une tâche).
     interval_minutes: float = 30.0
+    #: Entrées conservées dans `journal.jsonl` (les plus récentes).
+    journal_max_entries: int = 200
+    #: Taille maximale du journal ; dépassée, les plus vieux cycles partent.
+    journal_max_bytes: int = 256 * 1024
 
 
 @dataclass(slots=True)
@@ -658,6 +662,8 @@ class Settings:
                 "max_cycles": self.autonomy.max_cycles,
                 "interval_minutes": self.autonomy.interval_minutes,
                 "goals_file": self.autonomy.goals_file,
+                "journal_max_entries": self.autonomy.journal_max_entries,
+                "journal_max_bytes": self.autonomy.journal_max_bytes,
             },
             "agent": {
                 "action_first": self.agent.action_first,
@@ -873,6 +879,10 @@ class Settings:
                 "autonomy.interval_minutes",
                 "doit être comprise entre 0 et 1440 minutes (0 = enchaîner)",
             )
+        if not (1 <= autonomy.journal_max_entries <= 10000):
+            err("autonomy.journal_max_entries", "doit être comprise entre 1 et 10000")
+        if autonomy.journal_max_bytes < 1024:
+            err("autonomy.journal_max_bytes", "doit être >= 1024 octets")
 
         return issues
 

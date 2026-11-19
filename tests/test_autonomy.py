@@ -185,6 +185,55 @@ def test_goals_can_come_from_a_configured_file() -> None:
         assert "vérifier la documentation" in agent.tasks[0]
 
 
+def test_the_journal_keeps_only_the_latest_entries() -> None:
+    with tmpdir("journal-borne") as tmp:
+        path = Path(tmp) / "journal.jsonl"
+        journal = AutonomyJournal(path, max_entries=3)
+
+        for number in range(1, 7):
+            journal.append({"type": "cycle_finished", "cycle": number, "ok": True})
+
+        lines = path.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 3, f"journal non borné : {len(lines)} entrées"
+        assert [json.loads(line)["cycle"] for line in lines] == [4, 5, 6]
+
+
+def test_the_journal_is_bounded_by_size_but_keeps_the_last_cycle() -> None:
+    with tmpdir("journal-taille") as tmp:
+        path = Path(tmp) / "journal.jsonl"
+        journal = AutonomyJournal(path, max_entries=100, max_bytes=600)
+
+        for number in range(10):
+            journal.append(
+                {
+                    "type": "cycle_finished",
+                    "cycle": number,
+                    "ok": True,
+                    "excerpt": "x" * 120,
+                }
+            )
+
+        lines = path.read_text(encoding="utf-8").splitlines()
+        assert path.stat().st_size <= 600, f"journal de {path.stat().st_size} octets"
+        assert lines, "le dernier cycle doit toujours rester"
+        assert json.loads(lines[-1])["cycle"] == 9
+
+
+def test_a_session_journal_respects_the_configured_bound() -> None:
+    with tmpdir("journal-session") as tmp:
+        settings = make_settings(tmp)
+        settings.autonomy.journal_max_entries = 4
+        _write_goals(settings)
+        agent = _Agent([_Reply() for _ in range(4)])
+
+        AutonomySession(settings, agent).run(cycles=4, interval_s=0)
+
+        records = _journal_records(settings)
+        assert len(records) == 4, f"journal non borné : {len(records)} entrées"
+        assert records[-1]["type"] == "cycle_finished"
+        assert records[-1]["cycle"] == 4
+
+
 def test_the_journal_tolerates_a_missing_directory() -> None:
     with tmpdir("autonomie-journal") as tmp:
         journal = AutonomyJournal(Path(tmp) / "absent" / "journal.jsonl")
@@ -199,7 +248,14 @@ def test_autonomy_limits_are_validated() -> None:
     settings = make_settings(Path("."))
     settings.autonomy.max_cycles = 0
     settings.autonomy.interval_minutes = -5
+    settings.autonomy.journal_max_entries = 0
+    settings.autonomy.journal_max_bytes = 10
 
     errors = {issue.field for issue in settings.validate() if issue.level == "error"}
 
-    assert {"autonomy.max_cycles", "autonomy.interval_minutes"} <= errors
+    assert {
+        "autonomy.max_cycles",
+        "autonomy.interval_minutes",
+        "autonomy.journal_max_entries",
+        "autonomy.journal_max_bytes",
+    } <= errors
