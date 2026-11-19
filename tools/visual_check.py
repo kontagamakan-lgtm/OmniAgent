@@ -27,7 +27,7 @@ from ctypes import wintypes
 from pathlib import Path
 from typing import Any
 
-from PIL import Image, ImageChops, ImageGrab, ImageStat
+from PIL import Image, ImageChops, ImageGrab, ImageStat, ImageOps
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
@@ -138,18 +138,43 @@ def _pixel_stats(image: Image.Image) -> dict[str, Any]:
     }
 
 
-def _ocr(image: Image.Image) -> tuple[str, list[dict[str, Any]]]:
+def _ocr(
+    image: Image.Image, *, sparse: bool = False
+) -> tuple[str, list[dict[str, Any]]]:
     import tesserocr
 
     data = ROOT / "assets" / "tessdata"
     if not (data / "eng.traineddata").is_file():
         raise RuntimeError(f"donnees OCR absentes : {data}")
+    prepared = ImageOps.grayscale(image) if sparse else image
     with tesserocr.PyTessBaseAPI(path=str(data), lang="eng") as api:
-        api.SetImage(image)
+        if sparse:
+            api.SetPageSegMode(tesserocr.PSM.SPARSE_TEXT)
+        api.SetImage(prepared)
         text = api.GetUTF8Text()
     # `GetWords()` de cette version renvoie des couples (image, boîte), sans
     # texte : le libellé global suffit pour les assertions et le manifeste.
     return text, []
+
+
+def _virtual_screen() -> tuple[Image.Image, tuple[int, int]]:
+    """Capture virtuelle et origine Win32, y compris un moniteur à gauche."""
+    image = ImageGrab.grab(all_screens=True)
+    origin = (
+        int(ctypes.windll.user32.GetSystemMetrics(76)),  # SM_XVIRTUALSCREEN
+        int(ctypes.windll.user32.GetSystemMetrics(77)),  # SM_YVIRTUALSCREEN
+    )
+    return image, origin
+
+
+def _crop_virtual(
+    image: Image.Image, origin: tuple[int, int], area: tuple[int, int, int, int]
+) -> Image.Image:
+    """Découpe des coordonnées écran dans une capture virtuelle."""
+    left, top, right, bottom = area
+    return image.crop(
+        (left - origin[0], top - origin[1], right - origin[0], bottom - origin[1])
+    )
 
 
 def _capture_region(
@@ -157,13 +182,15 @@ def _capture_region(
 ) -> tuple[Image.Image, dict[str, Any]]:
     # Seule la fenêtre est conservée : une capture plein écran contiendrait le
     # bureau et des documents sans rapport avec la preuve visuelle.
-    screen = ImageGrab.grab()
+    screen, origin = _virtual_screen()
     left, top, right, bottom = area
-    left, top = max(0, left), max(0, top)
-    right, bottom = min(screen.width, right), min(screen.height, bottom)
+    left = max(origin[0], left)
+    top = max(origin[1], top)
+    right = min(origin[0] + screen.width, right)
+    bottom = min(origin[1] + screen.height, bottom)
     if right - left < 50 or bottom - top < 50:
         raise RuntimeError(f"zone de capture invalide : {(left, top, right, bottom)}")
-    crop = screen.crop((left, top, right, bottom))
+    crop = _crop_virtual(screen, origin, (left, top, right, bottom))
     crop.save(path)
     return crop, _pixel_stats(crop)
 
@@ -176,6 +203,26 @@ def _capture_window(
     if stats["stddev"] < 2.0 or stats["unique_colors"] < 8:
         raise RuntimeError(f"capture quasi vide : {stats}")
     return crop, area, stats
+
+
+def _button_piece(
+    frame: Image.Image, area: tuple[int, int, int, int], button: dict[str, Any]
+) -> Image.Image:
+    """Découpe un bouton dans la fenêtre capturée, jamais dans un écran ancien.
+
+    Le contrôle visuel analysait auparavant la capture du bureau prise avant
+    l'ouverture de la boîte : tous les boutons paraissaient vides. Ce helper
+    isole la géométrie relative et sert de point de régression testable.
+    """
+    left, top, right, bottom = button["rect"]
+    return frame.crop(
+        (
+            left - area[0] + 2,
+            top - area[1] + 2,
+            right - area[0] - 2,
+            bottom - area[1] - 2,
+        )
+    ).convert("L")
 
 
 def _dialog_child() -> int:
@@ -294,7 +341,7 @@ def capture() -> dict[str, Any]:
         raise RuntimeError("capture visuelle : Windows uniquement")
     ARTIFACTS.mkdir(parents=True, exist_ok=True)
     awareness = _enable_dpi_awareness()
-    screen = ImageGrab.grab()
+    screen, _origin = _virtual_screen()
     if screen.width < 800 or screen.height < 600:
         raise RuntimeError(f"ecran trop petit pour une capture utile : {screen.size}")
 
@@ -323,16 +370,7 @@ def capture() -> dict[str, Any]:
             left, top, right, bottom = button["rect"]
             if not (area[0] <= left < right <= area[2] and area[1] <= top < bottom <= area[3]):
                 raise RuntimeError(f"bouton hors de la fenetre : {button}")
-            # `screen` a ete pris avant l'ouverture de la boite : analyser la
-            # fenetre deja capturee, sinon on mesure le bureau a cet endroit.
-            piece = frame.crop(
-                (
-                    left - area[0] + 2,
-                    top - area[1] + 2,
-                    right - area[0] - 2,
-                    bottom - area[1] - 2,
-                )
-            ).convert("L")
+            piece = _button_piece(frame, area, button)
             if ImageStat.Stat(piece).stddev[0] < 1.0:
                 raise RuntimeError(f"bouton visuellement vide : {button}")
         text, _words = _ocr(frame)
@@ -340,7 +378,7 @@ def capture() -> dict[str, Any]:
         # est nécessaire pour « Refuser », dont le focus n'est pas lisible par
         # GetWindowTextW. La bande est aussi conservée dans le manifeste.
         button_band = frame.crop((0, max(0, height - 80), width, height))
-        button_text, _button_words = _ocr(button_band)
+        button_text, _button_words = _ocr(button_band, sparse=True)
         normalized_text = _normalize(text + "\n" + button_text)
         if not all(_normalize(label) in normalized_text for label in expected_labels):
             raise RuntimeError(f"OCR sans les trois boutons : {text!r} / {button_text!r}")
@@ -397,11 +435,14 @@ def capture() -> dict[str, Any]:
     # --- Toast réelle ----------------------------------------------------
     from core.notify import notify_windows
 
-    right = screen.width
-    bottom = screen.height
+    # Un message identique peut être coalescé avec une toast déjà dans le
+    # centre de notifications : un suffixe horaire force un nouvel affichage.
+    toast_message = f"{TOAST_MESSAGE} ({time.strftime('%H:%M:%S')})"
+    right = int(ctypes.windll.user32.GetSystemMetrics(0))  # SM_CXSCREEN
+    bottom = int(ctypes.windll.user32.GetSystemMetrics(1))  # SM_CYSCREEN
     region = (max(0, right - 620), max(0, bottom - 320), right, bottom - 40)
     before = ImageGrab.grab(bbox=region)
-    if not notify_windows(TOAST_TITLE, TOAST_MESSAGE, timeout_s=20.0):
+    if not notify_windows(TOAST_TITLE, toast_message, timeout_s=20.0):
         raise RuntimeError("Windows a refuse la toast (notify_windows a retourne False)")
     time.sleep(0.9)
     after = ImageGrab.grab(bbox=region)
@@ -428,7 +469,7 @@ def capture() -> dict[str, Any]:
     crop.save(ARTIFACTS / "toast.png")
     toast = {
         "title": TOAST_TITLE,
-        "message": TOAST_MESSAGE,
+        "message": toast_message,
         "region": list(region),
         "crop": [left, top, right, bottom],
         "geometry": [crop.width, crop.height],

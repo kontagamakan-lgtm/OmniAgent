@@ -25,25 +25,30 @@ indiquées.
   une réécriture des entrées déjà copiées, mais ne protège pas si la
   destination est compromise ; ce n'est ni une signature ni une restauration
   du contenu des traces. Procédure complète : « Journal d'audit ».
-- **Notifications Windows (#8) — raccourci, protocole et toast vérifiés sous
-  Windows.** Vérifié le 2026-11-19 : le raccourci
+- **Notifications Windows (#8) — raccourci, protocole et boutons vérifiés
+  sous Windows.** Vérifié le 2026-11-19 : `--notify-install` a été exécuté deux
+  fois (deux succès), le raccourci
   `%APPDATA%\Microsoft\Windows\Start Menu\Programs\OmniAgent.lnk` pointe vers
-  `pythonw.exe` avec `app.py`, l'AUMID `OmniAgent.Desktop` est présent, la clé
-  `HKCU:\Software\Classes\omniagent\shell\open\command` appelle
-  `--notify-action "%1"`, et une toast réelle a été affichée et capturée. Les
-  boutons d'action de la toast (`Ouvrir la trace`, `Arrêter`) et le lancement
-  depuis le menu Démarrer restent à vérifier manuellement ; `--notify-install`
-  n'a pas été rejoué dans cette passe.
-- **Approbation (#6) — dialogue explicite, cliqué visuellement sous Windows.**
-  Les trois choix sont désormais `Autoriser une fois`, `Autoriser pour la
-  session` et `Refuser` ; `Refuser` est le bouton par défaut, et fermer la
-  fenêtre (ou Échap) refuse. Vérifié le 2026-11-19 : les trois clics et la
-  fermeture ont été testés sur la boîte réelle, avec les décisions
-  `once`/`session`/`deny`. La capture `artifacts/visual/approval_dialog.png`
-  montre les trois libellés. Reste à rejouer le parcours complet dans
-  l'application (suppression d'un fichier jetable et contrôle de
-  `data/approvals.jsonl`) ; le harnais de vérification ne dispatche pas
-  l'outil lui-même.
+  `pythonw.exe` avec `app.py`, l'AUMID `OmniAgent.Desktop` est présent, et la
+  clé `HKCU:\Software\Classes\omniagent\shell\open\command` lance désormais
+  `pythonw.exe "…\app.py" --notify-action "%1"` (le script manquait avant
+  correction). Le raccourci a été lancé depuis le menu Démarrer et a créé un
+  `pythonw.exe`, arrêté après le contrôle. Une toast réelle avec les boutons
+  `Ouvrir la trace` et `Arrêter` a été affichée ; un clic réel sur `Arrêter` a
+  écrit `data/autonomy/STOP`, supprimé après l'essai. Le bouton `Ouvrir la
+  trace` n'a pas été cliqué physiquement, mais son chemin est couvert par
+  `app._notify_action` et les tests de protocole.
+- **Approbation (#6) — dialogue explicite et parcours réel testés.** Les trois
+  choix sont `Autoriser une fois`, `Autoriser pour la session` et `Refuser` ;
+  `Refuser` est le bouton par défaut, et fermer la fenêtre (ou Échap) refuse.
+  Vérifié le 2026-11-19 : les trois clics et la fermeture ont été testés sur la
+  boîte réelle (`once`/`session`/`deny`). Les tests
+  `tests/test_approval.py::test_real_fs_delete_is_denied_then_authorized_once`
+  et `::test_real_session_approval_reuses_the_grant_for_a_second_delete`
+  utilisent le vrai `FileManager`, suppriment des fichiers jetables et vérifient
+  `data/approvals.jsonl` ; ils ne passent pas par la fenêtre graphique, dont
+  les clics sont vérifiés séparément. La capture
+  `artifacts/visual/approval_dialog.png` montre les trois libellés.
 - **Planificateur (#5) — test d'intégration réel opt-in, exécuté avec succès
   sous Windows.** Le test n'est pas lancé par défaut. Pour l'activer :
   `set FREEBUFF_SCHTASKS_INTEGRATION=1` puis
@@ -214,8 +219,10 @@ les outils dangereux sans règle de politique.
 
 La boîte de dialogue affiche trois boutons explicites : `Autoriser une fois`,
 `Autoriser pour la session` et `Refuser`. `Refuser` est sélectionné par défaut ;
-fermer la fenêtre ou appuyer sur Échap refuse. La procédure de contrôle manuel
-complète est décrite dans « Limites connues et vérifications manuelles ».
+fermer la fenêtre ou appuyer sur Échap refuse. Le parcours réel d'une
+suppression, le refus et la réutilisation d'une autorisation de session sont
+couverts par `tests/test_approval.py` ; les clics de la boîte sont vérifiés
+séparément dans la section « Limites connues et vérifications manuelles ».
 
 ## Budget global
 

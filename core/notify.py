@@ -25,6 +25,7 @@ import base64
 import html
 import logging
 import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -229,25 +230,39 @@ Write-Output $command
 """.strip()
 
 
+_RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ._-]{0,127}\Z")
+
+
 def parse_toast_action(uri: str) -> tuple[str, str] | None:
     """Décode `omniagent://trace/<id>` ou `omniagent://stop`.
 
     Retourne `("trace", id)` / `("stop", "")`, ou `None` pour toute autre URL :
-    un bouton ne doit jamais lancer une action arbitraire.
+    un bouton ne doit jamais lancer une action arbitraire. L'identifiant de
+    trace reste un seul composant : ni séparateur de chemin, ni `..`, ni
+    caractère de contrôle, ni query/fragment. Une URI encodée est refusée
+    lorsqu'elle contourne cette règle.
     """
     try:
         parsed = urlparse(str(uri or ""))
     except ValueError:
         return None
-    if parsed.scheme.lower() != PROTOCOL:
+    if (
+        parsed.scheme.lower() != PROTOCOL
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
         return None
-    action = (parsed.netloc or parsed.path.lstrip("/")).strip().lower()
+    action = (parsed.netloc or "").strip().lower()
     if action == "stop":
-        return ("stop", "")
-    if action == "trace":
-        run_id = unquote(parsed.path.lstrip("/")).strip()
-        return ("trace", run_id)
-    return None
+        return ("stop", "") if parsed.path in {"", "/"} else None
+    if action != "trace" or not parsed.path.startswith("/"):
+        return None
+    run_id = unquote(parsed.path[1:])
+    if not _RUN_ID.fullmatch(run_id) or run_id in {".", ".."}:
+        return None
+    return ("trace", run_id)
 
 
 def _encoded(script: str) -> str:
@@ -324,7 +339,14 @@ def install_notifications(
     ok, detail = _run_script(build_shortcut_script(target, arguments, icon=icon))
     if not ok:
         return False, f"raccourci non créé : {detail}"
-    ok, detail = _run_script(build_protocol_script(target))
+    # Le protocole doit lancer le script de l'application, pas seulement
+    # pythonw.exe : sinon le clic d'un bouton de toast ne fait rien.
+    protocol_arguments = (
+        f'{arguments} --notify-action "%1"'.strip()
+        if arguments
+        else '--notify-action "%1"'
+    )
+    ok, detail = _run_script(build_protocol_script(target, protocol_arguments))
     if not ok:
         return False, f"protocole non déclaré : {detail}"
     return True, f"raccourci et protocole {PROTOCOL}:// installés ({shortcut_path()})"

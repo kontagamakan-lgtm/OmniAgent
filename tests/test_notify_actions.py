@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from support import make_settings, tmpdir  # noqa: E402
 
 import core.notify as notify  # noqa: E402
+from core.stopfile import stop_path  # noqa: E402
 from core.notify import (  # noqa: E402
     APP_USER_MODEL_ID,
     ToastAction,
@@ -42,10 +43,28 @@ def test_toast_script_carries_actions_and_escapes_content() -> None:
 def test_parse_action_refuses_anything_but_our_protocol() -> None:
     assert parse_toast_action("omniagent://trace/run-1") == ("trace", "run-1")
     assert parse_toast_action("omniagent://stop") == ("stop", "")
+    assert parse_toast_action("omniagent://stop/") == ("stop", "")
     assert parse_toast_action("omniagent://trace/run%201") == ("trace", "run 1")
     assert parse_toast_action("https://example.com/trace/1") is None
     assert parse_toast_action("omniagent://delete/run-1") is None
     assert parse_toast_action("") is None
+
+
+def test_parse_action_rejects_path_traversal_and_extra_parts() -> None:
+    for uri in (
+        "omniagent://trace/",
+        "omniagent://trace",
+        "omniagent://trace/../run",
+        "omniagent://trace/..%2Frun",
+        "omniagent://trace/run/extra",
+        "omniagent://trace/run?x=1",
+        "omniagent://trace/run#fragment",
+        "omniagent://trace/run%00",
+        "omniagent://stop/extra",
+        "omniagent://stop?x=1",
+        "omniagent://user@trace/run",
+    ):
+        assert parse_toast_action(uri) is None, uri
 
 
 def test_shortcut_script_sets_the_app_user_model_id() -> None:
@@ -83,6 +102,8 @@ def test_install_is_idempotent_in_its_commands_and_reports_failure(monkeypatch) 
     assert len(seen) == 2
     assert "WScript.Shell" in seen[0]
     assert "HKCU:\\Software\\Classes" in seen[1]
+    assert "C:\\app\\app.py" in seen[1]
+    assert "--notify-action" in seen[1]
 
     monkeypatch.setattr(notify, "_run_script", lambda *a, **k: (False, "refus"))
     ok, message = install_notifications("x")
@@ -147,6 +168,16 @@ def test_app_handles_a_trace_action(monkeypatch) -> None:
         assert app._notify_action(settings, "omniagent://trace/run-7") == 0
         assert app._notify_action(settings, "omniagent://trace/inconnu") == 2
         assert app._notify_action(settings, "https://example.com") == 2
+        assert app._notify_action(settings, "omniagent://trace/../run-7") == 2
+
+
+def test_app_stop_action_writes_stop_without_a_trace() -> None:
+    import app
+
+    with tmpdir("notify-stop") as tmp:
+        settings = make_settings(tmp)
+        assert app._notify_action(settings, "omniagent://stop") == 0
+        assert stop_path(settings).is_file()
 
 
 if __name__ == "__main__":

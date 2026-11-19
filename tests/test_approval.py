@@ -20,6 +20,7 @@ from core.approval import (  # noqa: E402
 )
 from core.tool_registry import ToolRegistry  # noqa: E402
 from tools.base import FunctionTool  # noqa: E402
+from tools.file_manager import FileManager, build_file_tools  # noqa: E402
 
 _SCHEMA = {"type": "object", "properties": {}}
 
@@ -134,6 +135,82 @@ def test_missing_or_broken_decider_denies() -> None:
     registry = _registry(_tool("fs_delete", calls, dangerous=True), broken)
     assert registry.dispatch("fs_delete", {"path": "x"}).error_code == "confirmation_required"
     assert calls == []
+
+
+def test_real_fs_delete_is_denied_then_authorized_once() -> None:
+    """Parcours réel : fichier intact après refus, supprimé après autorisation."""
+    with tmpdir("approbation-e2e") as tmp:
+        settings = make_settings(tmp)
+        target = tmp / "rapport.txt"
+        target.write_text("à supprimer", encoding="utf-8")
+        decisions = iter(["deny", "once"])
+        seen: list[ApprovalRequest] = []
+        answers: list[str] = []
+
+        def decide(request: ApprovalRequest) -> str:
+            seen.append(request)
+            answer = next(decisions)
+            answers.append(answer)
+            return answer
+
+        registry = ToolRegistry(
+            build_file_tools(FileManager(settings)),
+            approval=ApprovalGate(
+                decide=decide,
+                mode="dangerous",
+                settings=settings,
+            ),
+        )
+
+        denied = registry.dispatch(
+            "fs_delete", {"paths": [str(target)], "use_recycle_bin": False}
+        )
+        assert denied.ok is False and target.is_file()
+
+        allowed = registry.dispatch(
+            "fs_delete", {"paths": [str(target)], "use_recycle_bin": False}
+        )
+        assert allowed.ok is True and not target.exists()
+        assert answers == ["deny", "once"]
+        assert [request.tool for request in seen] == ["fs_delete", "fs_delete"]
+
+        journal = [
+            json.loads(line)
+            for line in approval_log_path(settings).read_text(encoding="utf-8").splitlines()
+        ]
+        assert [record["decision"] for record in journal] == ["deny", "once"]
+        assert all(record["tool"] == "fs_delete" for record in journal)
+
+
+def test_real_session_approval_reuses_the_grant_for_a_second_delete() -> None:
+    """Une autorisation de session couvre plusieurs suppressions réelles."""
+    with tmpdir("approbation-e2e-session") as tmp:
+        settings = make_settings(tmp)
+        first, second = tmp / "a.txt", tmp / "b.txt"
+        first.write_text("a", encoding="utf-8")
+        second.write_text("b", encoding="utf-8")
+        calls: list[ApprovalRequest] = []
+
+        def decide(request: ApprovalRequest) -> str:
+            calls.append(request)
+            return "session"
+
+        registry = ToolRegistry(
+            build_file_tools(FileManager(settings)),
+            approval=ApprovalGate(
+                decide=decide,
+                mode="dangerous",
+                session_grants=True,
+                settings=settings,
+            ),
+        )
+        for target in (first, second):
+            result = registry.dispatch(
+                "fs_delete", {"paths": [str(target)], "use_recycle_bin": False}
+            )
+            assert result.ok is True
+        assert not first.exists() and not second.exists()
+        assert len(calls) == 1, "la session ne redemande pas pour le même outil"
 
 
 def test_legacy_confirm_is_adapted_once_at_construction() -> None:

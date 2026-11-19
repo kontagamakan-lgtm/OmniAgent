@@ -6,7 +6,9 @@ import json
 import unicodedata
 from pathlib import Path
 
-from PIL import Image, ImageStat
+from PIL import Image, ImageDraw, ImageStat
+
+from tools.visual_check import _button_piece, _crop_virtual
 
 ROOT = Path(__file__).resolve().parent.parent
 ARTIFACTS = ROOT / "artifacts" / "visual"
@@ -75,6 +77,27 @@ def test_visual_manifest_and_committed_renders() -> None:
     assert toast["changed_pixels"] > 5_000
     toast_text = _normalize(toast["ocr"])
     assert "omniagent" in toast_text and "notification" in toast_text, toast["ocr"]
+
+
+def test_button_crop_uses_the_captured_frame_and_virtual_origin() -> None:
+    """Le crop des boutons ne doit jamais relire une capture antérieure."""
+    frame = Image.new("RGB", (300, 200), "white")
+    draw = ImageDraw.Draw(frame)
+    draw.rectangle((20, 30, 120, 70), fill="#c00000")
+    draw.rectangle((50, 45, 70, 55), fill="white")
+    piece = _button_piece(
+        frame,
+        (100, 50),
+        {"rect": [120, 80, 220, 120]},
+    )
+    assert piece.size == (96, 36)
+    assert ImageStat.Stat(piece).stddev[0] > 1.0
+
+    virtual = Image.new("RGB", (200, 100), "white")
+    ImageDraw.Draw(virtual).rectangle((10, 10, 60, 30), fill="#00c000")
+    cropped = _crop_virtual(virtual, (-50, 0), (-40, 10, 10, 30))
+    assert cropped.size == (50, 20)
+    assert cropped.getpixel((5, 5))[1] > 100
 
 
 def test_operations_documents_visual_paths_audit_anchor_and_isolation_limit() -> None:
