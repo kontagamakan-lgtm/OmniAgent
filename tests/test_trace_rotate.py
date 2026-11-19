@@ -131,6 +131,40 @@ def test_a_failing_file_keeps_its_old_key_and_no_run_is_lost() -> None:
         assert not list(directory.glob("*.rotate.tmp"))
 
 
+def test_rotation_accepts_a_truncated_last_line_and_reports_it() -> None:
+    with tmpdir("rotation-tronquee") as tmp:
+        directory = Path(tmp) / "runs"
+        path = _write_trace(directory, "coupe", "tache-coupee", OLD)
+        # Exécution tuée en pleine écriture : demi-ligne JSON, sans saut final.
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write('{"v": 1, "nonce": "abc')
+
+        report = rotate_traces(directory, OLD, NEW)
+
+        assert [item["status"] for item in report] == ["rotated"]
+        assert "tronquée" in report[0]["detail"], "le bilan doit signaler la coupure"
+        records = list(read_events(path, key=NEW))
+        assert len(records) == 2, "les enregistrements complets sont conservés"
+        assert records[-1]["type"] == EventType.RUN_FINISHED
+        for line in path.read_text(encoding="utf-8").splitlines():
+            assert isinstance(json.loads(line), dict), "plus aucune ligne coupée"
+
+
+def test_rotation_still_refuses_an_invalid_line_in_the_middle() -> None:
+    with tmpdir("rotation-milieu") as tmp:
+        directory = Path(tmp) / "runs"
+        path = _write_trace(directory, "abime", "tache-abimee", OLD)
+        lines = path.read_text(encoding="utf-8").splitlines()
+        path.write_text(
+            "\n".join([lines[0], "pas du json", lines[1]]) + "\n", encoding="utf-8"
+        )
+
+        report = rotate_traces(directory, OLD, NEW)
+
+        assert [item["status"] for item in report] == ["failed"]
+        assert "ligne 2 illisible" in report[0]["detail"]
+
+
 def test_rotation_is_resumable_and_reports_already_rotated(monkeypatch, capsys) -> None:
     with tmpdir("rotation-reprise") as tmp:
         directory = Path(tmp) / "runs"

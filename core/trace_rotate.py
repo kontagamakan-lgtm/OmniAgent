@@ -6,6 +6,10 @@ en cours de route — clé absente, ligne illisible, écriture refusée — lais
 fichier d'origine intact : aucun run n'est perdu, et l'opération est reprise
 possible puisque les fichiers déjà tournés sont reconnus par la nouvelle clé.
 
+Seule exception, comme pour le lecteur : une dernière ligne coupée en pleine
+écriture (sans saut de ligne) est ignorée, les enregistrements complets sont
+réécrits, et le bilan le signale.
+
 Les traces en clair ne sont pas touchées (elles ne sont pas sous clé), un run
 dont le marqueur d'activité est frais est ignoré, et l'index est rafraîchi
 (taille, chemin) puis compacté : l'état, le modèle et la raison d'arrêt des
@@ -57,14 +61,21 @@ def _run_id(path: Path) -> str:
     return name[:-6] if name.endswith(".jsonl") else name
 
 
-def _read_records(path: Path) -> list[dict[str, Any]]:
-    """Tous les enregistrements d'un fichier, refusant la moindre ligne illisible."""
+def _read_records(path: Path) -> tuple[list[dict[str, Any]], str]:
+    """Enregistrements complets d'un fichier, et note sur une coupure finale.
+
+    Une exécution tuée en pleine écriture laisse une demi-ligne JSON sans saut
+    de ligne : elle est ignorée, comme le fait le lecteur tolérant, mais le
+    bilan le signale. Toute autre ligne illisible reste un refus : la rotation
+    ne doit pas effacer une corruption au milieu de la trace.
+    """
     opener = (
         gzip.open(path, "rt", encoding="utf-8")
         if path.name.endswith(".gz")
         else path.open(encoding="utf-8")
     )
     records: list[dict[str, Any]] = []
+    note = ""
     with opener as handle:
         for number, line in enumerate(handle, start=1):
             body = line.strip()
@@ -73,17 +84,27 @@ def _read_records(path: Path) -> list[dict[str, Any]]:
             try:
                 data = json.loads(body)
             except ValueError as exc:
-                raise RotationError(
-                    f"ligne {number} illisible : fichier non réécrit"
-                ) from exc
+                if line.endswith("\n"):
+                    raise RotationError(
+                        f"ligne {number} illisible : fichier non réécrit"
+                    ) from exc
+                note = f"dernière ligne tronquée ignorée ({len(body)} octets)"
+                break
             if not isinstance(data, dict):
-                raise RotationError(
-                    f"ligne {number} n'est pas un objet JSON : fichier non réécrit"
-                )
+                if line.endswith("\n"):
+                    raise RotationError(
+                        f"ligne {number} n'est pas un objet JSON : fichier non réécrit"
+                    )
+                note = f"dernière ligne tronquée ignorée ({len(body)} octets)"
+                break
             records.append(data)
     if not records:
-        raise RotationError("aucun enregistrement : fichier non réécrit")
-    return records
+        raise RotationError("aucun enregistrement complet : fichier non réécrit")
+    return records, note
+
+
+def _with_note(detail: str, note: str) -> str:
+    return f"{detail} ; {note}" if detail and note else detail or note
 
 
 def _rewrite(path: Path, records: list[dict[str, Any]], key: bytes) -> None:
@@ -128,13 +149,13 @@ def _rotate_file(
         return ACTIVE, "marqueur d'activité frais : run en cours"
 
     try:
-        records = _read_records(path)
+        records, note = _read_records(path)
     except (OSError, EOFError, gzip.BadGzipFile, RotationError) as exc:
         return FAILED, str(exc)
 
     encrypted = [is_encrypted(record) for record in records]
     if not any(encrypted):
-        return PLAINTEXT, "trace en clair : inchangée"
+        return PLAINTEXT, _with_note("trace en clair : inchangée", note)
     if not all(encrypted):
         return FAILED, "trace mêlant lignes claires et chiffrées : refusée"
 
@@ -145,13 +166,13 @@ def _rotate_file(
             [decrypt_record(record, new_key) for record in records]
         except TraceKeyError:
             return FAILED, f"ni l'ancienne ni la nouvelle clé : {old_failure}"
-        return ALREADY, "déjà chiffrée avec la nouvelle clé"
+        return ALREADY, _with_note("déjà chiffrée avec la nouvelle clé", note)
 
     try:
         _rewrite(path, clear, new_key)
     except OSError as exc:
         return FAILED, f"réécriture impossible : {exc}"
-    return ROTATED, ""
+    return ROTATED, note
 
 
 def _targets(root: Path) -> list[Path]:
