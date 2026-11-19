@@ -100,8 +100,14 @@ class AgentController:
         self.agent.cancel()
 
     def wait(self, timeout: float | None = None) -> AgentReply | None:
-        """Attend la fin de l'exécution et retourne sa réponse (ou None)."""
-        self._finished.wait(timeout)
+        """Attend la fin de l'exécution et retourne sa réponse (ou None).
+
+        Le drapeau est posé avant la sortie du thread : sans ce `join`, un
+        appelant qui teste `busy` juste après `wait()` peut encore le voir vrai
+        sur une machine lente.
+        """
+        if self._finished.wait(timeout) and self._thread is not None:
+            self._thread.join(1.0)
         return self.reply
 
     def drain(self, max_items: int | None = None) -> list[Event]:
