@@ -40,6 +40,13 @@ def test_defaults_are_valid() -> None:
     assert errors == [], f"défauts invalides: {errors}"
 
 
+def test_default_config_raises_no_warning(monkeypatch) -> None:
+    defaults = config.Settings()
+    monkeypatch.setenv(defaults.llm.api_key_env, "clé-de-test")
+    warnings = [i for i in defaults.validate() if i.level == "warning"]
+    assert warnings == [], f"défauts bruités: {warnings}"
+
+
 def test_roundtrip_keeps_every_field() -> None:
     original = config.Settings()
     original.agent.max_steps = 42

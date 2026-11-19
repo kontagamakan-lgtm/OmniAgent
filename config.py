@@ -829,8 +829,6 @@ class Settings:
             err("trace.archive_min_bytes", "doit être >= 0 (0 désactive l'archivage immédiat)")
         if not trace.enabled and trace.archive:
             warn("trace.archive", "sans effet : la trace est désactivée")
-        if not trace.archive and trace.archive_min_bytes:
-            warn("trace.archive_min_bytes", "sans effet : l'archivage est désactivé")
 
         return issues
 
