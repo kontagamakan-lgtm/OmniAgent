@@ -334,6 +334,24 @@ def test_streamed_fragments_arrive_in_order_without_overwriting() -> None:
         assert widget.state == "disabled"
 
 
+def test_maintenance_report_lists_every_directory() -> None:
+    from ui.app_gui import format_maintenance_report
+
+    text = format_maintenance_report(
+        [
+            {"directory": "C:/runs", "action": "compact", "runs": 2},
+            {"directory": "C:/runs/atelier", "action": "rebuild", "runs": 0},
+            {"directory": "C:/runs/vide", "action": "unchanged", "runs": 0},
+        ]
+    )
+
+    lines = text.splitlines()
+    assert lines[0] == "compacté · 2 run(s) · C:/runs"
+    assert lines[1] == "reconstruit · 0 run(s) · C:/runs/atelier"
+    assert lines[2] == "déjà à jour · 0 run(s) · C:/runs/vide"
+    assert format_maintenance_report([]) == "Aucun index à entretenir."
+
+
 def test_retry_after_a_cut_discards_the_abandoned_fragment() -> None:
     """Un flux coupé n'affiche rien : son fragment n'a jamais été libéré."""
     from ui.app_gui import OmniAgentWindow, TranscriptBuffer

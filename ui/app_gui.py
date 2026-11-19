@@ -93,6 +93,18 @@ def format_autonomy_journal(records: list[dict[str, Any]], *, limit: int = 50) -
     return "\n\n".join(blocks) if blocks else "Aucun cycle autonome enregistré."
 
 
+def format_maintenance_report(report: list[dict[str, Any]]) -> str:
+    """Bilan lisible de `maintain()` : une ligne par dossier traité."""
+    if not report:
+        return "Aucun index à entretenir."
+    labels = {"compact": "compacté", "rebuild": "reconstruit", "unchanged": "déjà à jour"}
+    return "\n".join(
+        f"{labels.get(str(item.get('action')), item.get('action'))} · "
+        f"{item.get('runs', 0)} run(s) · {item.get('directory', '?')}"
+        for item in report
+    )
+
+
 def _missing_dependency_message() -> str:
     return (
         "customtkinter est absent : l'interface graphique ne peut pas démarrer.\n"
@@ -414,8 +426,36 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             window.title("Traces d'exécution")
             window.geometry("760x480")
             window.transient(self)
+            toolbar = ctk.CTkFrame(window)
+            toolbar.pack(fill="x", padx=10, pady=(10, 0))
+            report_label = ctk.CTkLabel(
+                toolbar, text="", anchor="w", justify="left", wraplength=700
+            )
+
+            def run_maintenance(*, rebuild: bool) -> None:
+                """Compacte ou reconstruit l'index sans bloquer sur un dossier absent."""
+                from core.run_index import maintain
+
+                if not directory.is_dir():
+                    report_label.configure(text="Aucun dossier de traces : rien à entretenir.")
+                    return
+                try:
+                    report = maintain(directory, rebuild=rebuild)
+                except OSError as exc:
+                    report_label.configure(text=f"maintenance impossible : {exc}")
+                    return
+                report_label.configure(text=format_maintenance_report(report))
+
+            for label_text, rebuild in (("Compacter", False), ("Reconstruire", True)):
+                ctk.CTkButton(
+                    toolbar,
+                    text=label_text,
+                    width=110,
+                    command=lambda r=rebuild: run_maintenance(rebuild=r),
+                ).pack(side="left", padx=(0, 6), pady=4)
+            report_label.pack(fill="x", pady=(2, 4))
             frame = ctk.CTkScrollableFrame(window, label_text=str(directory))
-            frame.pack(fill="both", expand=True, padx=10, pady=10)
+            frame.pack(fill="both", expand=True, padx=10, pady=(4, 10))
             # L'index est un cache : absent ou illisible, la liste reste possible.
             states: dict[str, str] = {}
             if directory.is_dir():
