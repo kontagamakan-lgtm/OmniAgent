@@ -292,6 +292,7 @@ def test_scheduled_runner_starts_once_and_records_the_slot() -> None:
     with tmpdir("planification") as tmp:
         settings = make_settings(tmp)
         settings.autonomy.max_cycles = 1
+        settings.autonomy.notify_on_session = False
         goals = goals_path(settings)
         goals.parent.mkdir(parents=True, exist_ok=True)
         goals.write_text("- ranger les rapports\n", encoding="utf-8")
