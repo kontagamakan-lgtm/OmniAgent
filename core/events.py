@@ -45,6 +45,7 @@ class EventType:
     LLM_RESPONSE = "llm_response"
     LLM_RETRY = "llm_retry"
     STREAM_CHUNK = "stream_chunk"
+    CONTEXT_TRIMMED = "context_trimmed"
     TOOL_STARTED = "tool_started"
     TOOL_FINISHED = "tool_finished"
     THOUGHT = "thought"

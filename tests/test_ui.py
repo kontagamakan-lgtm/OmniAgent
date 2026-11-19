@@ -114,7 +114,13 @@ def test_controller_runs_agent_in_a_thread() -> None:
             assert "run_finished" in types
             assert "final" in types
             assert controller.drain() == [], "la file doit être vidée"
+
+            # L'interface laisse une trace JSONL par exécution.
+            assert controller.trace.path is not None
+            trace_text = controller.trace.path.read_text(encoding="utf-8")
+            assert '"type": "run_started"' in trace_text
         finally:
+            controller.close()
             bundle.close()
 
 
@@ -144,6 +150,35 @@ def test_controller_drains_events_from_the_bus_it_was_given() -> None:
             assert all(event.run_id == bundle.agent.run_id for event in events)
             assert controller.current is not None
             assert controller.current.events == events
+        finally:
+            bundle.close()
+
+
+def test_wait_returns_only_once_the_thread_has_ended() -> None:
+    """`wait()` garantit `busy == False` : verrouille le correctif de course CI."""
+    with tmpdir("ui") as tmp:
+        settings = make_settings(tmp)
+        llm = _ScriptedLLM(LLMResponse(text="fini", finish_reason="stop"), delay=0.05)
+        bundle = _bundle(settings, llm)
+        try:
+            controller = AgentController(bundle.agent)
+            # Le drapeau de fin est posé avant la dernière instruction du
+            # thread : on ralentit ce point précis pour que la course soit
+            # déterministe, comme sur un runner Windows chargé.
+            finished_set = controller._finished.set
+
+            def slow_set() -> None:
+                finished_set()
+                time.sleep(0.15)
+
+            controller._finished.set = slow_set  # type: ignore[method-assign]
+
+            assert controller.start("tâche lente")
+            reply = controller.wait(10)
+
+            assert reply is not None and reply.ok
+            assert controller.busy is False, "wait() doit rendre la main thread terminé"
+            assert controller._thread is not None and not controller._thread.is_alive()
         finally:
             bundle.close()
 
@@ -405,6 +440,58 @@ def test_retry_closes_a_displayed_attempt_before_the_next_one() -> None:
     ), text
     assert "BonjourSalut" not in text, "le fragment abandonné s'est collé à la réponse"
     assert window._streaming is False, "le drapeau doit être retombé"
+
+
+def test_context_trim_report_is_written_in_the_transcript() -> None:
+    """L'utilisateur doit voir que le contexte a fondu, et pourquoi."""
+    from ui.app_gui import OmniAgentWindow, TranscriptBuffer
+
+    class _Button:
+        def configure(self, **kwargs) -> None:
+            pass
+
+    class _Controller:
+        def __init__(self) -> None:
+            self._events = [
+                Event(
+                    type=EventType.CONTEXT_TRIMMED,
+                    payload={
+                        "before_messages": 12,
+                        "after_messages": 7,
+                        "before_tokens": 900,
+                        "after_tokens": 420,
+                        "summarized": 5,
+                    },
+                )
+            ]
+            self.reply = None
+            self.busy = False
+
+        def drain(self) -> list[Event]:
+            events, self._events = self._events, []
+            return events
+
+    widget = _FakeText()
+    window = object.__new__(OmniAgentWindow)
+    window._buffer = TranscriptBuffer(widget)
+    window._step = 0
+    window._streaming = False
+    window._reported = False
+    window._pending = {}
+    window._set_status = lambda text: None
+    window.after = lambda _ms, _callback: "tick"
+    window.send_button = _Button()
+    window.cancel_button = _Button()
+    window.settings = SimpleNamespace(ui=SimpleNamespace(stream_refresh_ms=50))
+    window.controller = _Controller()
+
+    window._pump()
+
+    text = widget.get("1.0", "end")
+    assert "contexte replié" in text
+    assert "12 → 7 messages" in text
+    assert "900 → 420 tokens" in text
+    assert "5 résumé(s)" in text
 
 
 def test_close_stream_lowers_the_flag_even_without_a_displayed_attempt() -> None:

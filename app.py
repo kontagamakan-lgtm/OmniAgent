@@ -28,6 +28,7 @@ import config
 from config import APP_NAME, APP_VERSION, Settings
 from core.events import Event, EventType
 from core.factory import build_agent
+from core.trace import RunTrace
 from security.redaction import redact
 
 __all__ = [
@@ -214,6 +215,17 @@ class _ConsoleStream:
             self._write(
                 f"\n• reprise {event.payload.get('attempt', '?')} "
                 f"après {event.payload.get('code', 'erreur')}\n\n"
+            )
+        elif event.type == EventType.CONTEXT_TRIMMED:
+            self._write(
+                # Flèche ASCII : la console Windows écrit en cp1252 et « → »
+                # y lève UnicodeEncodeError, comme le note le diagnostic.
+                "\n• contexte replié : "
+                f"{event.payload.get('before_messages', '?')} -> "
+                f"{event.payload.get('after_messages', '?')} messages "
+                f"(~{event.payload.get('before_tokens', '?')} -> "
+                f"{event.payload.get('after_tokens', '?')} tokens, "
+                f"{event.payload.get('summarized', 0)} résumé(s))\n\n"
             )
         elif event.type == EventType.RUN_FINISHED:
             self._pending.clear()
@@ -516,6 +528,8 @@ def browser_smoke(settings: Settings) -> int:
 def _run_task(settings: Settings, args: argparse.Namespace) -> int:
     bundle = build_agent(settings, with_browser=not args.no_browser)
     stream = _ConsoleStream(sys.stdout)
+    trace = RunTrace(settings.paths.log_dir / "runs")
+    unsubscribe_trace = bundle.agent.bus.subscribe(trace)
     unsubscribe = bundle.agent.bus.subscribe(
         stream,
         types=[
@@ -523,6 +537,7 @@ def _run_task(settings: Settings, args: argparse.Namespace) -> int:
             EventType.TOOL_STARTED,
             EventType.FINAL,
             EventType.LLM_RETRY,
+            EventType.CONTEXT_TRIMMED,
             EventType.RUN_FINISHED,
         ],
     )
@@ -543,6 +558,8 @@ def _run_task(settings: Settings, args: argparse.Namespace) -> int:
         return 0 if reply.ok else 1
     finally:
         unsubscribe()
+        unsubscribe_trace()
+        trace.close()
         bundle.close()
 
 

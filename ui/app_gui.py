@@ -318,6 +318,17 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                     "système",
                     f"reprise {payload.get('attempt', '?')} après {payload.get('code', 'erreur')}",
                 )
+            elif event.type == EventType.CONTEXT_TRIMMED:
+                # L'agent « oublie » volontairement : le dire évite de passer
+                # pour une panne de mémoire.
+                self._append(
+                    "système",
+                    f"contexte replié : {payload.get('before_messages', '?')} → "
+                    f"{payload.get('after_messages', '?')} messages "
+                    f"(~{payload.get('before_tokens', '?')} → "
+                    f"{payload.get('after_tokens', '?')} tokens, "
+                    f"{payload.get('summarized', 0)} résumé(s))",
+                )
             elif event.type == EventType.ERROR:
                 self._append("erreur", str(payload.get("message", "erreur inconnue")))
 

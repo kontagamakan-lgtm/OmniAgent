@@ -13,7 +13,13 @@ import httpx
 from support import make_settings, run, tmpdir  # noqa: I001
 
 import config
-from core.agent_core import AgentCore
+from core.agent_core import AgentCore, AgentReply
+from core.context_manager import (
+    SUMMARY_MAX_CHARS,
+    messages_tokens,
+    summarize,
+    trim_messages,
+)
 from core.errors import (
     LLMAuthError,
     LLMError,
@@ -641,6 +647,47 @@ def test_empty_task_is_rejected_without_calling_the_llm() -> None:
         assert llm.calls == []
 
 
+def test_second_concurrent_run_is_refused_without_touching_the_first() -> None:
+    """`run_id` est unique : une seconde exécution doit être refusée, pas mêlée."""
+    with tmpdir("core") as tmp:
+        entered = threading.Event()
+        release = threading.Event()
+
+        class _BlockingLLM:
+            def complete(self, messages, tools=None, **kwargs):
+                entered.set()
+                release.wait(5)
+                return LLMResponse(text="fini", finish_reason="stop")
+
+        bus = EventBus()
+        core = AgentCore(_settings(tmp), _BlockingLLM(), ToolRegistry([]), bus=bus)
+        outcome: list[AgentReply] = []
+        thread = threading.Thread(target=lambda: outcome.append(core.run("première")))
+        thread.start()
+        try:
+            assert entered.wait(5), "la première exécution doit avoir démarré"
+            first_id = core.run_id
+            events_before = len(bus.history())
+
+            busy = core.run("seconde")
+
+            assert busy.ok is False and busy.stop_reason == "busy"
+            assert busy.error_code == "agent_busy"
+            assert "déjà en cours" in busy.error
+            assert core.run_id == first_id, "un run refusé ne doit pas changer run_id"
+            assert core.run_count == 1, "un run refusé ne doit pas incrémenter le compteur"
+            assert len(bus.history()) == events_before, "un run refusé ne publie rien"
+        finally:
+            release.set()
+            thread.join(10)
+
+        assert outcome and outcome[0].ok, "la première exécution doit aboutir"
+        assert outcome[0].error_code == ""
+        # Le verrou est rendu : l'agent accepte à nouveau une exécution.
+        assert core.run("troisième").ok
+        assert core.run_id != first_id
+
+
 def test_history_is_trimmed_on_turn_boundaries() -> None:
     with tmpdir("core") as tmp:
         settings = _settings(tmp, history_max=6)
@@ -704,6 +751,179 @@ def test_trimming_mid_loop_keeps_a_summary_without_a_user_turn() -> None:
         assert summaries, "un tour abandonné doit être résumé, même sans tour user"
         assert "- OUTIL: echo" in str(summaries[0]["content"])
         assert messages[2]["role"] != "tool", "la queue ne peut pas ouvrir sur un résultat d'outil"
+
+
+def test_trim_messages_never_leaves_an_orphan_tool_result() -> None:
+    """Quel que soit le budget, un résultat d'outil garde l'appel qui le précède."""
+    messages = [
+        {"role": "system", "content": "consigne"},
+        {"role": "user", "content": "tâche"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"id": "a", "type": "function", "function": {"name": "echo", "arguments": "{}"}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "a", "name": "echo", "content": "r1"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"id": "b", "type": "function", "function": {"name": "echo", "arguments": "{}"}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "b", "name": "echo", "content": "r2"},
+    ]
+
+    for limit in range(4, len(messages) + 2):
+        trimmed = trim_messages(messages, max_messages=limit)
+        assert trimmed[0]["role"] == "system"
+        assert trimmed[1]["role"] == "user"
+        outstanding: set[str] = set()
+        for message in trimmed[2:]:
+            if message["role"] == "assistant":
+                outstanding = {
+                    str(call.get("id")) for call in message.get("tool_calls") or []
+                }
+            elif message["role"] == "tool":
+                assert message["tool_call_id"] in outstanding, (
+                    f"résultat d'outil orphelin avec max_messages={limit}: {trimmed}"
+                )
+
+
+def test_trim_messages_reserves_tokens_it_does_not_receive() -> None:
+    """Un coût fixe hors `messages` (schémas d'outils) réduit le budget utile."""
+    messages = [
+        {"role": "system", "content": "consigne"},
+        {"role": "user", "content": "premier tour"},
+        {"role": "assistant", "content": "x" * 200},
+        {"role": "user", "content": "deuxième tour"},
+        {"role": "assistant", "content": "y" * 200},
+        {"role": "user", "content": "dernier tour"},
+        {"role": "assistant", "content": "z" * 200},
+    ]
+    budget = messages_tokens(messages)
+
+    assert len(trim_messages(messages, max_messages=50, max_tokens=budget)) == len(messages)
+
+    folded = trim_messages(
+        messages, max_messages=50, max_tokens=budget, reserved_tokens=budget // 2
+    )
+    assert len(folded) < len(messages), "la réservation doit réduire l'historique"
+    assert folded[1] == {"role": "user", "content": "premier tour"}
+
+
+def test_agent_core_reserves_tool_schema_tokens_in_the_budget() -> None:
+    """`_trim` réserve le coût des schémas que le fournisseur reçoit aussi."""
+    with tmpdir("core") as tmp:
+        messages = [
+            {"role": "system", "content": "consigne"},
+            {"role": "user", "content": "premier tour"},
+            {"role": "assistant", "content": "x" * 200},
+            {"role": "user", "content": "deuxième tour"},
+            {"role": "assistant", "content": "y" * 200},
+        ]
+        budget = messages_tokens(messages)
+        tool = FunctionTool(
+            "gros_schema",
+            "Description volontairement longue. " * 120,
+            object_schema({}),
+            lambda: "ok",
+        )
+        settings = _settings(tmp, history_max=50)
+        settings.agent.max_context_tokens = budget
+        core = AgentCore(settings, FakeLLM([]), ToolRegistry([tool]))
+
+        assert core._reserved_tokens() > 0
+        plain = trim_messages(messages, max_messages=50, max_tokens=budget)
+        assert len(plain) == len(messages), "sans réserve, l'historique tient"
+        assert len(core._trim(messages)) < len(messages), (
+            "les schémas d'outils doivent consommer le budget"
+        )
+
+
+def test_context_trimmed_event_reports_the_fold() -> None:
+    """Un repli doit être annoncé avec ses compteurs, pas subi en silence."""
+    with tmpdir("core") as tmp:
+        settings = _settings(tmp, history_max=6)
+        bus = EventBus()
+        script = [_call("echo", text=f"t{index}") for index in range(5)] + [_text("fini")]
+        core = AgentCore(
+            settings, FakeLLM(script), ToolRegistry([_echo_tool([])]), bus=bus
+        )
+
+        assert core.run("tâche longue").ok
+
+        reported = [
+            event for event in bus.history(core.run_id) if event.type == EventType.CONTEXT_TRIMMED
+        ]
+        assert reported, "history(run_id) doit contenir le repli"
+        payload = reported[0].payload
+        assert payload["before_messages"] > payload["after_messages"]
+        # Résumer de très courts messages peut coûter quelques tokens : le
+        # rapport dit la vérité, il n'impose pas une baisse.
+        assert payload["before_tokens"] > 0 and payload["after_tokens"] > 0
+        assert payload["summarized"] >= 1, "le repli doit compter les tours résumés"
+        assert payload["reserved_tokens"] >= 0
+
+
+def _tool_round(name: str, call_id: str, **arguments) -> list[dict]:
+    return [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": call_id,
+                    "type": "function",
+                    "function": {"name": name, "arguments": json.dumps(arguments)},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": call_id, "name": name, "content": "ok"},
+    ]
+
+
+def test_summary_carries_attempted_tool_signatures() -> None:
+    """Le résumé doit rappeler les gestes déjà tentés, dédupliqués et bornés."""
+    messages = [
+        {"role": "system", "content": "consigne"},
+        {"role": "user", "content": "tâche"},
+        *_tool_round("echo", "a", text="t1"),
+        *_tool_round("fs_list", "b", path="core"),
+        *_tool_round("echo", "c", text="t1"),
+        *_tool_round("fs_read", "d", path="x" * 400),
+    ]
+
+    summary = summarize(messages[2:])
+
+    assert 'echo({"text": "t1"})' in summary
+    assert 'fs_list({"path": "core"})' in summary
+    assert summary.count("echo(") == 1, "les tentatives identiques sont fusionnées"
+    assert "ne pas les répéter" in summary
+    assert "…" in summary, "les arguments trop longs sont abrégés"
+    assert len(summary) <= SUMMARY_MAX_CHARS
+
+
+def test_trim_summary_lists_tool_calls_already_attempted() -> None:
+    """Après un repli, le modèle voit ce qu'il a déjà lancé."""
+    messages = [
+        {"role": "system", "content": "consigne"},
+        {"role": "user", "content": "tâche"},
+        *_tool_round("echo", "a", text="t1"),
+        *_tool_round("fs_list", "b", path="core"),
+        *_tool_round("echo", "c", text="t2"),
+        *_tool_round("fs_list", "d", path="tests"),
+    ]
+
+    trimmed = trim_messages(messages, max_messages=6)
+    summaries = [m for m in trimmed[2:] if m.get("role") == "system"]
+
+    assert summaries, "le repli doit produire un résumé"
+    body = str(summaries[0]["content"])
+    assert "Appels d'outils déjà tentés" in body
+    assert "echo(" in body and "fs_list(" in body
 
 
 def test_context_budget_folds_old_turns_into_a_summary() -> None:

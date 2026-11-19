@@ -17,6 +17,7 @@ from typing import Any
 from config import APP_ID
 from core.agent_core import AgentCore, AgentReply
 from core.events import Event, EventType
+from core.trace import RunTrace
 
 __all__ = ["AgentController", "AgentRun"]
 
@@ -58,6 +59,9 @@ class AgentController:
         self._unsubscribe = self.agent.bus.subscribe(
             self._collect, types=(EventType.STREAM_CHUNK,)
         )
+        # Une trace par exécution, consultable après coup depuis l'interface.
+        self.trace = RunTrace(self.agent.settings.paths.log_dir / "runs")
+        self._unsubscribe_trace = self.agent.bus.subscribe(self.trace)
 
     # -- état ---------------------------------------------------------------
 
@@ -128,6 +132,8 @@ class AgentController:
     def close(self) -> None:
         """Se désabonne du bus (à appeler lorsque la fenêtre se ferme)."""
         self._unsubscribe()
+        self._unsubscribe_trace()
+        self.trace.close()
 
     # -- exécution ----------------------------------------------------------
 

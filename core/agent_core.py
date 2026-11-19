@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Sequence
 
 from config import APP_ID, Settings
-from core.context_manager import trim_messages
+from core.context_manager import count_tokens, plan_trim
 from core.errors import (
     AgentError,
     BudgetExhausted,
@@ -158,7 +158,11 @@ class AgentCore:
         self._sleep = sleep
         self._cancel = threading.Event()
         self._lock = threading.Lock()
+        # `run_id` et les événements appartiennent à une exécution à la fois :
+        # ce verrou refuse la seconde plutôt que de mélanger les deux.
+        self._run_guard = threading.Lock()
         self._schemas: list[dict[str, Any]] | None = None
+        self._schema_tokens: int | None = None
         self.run_count = 0
         self.run_id = ""
 
@@ -193,7 +197,27 @@ class AgentCore:
     # -- exécution ----------------------------------------------------------
 
     def run(self, task: str, *, max_steps: int | None = None) -> AgentReply:
-        """Exécute la boucle ReAct pour une tâche utilisateur."""
+        """Exécute la boucle ReAct, une exécution à la fois.
+
+        `run_id` et le flux d'événements sont uniques à l'agent : une seconde
+        exécution simultanée mélangerait les deux. Elle est donc refusée avec
+        une erreur explicite, plutôt que de corrompre la première.
+        """
+        if not self._run_guard.acquire(blocking=False):
+            return AgentReply(
+                text="Une exécution est déjà en cours sur cet agent.",
+                stop_reason="busy",
+                ok=False,
+                error="exécution déjà en cours : attendez la fin ou annulez-la",
+                error_code="agent_busy",
+            )
+        try:
+            return self._run_locked(task, max_steps=max_steps)
+        finally:
+            self._run_guard.release()
+
+    def _run_locked(self, task: str, *, max_steps: int | None = None) -> AgentReply:
+        """Corps de `run`, exécuté sous le verrou d'exécution."""
         prompt = str(task or "").strip()
         if not prompt:
             return AgentReply(
@@ -529,12 +553,39 @@ class AgentCore:
 
         Couper au hasard séparerait un message assistant porteur de
         `tool_calls` de ses réponses `tool`, ce que le fournisseur rejette.
+        Les schémas d'outils, envoyés à chaque appel mais absents de
+        `messages`, sont réservés dans le budget.
         """
-        return trim_messages(
+        plan = plan_trim(
             messages,
             max_messages=max(4, int(self.settings.agent.history_max_messages)),
             max_tokens=int(self.settings.agent.max_context_tokens),
+            reserved_tokens=self._reserved_tokens(),
         )
+        if plan.trimmed:
+            # Sans cet événement, l'utilisateur voit l'agent « oublier » sans
+            # savoir que c'est le budget qui l'a demandé.
+            self._emit(
+                EventType.CONTEXT_TRIMMED,
+                {
+                    "before_messages": plan.before_messages,
+                    "after_messages": plan.after_messages,
+                    "before_tokens": plan.before_tokens,
+                    "after_tokens": plan.after_tokens,
+                    "summarized": plan.summarized,
+                    "reserved_tokens": plan.reserved_tokens,
+                },
+            )
+        return plan.messages
+
+    def _reserved_tokens(self) -> int:
+        """Coût fixe des schémas d'outils, calculé une fois par agent."""
+        if self._schema_tokens is None:
+            schemas = self.tool_schemas or []
+            self._schema_tokens = (
+                count_tokens(json.dumps(schemas, ensure_ascii=False)) if schemas else 0
+            )
+        return self._schema_tokens
 
     def _cancelled(self, steps: list[AgentStep], recoveries: int) -> AgentReply:
         text = "Exécution interrompue à la demande de l'utilisateur."

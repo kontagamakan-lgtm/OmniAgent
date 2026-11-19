@@ -16,6 +16,61 @@ from core.llm_client import LLMResponse, ParsedToolCall
 from core.prompts import FINAL_ANSWER_PREFIX
 
 
+def test_task_writes_a_jsonl_trace_per_run() -> None:
+    """`--task` doit laisser la trace que l'utilisateur pourra relire."""
+
+    class _LLM:
+        def complete(self, messages, tools=None, **kwargs):
+            return LLMResponse(text="terminé", finish_reason="stop")
+
+    with tmpdir("app") as tmp:
+        settings = make_settings(tmp)
+        args = argparse.Namespace(task="trace", no_browser=True, unlock_keyring=False)
+        original = app.build_agent
+
+        def _offline(settings, **options):
+            options.update(llm=_LLM(), with_web=False, with_browser=False)
+            return original(settings, **options)
+
+        app.build_agent = _offline
+        try:
+            code = app._run_task(settings, args)
+        finally:
+            app.build_agent = original
+
+        assert code == 0
+        files = sorted((settings.paths.log_dir / "runs").glob("*.jsonl"))
+        assert files, "aucune trace écrite par --task"
+        text = files[-1].read_text(encoding="utf-8")
+        assert '"type": "run_started"' in text
+        assert '"type": "run_finished"' in text
+
+
+def test_console_renders_the_context_trim_report() -> None:
+    """Le repli silencieux est terminé : la console l'explique."""
+    out = io.StringIO()
+    stream = app._ConsoleStream(out)
+
+    stream(
+        Event(
+            type=EventType.CONTEXT_TRIMMED,
+            payload={
+                "before_messages": 12,
+                "after_messages": 7,
+                "before_tokens": 900,
+                "after_tokens": 420,
+                "summarized": 5,
+            },
+        )
+    )
+
+    text = out.getvalue()
+    assert "contexte replié" in text
+    assert "12 -> 7 messages" in text
+    assert "900 -> 420 tokens" in text
+    assert "5 résumé(s)" in text
+
+
 class _Recorder:
     """Capture les écritures et note si `agent.run` était déjà revenu."""
 
