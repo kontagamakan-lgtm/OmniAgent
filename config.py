@@ -653,6 +653,15 @@ class MemoryConfig:
 
 
 @dataclass(slots=True)
+class IsolationConfig:
+    """Profil de capacités par run et liste blanche de domaines."""
+
+    profile: str = "full"
+    allowed_domains: list[str] = field(default_factory=list)
+    log_network: bool = True
+
+
+@dataclass(slots=True)
 class LoggingConfig:
     """Journalisation et masquage des secrets."""
 
@@ -692,6 +701,7 @@ class Settings:
     metrics: MetricsConfig = field(default_factory=MetricsConfig)
     budget: BudgetConfig = field(default_factory=BudgetConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
+    isolation: IsolationConfig = field(default_factory=IsolationConfig)
 
     # -- persistance --------------------------------------------------------
 
@@ -862,6 +872,11 @@ class Settings:
                 "enabled": self.metrics.enabled,
                 "max_entries": self.metrics.max_entries,
                 "max_bytes": self.metrics.max_bytes,
+            },
+            "isolation": {
+                "profile": self.isolation.profile,
+                "allowed_domains": list(self.isolation.allowed_domains),
+                "log_network": self.isolation.log_network,
             },
             "memory": {
                 "enabled": self.memory.enabled,
@@ -1139,6 +1154,16 @@ class Settings:
             err("metrics.max_entries", "doit être comprise entre 1 et 100000")
         if self.metrics.max_bytes < 1024:
             err("metrics.max_bytes", "doit être >= 1024 octets")
+
+        # --- Isolation par run
+        if self.isolation.profile not in {"read-only", "files", "files-web", "full"}:
+            err(
+                "isolation.profile",
+                "profil inconnu (attendu : read-only, files, files-web, full)",
+            )
+        for domain in self.isolation.allowed_domains:
+            if any(char in str(domain) for char in "/: "):
+                err("isolation.allowed_domains", f"hôte attendu, pas une URL : '{domain}'")
 
         # --- Mémoire projet
         if not (1 <= self.memory.max_notes <= 10000):

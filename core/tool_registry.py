@@ -19,11 +19,12 @@ from core.prompts import tool_catalogue
 from tools.base import Tool, ToolError, ToolResult, ToolSet
 from tools.spec import ToolSpec
 
-__all__ = ["ToolError", "ToolRegistry", "ToolSpec"]
+__all__ = ["NetworkGuard", "ToolError", "ToolRegistry", "ToolSpec"]
 
 logger = logging.getLogger(f"{APP_ID}.registry")
 
 ConfirmHandler = Callable[[Tool, Mapping[str, Any]], bool]
+NetworkGuard = Callable[[str, Mapping[str, Any]], tuple[bool, str]]
 
 
 class ToolRegistry:
@@ -35,6 +36,7 @@ class ToolRegistry:
         *,
         max_output_chars: int = 12000,
         confirm: ConfirmHandler | None = None,
+        network_guard: NetworkGuard | None = None,
     ) -> None:
         if isinstance(tools, ToolSet):
             self._tools = tools
@@ -42,6 +44,7 @@ class ToolRegistry:
             self._tools = ToolSet(_as_tool(item) for item in tools)
         self.max_output_chars = max(0, int(max_output_chars))
         self._confirm = confirm
+        self._network_guard = network_guard
         self._calls: dict[str, int] = {}
         self._failures: dict[str, int] = {}
         self._total_ms: dict[str, float] = {}
@@ -87,6 +90,15 @@ class ToolRegistry:
                 "les arguments doivent former un objet JSON", code="invalid_arguments"
             )
         payload = dict(arguments or {})
+
+        if self._network_guard is not None:
+            try:
+                allowed, reason = self._network_guard(tool.name, payload)
+            except Exception:  # noqa: BLE001 - un garde défaillant refuse
+                logger.exception("garde réseau en échec pour %s", tool.name)
+                allowed, reason = False, "garde réseau en échec : refus par défaut"
+            if not allowed:
+                return ToolResult.failure(reason or "sortie réseau refusée", code="network_denied")
 
         if tool.dangerous and not self._authorize(tool, payload):
             return ToolResult.failure(

@@ -216,6 +216,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="avec --check : répare l'index et les marqueurs sans toucher aux traces",
     )
     parser.add_argument(
+        "--profile",
+        choices=("read-only", "files", "files-web", "full"),
+        help="profil de capacités du run (défaut : isolation.profile)",
+    )
+    parser.add_argument(
         "--no-browser",
         action="store_true",
         help="n'enregistre pas les outils de navigation",
@@ -894,7 +899,11 @@ def _seal_trace(settings: Settings, trace: Any) -> None:
 
 
 def _run_task(settings: Settings, args: argparse.Namespace) -> int:
-    bundle = build_agent(settings, with_browser=not args.no_browser)
+    bundle = build_agent(
+        settings,
+        with_browser=not args.no_browser,
+        profile=getattr(args, "profile", None),
+    )
     stream = _ConsoleStream(sys.stdout)
     if getattr(args, "no_trace", False):
         trace = None
@@ -972,7 +981,11 @@ def _run_autonomy(settings: Settings, args: argparse.Namespace) -> int:
         )
         return 2
 
-    bundle = build_agent(settings, with_browser=not args.no_browser)
+    bundle = build_agent(
+        settings,
+        with_browser=not args.no_browser,
+        profile=getattr(args, "profile", None),
+    )
     trace = None if getattr(args, "no_trace", False) else build_trace(settings)
     unsubscribe_trace = (
         bundle.agent.bus.subscribe(trace) if trace is not None else (lambda: None)
@@ -1038,7 +1051,11 @@ def _run_schedule(settings: Settings, args: argparse.Namespace) -> int:
     if stop_requested(settings):
         print("Arrêt d'urgence présent : supprimez le fichier STOP.", file=sys.stderr)
         return 2
-    bundle = build_agent(settings, with_browser=not args.no_browser)
+    bundle = build_agent(
+        settings,
+        with_browser=not args.no_browser,
+        profile=getattr(args, "profile", None),
+    )
     trace = None if getattr(args, "no_trace", False) else build_trace(settings)
     unsubscribe_trace = (
         bundle.agent.bus.subscribe(trace) if trace is not None else (lambda: None)

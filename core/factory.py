@@ -28,6 +28,7 @@ from core.events import EventBus
 from core.llm_client import LLMClient
 from core.budget import build_budget_recorder
 from core.metrics import build_metrics
+from core.profile import apply_profile, build_network_guard, resolve_profile
 from core.tool_registry import ConfirmHandler, ToolRegistry
 from tools.base import Tool
 from tools.browser_agent import BrowserAgent, build_browser_tools
@@ -133,6 +134,7 @@ def build_agent(
     with_web: bool = True,
     with_browser: bool = True,
     vault: Vault | None = None,
+    profile: str | None = None,
 ) -> AgentBundle:
     """Construit l'agent et enregistre les outils réels.
 
@@ -140,6 +142,7 @@ def build_agent(
     ni Playwright (tests, poste minimal) tout en gardant les outils fichiers et
     le coffre.
     """
+    run_profile = resolve_profile(settings, profile)
     files = FileManager(settings)
     vault = vault or Vault(settings, file_manager=files)
     index = DocIndex(settings, files)
@@ -167,6 +170,10 @@ def build_agent(
         browser = BrowserAgent(settings, vault, file_manager=files)
         tools.extend(build_browser_tools(browser))
 
+    # Profil de capacités : les outils hors profil ne sont ni proposés au
+    # modèle ni exécutables. Le filtrage précède le contrat, qui ne juge donc
+    # que les outils réellement exposés.
+    tools = apply_profile(tools, run_profile)
     # Contrat des capacités : un outil non classé, ou dont les drapeaux ne
     # correspondent plus à `tools/capabilities.py`, bloque le démarrage plutôt
     # que d'hériter silencieusement des valeurs par défaut. Les ressources déjà
@@ -189,6 +196,7 @@ def build_agent(
         tools,
         max_output_chars=settings.agent.tool_output_max_chars,
         confirm=confirm,
+        network_guard=build_network_guard(settings, run_profile),
     )
     owns_llm = llm is None
     client = llm or LLMClient(settings.llm)
