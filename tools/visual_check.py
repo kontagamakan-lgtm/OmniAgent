@@ -318,7 +318,16 @@ def capture() -> dict[str, Any]:
             left, top, right, bottom = button["rect"]
             if not (area[0] <= left < right <= area[2] and area[1] <= top < bottom <= area[3]):
                 raise RuntimeError(f"bouton hors de la fenetre : {button}")
-            piece = screen.crop((left + 2, top + 2, right - 2, bottom - 2)).convert("L")
+            # `screen` a ete pris avant l'ouverture de la boite : analyser la
+            # fenetre deja capturee, sinon on mesure le bureau a cet endroit.
+            piece = frame.crop(
+                (
+                    left - area[0] + 2,
+                    top - area[1] + 2,
+                    right - area[0] - 2,
+                    bottom - area[1] - 2,
+                )
+            ).convert("L")
             if ImageStat.Stat(piece).stddev[0] < 1.0:
                 raise RuntimeError(f"bouton visuellement vide : {button}")
         text, _words = _ocr(frame)
