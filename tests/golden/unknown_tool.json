@@ -1,0 +1,58 @@
+{
+  "effects": {
+    "dispatched": [
+      "fs_shred_everything"
+    ],
+    "files_created": [],
+    "ok": true,
+    "provider_requests": 2,
+    "stop_reason": "final",
+    "tool_error_codes": [
+      "unknown_tool"
+    ]
+  },
+  "events": [
+    {
+      "type": "run_started"
+    },
+    {
+      "type": "step_started"
+    },
+    {
+      "type": "llm_request"
+    },
+    {
+      "sensitive": false,
+      "step": 1,
+      "tool": "fs_shred_everything",
+      "type": "tool_started"
+    },
+    {
+      "error_code": "unknown_tool",
+      "ok": false,
+      "sensitive": false,
+      "step": 1,
+      "tool": "fs_shred_everything",
+      "type": "tool_finished"
+    },
+    {
+      "step": 1,
+      "type": "llm_response"
+    },
+    {
+      "type": "step_started"
+    },
+    {
+      "type": "llm_request"
+    },
+    {
+      "step": 2,
+      "type": "final"
+    },
+    {
+      "ok": true,
+      "stop_reason": "final",
+      "type": "run_finished"
+    }
+  ]
+}

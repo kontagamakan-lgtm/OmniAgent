@@ -1,0 +1,9 @@
+{
+  "effects": {
+    "notification_attempts": 1,
+    "results": 1,
+    "session_lines": 1,
+    "session_ok": true
+  },
+  "events": []
+}

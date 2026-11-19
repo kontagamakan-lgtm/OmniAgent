@@ -66,6 +66,22 @@ def test_critical_effects_are_asserted_directly() -> None:
     assert schedule["runs"] == 0
     assert schedule["session_lines"] == 1
 
+    stream = harness.SCENARIOS["cancel_during_stream"]()["effects"]
+    assert stream["dispatched"] == []
+    assert stream["stop_reason"] == "cancelled"
+    assert stream["provider_requests"] == 1
+
+    unknown = harness.SCENARIOS["unknown_tool"]()["effects"]
+    assert unknown["dispatched"] == ["fs_shred_everything"]
+    assert unknown["tool_error_codes"] == ["unknown_tool"]
+    assert unknown["files_created"] == []
+    assert unknown["ok"] is True
+
+    notification = harness.SCENARIOS["notification_failure"]()["effects"]
+    assert notification["session_ok"] is True
+    assert notification["notification_attempts"] == 1
+    assert notification["session_lines"] == 1
+
     secret = harness.SCENARIOS["prompt_without_secret"]()["effects"]
     assert secret["secret_in_prompts"] is False
     assert secret["secret_in_trace"] is False

@@ -1,6 +1,6 @@
 """Harnais de golden traces déterministes.
 
-Six invariants critiques sont exercés hors ligne, avec les vrais outils, le
+Neuf invariants critiques sont exercés hors ligne, avec les vrais outils, le
 vrai registre, les vraies propositions et de vrais effets sur disque :
 
 * `resume_no_effect_replay` : la reprise rejoue la lecture et ne dispatche
@@ -13,7 +13,13 @@ vrai registre, les vraies propositions et de vrais effets sur disque :
 * `scheduled_slot_already_honored` : une fenêtre déjà honorée ne relance
   aucune session et n'ajoute aucune ligne ;
 * `prompt_without_secret` : le secret du coffre n'apparaît ni dans les
-  messages envoyés au modèle, ni dans la trace, ni en clair sur disque.
+  messages envoyés au modèle, ni dans la trace, ni en clair sur disque ;
+* `cancel_during_stream` : l'annulation pendant le flux coupe la boucle sans
+  outil ni seconde requête ;
+* `unknown_tool` : un outil absent du registre est refusé, le run continue et
+  aucun effet n'est produit ;
+* `notification_failure` : une notification qui échoue ne fait pas échouer la
+  session planifiée et n'empêche pas l'écriture du journal.
 
 Chaque scénario produit deux faits comparés **exactement** à
 `tests/golden/<scenario>.json` :
@@ -559,6 +565,151 @@ def _text(text: str) -> LLMResponse:
     return LLMResponse(text=text, finish_reason="stop")
 
 
+class StreamingCanceller:
+    """Émet un fragment, demande l'annulation, puis tente un second fragment."""
+
+    supports_stream = True
+
+    def __init__(self) -> None:
+        self.agent: Any = None
+        self.calls = 0
+
+    def stream_complete(self, messages, tools=None, on_token=None):
+        self.calls += 1
+        assert on_token is not None
+        on_token("premier fragment")
+        if self.agent is not None:
+            self.agent.cancel()
+        on_token("second fragment")  # doit lever Cancelled dans `_forward`
+        return LLMResponse(text="inatteignable", finish_reason="stop")
+
+    def close(self) -> None:
+        return
+
+
+def cancel_during_stream() -> dict[str, Any]:
+    """L'annulation au milieu du flux arrête sans outil ni requête suivante."""
+    with tmpdir("golden-flux") as tmp:
+        llm = StreamingCanceller()
+        run = Run(tmp, llm=llm, **{"llm.stream": True})
+        llm.agent = run.bundle.agent
+        try:
+            reply = run.bundle.agent.run("reponds en flux")
+        finally:
+            run.close()
+        return {
+            "events": run.events(),
+            "effects": {
+                "dispatched": run.dispatched,
+                "stop_reason": reply.stop_reason,
+                "error_code": reply.error_code,
+                "provider_requests": llm.calls,
+                "stream_chunks": len(
+                    [
+                        record
+                        for record in read_events(run.trace_path())
+                        if record.get("type") == "stream_chunk"
+                    ]
+                ),
+            },
+        }
+
+
+def unknown_tool() -> dict[str, Any]:
+    """Un outil inconnu est refusé sans effet ; le run peut conclure."""
+    with tmpdir("golden-inconnu") as tmp:
+        run = Run(
+            tmp,
+            llm=ScriptedLLM(
+                [
+                    _call("fs_shred_everything", path=str(tmp / "secret.txt")),
+                    _final("outil refuse, rien fait"),
+                ]
+            ),
+        )
+        try:
+            reply = run.bundle.agent.run("utilise l'outil interdit")
+            trace = run.trace_path()
+            records = list(read_events(trace))
+        finally:
+            run.close()
+        codes = [
+            str(record.get("payload", {}).get("error_code") or "")
+            for record in records
+            if record.get("type") == "tool_finished"
+        ]
+        return {
+            "events": run.events(),
+            "effects": {
+                "dispatched": run.dispatched,
+                "stop_reason": reply.stop_reason,
+                "ok": reply.ok,
+                "tool_error_codes": codes,
+                "files_created": sorted(path.name for path in tmp.glob("*.txt")),
+                "provider_requests": len(run.llm.calls),
+            },
+        }
+
+
+def notification_failure() -> dict[str, Any]:
+    """Une toast qui échoue ne change ni le run planifié ni son journal."""
+    with tmpdir("golden-notification") as tmp:
+        settings = make_settings(tmp)
+        settings.autonomy.notify_on_session = True
+        goals = goals_path(settings)
+        goals.parent.mkdir(parents=True, exist_ok=True)
+        goals.write_text("- produire un bilan\n", encoding="utf-8")
+
+        class _Reply:
+            ok = True
+            text = "fait"
+            stop_reason = "final"
+            error = ""
+
+        class _Agent:
+            bus = None
+            registry = None
+            run_id = "run-notification"
+
+            def run(self, task):
+                return _Reply()
+
+            def cancel(self) -> None:
+                pass
+
+            def reset_cancel(self) -> None:
+                pass
+
+        attempts: list[str] = []
+
+        def broken_notifier(title: str, message: str) -> bool:
+            attempts.append(title)
+            raise RuntimeError("PowerShell indisponible")
+
+        results = run_scheduled(
+            settings,
+            _Agent(),
+            max_checks=1,
+            now=lambda: datetime(2026, 1, 2, 2, 0),
+            idle=lambda: 600.0,
+            on_battery=lambda: False,
+            sleep=lambda _seconds: None,
+            notify=broken_notifier,
+        )
+        log = sessions_path(settings)
+        return {
+            "events": [],
+            "effects": {
+                "results": len(results),
+                "session_ok": results[0]["ok"] if results else None,
+                "notification_attempts": len(attempts),
+                "session_lines": len(log.read_text(encoding="utf-8").splitlines())
+                if log.is_file()
+                else 0,
+            },
+        }
+
+
 SCENARIOS: dict[str, Callable[[], dict[str, Any]]] = {
     "resume_no_effect_replay": resume_no_effect_replay,
     "proposal_approval": proposal_approval,
@@ -566,6 +717,9 @@ SCENARIOS: dict[str, Callable[[], dict[str, Any]]] = {
     "budget_exhausted": budget_exhausted,
     "scheduled_slot_already_honored": scheduled_slot_already_honored,
     "prompt_without_secret": prompt_without_secret,
+    "cancel_during_stream": cancel_during_stream,
+    "unknown_tool": unknown_tool,
+    "notification_failure": notification_failure,
 }
 
 
