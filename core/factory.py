@@ -60,6 +60,7 @@ class AgentBundle:
     owns_llm: bool = False
     metrics: Any = None
     _unsubscribe_metrics: Any = field(default=None, repr=False)
+    _unsubscribe_file_tx: Any = field(default=None, repr=False)
     _closed: bool = field(default=False, repr=False)
 
     def tool_names(self) -> list[str]:
@@ -70,6 +71,12 @@ class AgentBundle:
         if self._closed:
             return
         self._closed = True
+        if self._unsubscribe_file_tx is not None:
+            try:
+                self._unsubscribe_file_tx()
+            except Exception:  # noqa: BLE001 - désabonnement best effort
+                logger.debug("désabonnement de la transaction fichiers impossible", exc_info=True)
+            self._unsubscribe_file_tx = None
         if self._unsubscribe_metrics is not None:
             try:
                 self._unsubscribe_metrics()
@@ -189,11 +196,15 @@ def build_agent(
     # référence au fichier.
     metrics = build_metrics(settings)
     unsubscribe_metrics = agent.bus.subscribe(metrics) if metrics is not None else None
+    # Transaction par run : journal et instantanés des seuls fichiers touchés,
+    # ouverts au début de l'exécution et refermés à la fin.
+    unsubscribe_file_tx = files.attach_transactions(agent.bus)
     return AgentBundle(
         agent=agent,
         registry=registry,
         metrics=metrics,
         _unsubscribe_metrics=unsubscribe_metrics,
+        _unsubscribe_file_tx=unsubscribe_file_tx,
         settings=settings,
         vault=vault,
         files=files,

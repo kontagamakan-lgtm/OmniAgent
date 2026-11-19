@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from config import APP_ID, Settings
+from core.file_tx import FileTransaction, transaction_dir
 from tools.base import FunctionTool, Tool, ToolError, object_schema, param
 
 __all__ = [
@@ -120,6 +121,81 @@ class FileManager:
             self.roots = [Path.cwd().resolve()]
         self.workspace = self.roots[0]
         self.denied = [self._normalize_pattern(p) for p in settings.files.denied_globs]
+        #: Transaction du run en cours (journal + instantanés), ouverte par le
+        #: bus à `run_started` et refermée à `run_finished`.
+        self.transaction: FileTransaction | None = None
+
+    # -- transaction par run ------------------------------------------------
+
+    def attach_transactions(self, bus: Any) -> Any:
+        """Suit les runs du bus : une transaction par exécution.
+
+        Retourne la fonction de désabonnement, à stocker par le propriétaire du
+        bundle. Aucun fichier n'est copié tant qu'aucun outil n'écrit.
+        """
+        from core.events import EventType
+
+        def handler(event: Any) -> None:
+            if event.type == EventType.RUN_STARTED:
+                self.begin_transaction(str(event.run_id or ""))
+            elif event.type == EventType.RUN_FINISHED:
+                payload = event.payload if isinstance(event.payload, dict) else {}
+                self.finish_transaction(
+                    ok=bool(payload.get("ok")),
+                    stop_reason=str(payload.get("stop_reason") or ""),
+                )
+
+        return bus.subscribe(
+            handler, types=(EventType.RUN_STARTED, EventType.RUN_FINISHED)
+        )
+
+    def begin_transaction(self, run_id: str) -> None:
+        """Ouvre le journal du run ; une panne disque laisse les outils intacts."""
+        if not run_id:
+            return
+        directory = transaction_dir(self.settings, run_id)
+        if directory is None:
+            logger.warning("identifiant de run inattendu, transaction ignorée : %r", run_id)
+            return
+        try:
+            transaction = FileTransaction(
+                directory,
+                run_id=run_id,
+                roots=[str(root) for root in self.roots],
+            )
+            transaction.begin()
+        except OSError:
+            logger.warning("transaction de run non ouverte", exc_info=True)
+            self.transaction = None
+            return
+        self.transaction = transaction
+
+    def finish_transaction(self, *, ok: bool, stop_reason: str = "") -> None:
+        transaction = self.transaction
+        self.transaction = None
+        if transaction is None:
+            return
+        transaction.finish(ok=ok, stop_reason=stop_reason)
+
+    def _tx_write(self, path: Path) -> None:
+        if self.transaction is not None:
+            self.transaction.will_write(path)
+
+    def _tx_create(self, path: Path) -> None:
+        if self.transaction is not None:
+            self.transaction.will_create(path)
+
+    def _tx_mkdir(self, path: Path) -> None:
+        if self.transaction is not None:
+            self.transaction.will_mkdir(path)
+
+    def _tx_delete(self, path: Path) -> None:
+        if self.transaction is not None:
+            self.transaction.will_delete(path)
+
+    def _tx_move(self, source: Path, destination: Path) -> None:
+        if self.transaction is not None:
+            self.transaction.will_move(source, destination)
 
     # -- confinement --------------------------------------------------------
 
@@ -374,6 +450,7 @@ class FileManager:
                 f"écriture refusée : {_human_size(len(data))} > {_human_size(limit)}"
             )
 
+        self._tx_write(target)
         backup_path = ""
         if mode == "a" and target.exists():
             with target.open("ab") as handle:
@@ -407,6 +484,7 @@ class FileManager:
         if existed and not target.is_dir():
             raise FileOperationError(f"un fichier occupe ce chemin : {target}")
         if not existed:
+            self._tx_mkdir(target)
             target.mkdir(parents=parents, exist_ok=True)
         return {"path": str(target), "created": not existed}
 
@@ -467,6 +545,7 @@ class FileManager:
                     results.append({"source": str(source), "status": "ignoré (existe déjà)"})
                     continue
                 reserved.add(str(target).lower())
+                self._tx_create(target)
                 if source.is_dir():
                     shutil.copytree(source, target, dirs_exist_ok=False)
                 else:
@@ -494,6 +573,7 @@ class FileManager:
                     results.append({"source": str(source), "status": "ignoré (existe déjà)"})
                     continue
                 reserved.add(str(target).lower())
+                self._tx_move(source, target)
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.move(str(source), str(target))
                 results.append({"source": str(source), "target": str(target), "status": "déplacé"})
@@ -522,6 +602,7 @@ class FileManager:
                 target = self._resolve(raw, must_exist=True)
                 if target in self.roots:
                     raise PathNotAllowed(f"suppression d'une racine autorisée refusée : {target}")
+                self._tx_delete(target)
                 if recycle and os.name == "nt":
                     ok, error = _recycle_paths([target])
                     if ok:
@@ -591,6 +672,7 @@ class FileManager:
                     if step["status"] != "prévu":
                         continue
                     source, target = Path(step["source"]), Path(step["target"])
+                    self._tx_move(source, target)
                     source.rename(target)
                     moved.append((target, source))
                     step["status"] = "renommé"
@@ -806,6 +888,10 @@ class FileManager:
                 source = Path(step["source"])
                 target = Path(step["target"])
                 try:
+                    if copy:
+                        self._tx_create(target)
+                    else:
+                        self._tx_move(source, target)
                     target.parent.mkdir(parents=True, exist_ok=True)
                     if copy:
                         shutil.copy2(source, target)
@@ -838,6 +924,7 @@ class FileManager:
         if target.exists():
             raise FileOperationError(f"l'archive existe déjà : {target}")
         target.parent.mkdir(parents=True, exist_ok=True)
+        self._tx_create(target)
         mode = zipfile.ZIP_STORED if compression == "store" else zipfile.ZIP_DEFLATED
         added = 0
         with zipfile.ZipFile(target, "w", compression=mode) as archive:
@@ -884,8 +971,10 @@ class FileManager:
                 if target.exists() and not overwrite and not member.is_dir():
                     raise FileOperationError(f"fichier déjà présent : {target}")
                 if member.is_dir():
+                    self._tx_mkdir(target)
                     target.mkdir(parents=True, exist_ok=True)
                     continue
+                self._tx_create(target)
                 target.parent.mkdir(parents=True, exist_ok=True)
                 with archive.open(member) as src, target.open("wb") as dst:
                     shutil.copyfileobj(src, dst)
@@ -969,6 +1058,7 @@ class FileManager:
         if target.exists():
             raise FileOperationError(f"la destination existe déjà : {target}")
 
+        self._tx_create(target)
         getattr(self, f"_convert_{kind}")(src, target)
         return {
             "source": str(src),

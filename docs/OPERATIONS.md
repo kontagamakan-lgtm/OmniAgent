@@ -131,6 +131,27 @@ au démarrage avec le libellé exact et le raccourci de fenêtre reste
 disponible. Le fichier n'est jamais supprimé automatiquement : retirez-le avant
 de relancer une session.
 
+## Transaction par run et annulation
+
+Chaque exécution ouvre une transaction dans `data/transactions/<run_id>/` :
+`journal.jsonl` note l'intention **avant** chaque mutation (écriture, copie,
+déplacement, suppression, création, extraction, conversion), et `snapshots/`
+ne contient que les fichiers réellement touchés, en-tête compris. Les outils de
+lecture ne créent ni copie ni entrée.
+
+```bat
+python -m core.file_tx --list
+python -m core.file_tx --undo <run_id>          :: apercu, aucune écriture
+python -m core.file_tx --undo <run_id> --apply  :: restaure
+```
+
+L'annulation rejoue les intentions à l'envers : elle restaure les octets
+d'origine, supprime ce que le run a créé et remet en place ce qu'il a déplacé.
+Elle ne touche que les chemins du journal et refuse un chemin sorti des racines
+enregistrées. L'instantané est plafonné (256 Mio par run) : au-delà,
+l'intention reste notée mais l'annulation signale qu'elle ne peut pas
+restaurer. Ce n'est pas une sauvegarde, seulement le retour arrière d'un run.
+
 ## Reprise d'une trace interrompue
 
 ```bat
