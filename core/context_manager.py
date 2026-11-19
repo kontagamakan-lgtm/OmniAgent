@@ -97,17 +97,15 @@ def summarize(messages: Sequence[Mapping[str, Any]]) -> str:
         label = _LABELS.get(str(message.get("role", "")), "?")
         lines.append(f"- {label}: {body}")
 
-    signatures = _tool_signatures(messages)
-    block = f"\n{_SIGNATURE_HEADER}\n" + "\n".join(signatures) if signatures else ""
-    # Les signatures passent en priorité : elles évitent une boucle, alors que
-    # le détail ligne à ligne est du confort. On leur réserve la place d'abord.
     text = "\n".join(lines)
-    room = SUMMARY_MAX_CHARS - len(block)
-    if room <= 0:
-        text = block[:_SIGNATURE_ITEM_MAX_CHARS]
-    else:
+    signatures = _tool_signatures(messages)
+    if signatures:
+        # Les signatures passent en priorité : elles évitent une boucle, alors
+        # que le détail ligne à ligne est du confort.
+        block = f"\n{_SIGNATURE_HEADER}\n" + "\n".join(signatures)
+        room = SUMMARY_MAX_CHARS - len(block)
         if len(text) > room:
-            text = text[: max(0, room - 1)] + "…"
+            text = text[: max(0, room - 1)] + ("…" if room > 0 else "")
         text += block
     if len(text) > SUMMARY_MAX_CHARS:
         text = text[:SUMMARY_MAX_CHARS] + "\n…[résumé tronqué]"
