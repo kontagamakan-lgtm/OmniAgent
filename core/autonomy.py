@@ -194,9 +194,11 @@ class AutonomySession:
         records: list[dict[str, Any]] = []
         failures = 0
         previous = None
+        installed = False
         registry = getattr(self.agent, "registry", None)
         if registry is not None and hasattr(registry, "set_confirm"):
             previous = registry.set_confirm(self._deny)
+            installed = True
         try:
             for number in range(1, total + 1):
                 if self.stop.is_set():
@@ -219,7 +221,10 @@ class AutonomySession:
                 if number < total and self.stop.wait(interval):
                     break
         finally:
-            if registry is not None and previous is not None:
+            # Drapeau, pas `previous is not None` : l'absence de confirmateur
+            # avant la session est un état à restaurer aussi, sinon le refus
+            # autonome resterait installé pour toutes les tâches suivantes.
+            if installed:
                 registry.set_confirm(previous)
         return records
 

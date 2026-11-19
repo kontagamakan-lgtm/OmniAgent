@@ -154,6 +154,23 @@ def test_dangerous_tools_are_denied_then_the_confirm_handler_is_restored() -> No
         assert registry.confirm == "interface", "le confirmateur d'origine doit revenir"
 
 
+def test_the_confirm_handler_is_restored_to_none() -> None:
+    with tmpdir("autonomie-sans-confirmateur") as tmp:
+        settings = make_settings(tmp)
+        _write_goals(settings)
+        registry = _Registry()
+        registry.confirm = None  # aucune confirmation armée avant la session
+        agent = _Agent([_Reply()], registry=registry)
+        session = AutonomySession(settings, agent)
+
+        session.run(cycles=1, interval_s=0)
+
+        assert agent.denied is True, "le refus s'applique pendant la session"
+        assert registry.confirm is None, (
+            "sans confirmateur avant, il ne doit pas en rester un après"
+        )
+
+
 def test_goals_can_come_from_a_configured_file() -> None:
     with tmpdir("autonomie-fichier") as tmp:
         settings = make_settings(tmp)
