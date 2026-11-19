@@ -105,12 +105,111 @@ def test_trace_writes_one_redacted_file_per_run() -> None:
 
         finished = [r for r in records if r["type"] == "tool_finished"]
         assert finished and finished[0]["payload"]["sensitive"] is True
+        started = [r for r in records if r["type"] == "tool_started"]
+        assert started, "l'outil sensible n'a pas été tracé"
+        assert started[0]["payload"]["sensitive"] is True
+        assert started[0]["payload"]["arguments"] == {}, (
+            "les arguments d'un outil sensible ne doivent pas être tracés"
+        )
         assert RESULT_SECRET not in raw, "un résultat d'outil sensible a fuité"
         assert ARGUMENT_SECRET not in raw, "un secret passé en argument a fuité"
-        assert CREDENTIAL_SECRET not in raw, (
-            "un argument nommé credential doit être masqué par son nom"
+        assert CREDENTIAL_SECRET not in raw, "un argument sensible a fuité"
+        assert NOTE_SECRET not in raw, (
+            "une valeur libre sous une clé neutre ne doit pas être tracée"
         )
-        assert "MASQUÉ" in raw, "le masquage doit rester visible dans la trace"
+        assert "credential" not in raw and "passphrase" not in raw, (
+            "même le nom des arguments sensibles doit rester hors de la trace"
+        )
+
+
+def _old_trace(directory: Path, name: str, *, age_days: float = 0.0, size: int = 0) -> Path:
+    path = directory / f"{name}.jsonl"
+    body = '{"type": "run_started", "payload": {}, "seq": 0, "run_id": "x"}\n'
+    path.write_text(body + "x" * size, encoding="utf-8")
+    if age_days:
+        stamp = time.time() - age_days * 86_400
+        os.utime(path, (stamp, stamp))
+    return path
+
+
+def test_retention_caps_run_count_and_age() -> None:
+    with tmpdir("retention") as tmp:
+        directory = Path(tmp) / "runs"
+        directory.mkdir()
+        for index in range(5):
+            _old_trace(directory, f"ancien{index}")
+        too_old = _old_trace(directory, "tres-vieux", age_days=40)
+
+        trace = RunTrace(directory, max_runs=3, max_age_days=30, max_bytes=0)
+        trace(Event(type=EventType.RUN_STARTED, run_id="courant"))
+        trace.close()
+
+        names = sorted(path.stem for path in directory.glob("*.jsonl"))
+        assert "courant" in names, "la trace courante ne doit jamais être supprimée"
+        assert not too_old.exists(), "une trace plus vieille que la limite disparaît"
+        assert len(names) == 3, f"max_runs=3 doit laisser 3 fichiers, pas {names}"
+
+
+def test_retention_caps_total_size() -> None:
+    with tmpdir("retention") as tmp:
+        directory = Path(tmp) / "runs"
+        directory.mkdir()
+        for index in range(4):
+            _old_trace(directory, f"lourd{index}", size=1_000)
+
+        trace = RunTrace(directory, max_runs=50, max_age_days=0, max_bytes=2_500)
+        trace(Event(type=EventType.RUN_STARTED, run_id="courant"))
+        trace.close()
+
+        paths = list(directory.glob("*.jsonl"))
+        names = sorted(path.stem for path in paths)
+        total = sum(path.stat().st_size for path in paths)
+        assert "courant" in names, "la trace courante ne doit jamais être supprimée"
+        assert total <= 2_500, f"taille totale {total} au-delà du plafond"
+        assert len(names) < 5, "les plus anciennes doivent avoir été supprimées"
+
+
+def test_trace_file_is_bounded_while_writing() -> None:
+    """Un run bavard seul ne dépasse pas `max_bytes` : l'écriture s'arrête."""
+    with tmpdir("plafond") as tmp:
+        directory = Path(tmp) / "runs"
+        trace = RunTrace(directory, max_runs=10, max_age_days=0, max_bytes=400)
+        trace(Event(type=EventType.RUN_STARTED, run_id="bavard"))
+        for _ in range(50):
+            trace(
+                Event(
+                    type=EventType.STREAM_CHUNK,
+                    payload={"step": 1, "text": "x" * 50},
+                    run_id="bavard",
+                )
+            )
+        trace.close()
+
+        assert trace.path is not None
+        size = trace.path.stat().st_size
+        assert trace.truncated is True, "le plafond doit être signalé"
+        assert size <= 400, f"fichier de {size} octets au-delà du plafond"
+        records = list(read_events(trace.path))
+        assert records and records[0]["type"] == "run_started"
+        assert len(records) < 51, "toutes les lignes ont été écrites malgré le plafond"
+
+
+def test_read_events_ignores_a_truncated_final_line() -> None:
+    with tmpdir("lecture") as tmp:
+        path = Path(tmp) / "run.jsonl"
+        path.write_text(
+            '{"type": "run_started", "seq": 0}\n'
+            "\n"
+            '{"type": "final", "seq": 1}\n'
+            '{"type": "run_finished", "seq": 2',
+            encoding="utf-8",
+        )
+
+        records = list(read_events(path))
+
+        assert [record["type"] for record in records] == ["run_started", "final"], (
+            "une dernière ligne tronquée est ignorée, pas les précédentes"
+        )
 
 
 def test_trace_opens_a_new_file_for_each_run() -> None:
