@@ -35,9 +35,10 @@ indiquées.
   correction). Le raccourci a été lancé depuis le menu Démarrer et a créé un
   `pythonw.exe`, arrêté après le contrôle. Une toast réelle avec les boutons
   `Ouvrir la trace` et `Arrêter` a été affichée ; un clic réel sur `Arrêter` a
-  écrit `data/autonomy/STOP`, supprimé après l'essai. Le bouton `Ouvrir la
-  trace` n'a pas été cliqué physiquement, mais son chemin est couvert par
-  `app._notify_action` et les tests de protocole.
+  écrit `data/autonomy/STOP`, supprimé après l'essai. Un clic réel sur `Ouvrir
+  la trace` a ouvert l'Explorateur sur `data/logs/runs` (trace jetable), sans
+  créer `STOP` ; le raccourci a été relancé après réinstallation avec l'icône
+  `assets/icon.ico` et a créé un `pythonw.exe`, arrêté ensuite.
 - **Approbation (#6) — dialogue explicite et parcours réel testés.** Les trois
   choix sont `Autoriser une fois`, `Autoriser pour la session` et `Refuser` ;
   `Refuser` est le bouton par défaut, et fermer la fenêtre (ou Échap) refuse.
@@ -373,18 +374,36 @@ python app.py --notify-action omniagent://trace/<run_id>
 python app.py --notify-action omniagent://stop
 ```
 
-Le raccourci porte l'AppUserModelID `OmniAgent.Desktop` ; les toasts de fin de
-session proposent « Ouvrir la trace » et « Arrêter ». Si Windows refuse la
-version avec boutons, une toast simple est affichée ; si PowerShell est
-indisponible, la session continue et l'échec est journalisé.
+Le raccourci porte l'AppUserModelID `OmniAgent.Desktop` et l'icône
+`assets/icon.ico` ; les toasts de fin de session proposent « Ouvrir la trace »
+(bouton associé à `omniagent://trace/<run_id>`) et « Arrêter »
+(`omniagent://stop`). Le protocole enregistré lance `pythonw.exe` **avec
+`app.py`** puis `--notify-action "%1"`. Si Windows refuse la version avec
+boutons, une toast simple est affichée ; si PowerShell est indisponible, la
+session continue et l'échec est journalisé. Les deux boutons ont été cliqués
+réellement le 2026-11-19 : `Arrêter` a écrit le fichier STOP, `Ouvrir la trace`
+a ouvert le dossier des traces ; STOP et la trace jetable ont été nettoyés.
 
-Les captures historiques de la toast et du chemin `.lnk`/protocole sont
-versionnées : `artifacts/visual/toast.png`,
-`artifacts/visual/notification_path.png` et leurs entrées dans
-`artifacts/visual/manifest.json`. Elles ne remplacent pas la vérification
-manuelle du raccourci, du protocole et des boutons décrite dans « Limites
-connues et vérifications manuelles » ; cette vérification n'a pas été
-rejouée ici.
+Les captures de la toast et du chemin `.lnk`/protocole sont versionnées :
+`artifacts/visual/toast.png`, `artifacts/visual/notification_path.png` et
+leurs entrées dans `artifacts/visual/manifest.json`. Elles sont régénérées par
+`python tools/visual_check.py --capture` ; ce contrôle vérifie la géométrie,
+les pixels et l'OCR, mais ne clique pas les boutons de la toast.
+
+### DPI et multi-écran
+
+La capture utilise `ImageGrab.grab(all_screens=True)` et recadre avec l'origine
+virtuelle `SM_XVIRTUALSCREEN`/`SM_YVIRTUALSCREEN`, donc un écran placé à gauche
+ou au-dessus de l'écran principal (coordonnées négatives) reste dans l'image.
+La géométrie de la fenêtre et les rectangles des boutons sont convertis dans
+ce repère avant le crop. Une capture pré-ouverture n'est jamais réutilisée.
+
+Mesure réelle du 2026-11-19 : écran 1920×1080, **DPI 120 (125 %)**, un seul
+écran physique ; la capture et l'OCR passent avec `per-monitor` awareness. Le
+cas d'une origine négative est couvert par
+`tests/test_visual_artifacts.py::test_button_crop_uses_the_captured_frame_and_virtual_origin`.
+Un second écran physique n'était pas disponible : le branchement multi-écran
+réel reste à confirmer sur une station à deux moniteurs.
 
 ## Répétition de restauration
 
