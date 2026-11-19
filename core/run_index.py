@@ -202,14 +202,12 @@ class RunIndex:
         ne répète pas le manifeste du début, et perdre le modèle ou la version
         au moment où le run se termine viderait l'index de son intérêt.
         """
-        latest: dict[str, RunRecord] = {}
-        for record in self.records():
-            if not record.run_id:
-                continue
-            previous = latest.get(record.run_id)
-            latest[record.run_id] = record if previous is None else _merge(previous, record)
         return dict(
-            sorted(latest.items(), key=lambda item: item[1].updated, reverse=True)
+            sorted(
+                _latest(self.records()).items(),
+                key=lambda item: item[1].updated,
+                reverse=True,
+            )
         )
 
     def _present_run_ids(self) -> set[str]:
@@ -229,9 +227,10 @@ class RunIndex:
 
         Les états des runs présents sont conservés fusionnés (dernier état
         connu), donc un run terminé garde son modèle, sa version et sa raison
-        d'arrêt. Seules les exécutions dont la rétention a supprimé la trace
-        disparaissent : la taille de l'index suit le nombre de traces, pas le
-        nombre de runs historiques.
+        d'arrêt. Un run repris plusieurs fois — plusieurs `started`, plusieurs
+        `finished` — ne laisse donc qu'une seule ligne. Seules les exécutions
+        dont la rétention a supprimé la trace disparaissent : la taille de
+        l'index suit le nombre de traces, pas le nombre d'écritures.
 
         Un index est un cache : si une autre écriture se glisse pendant la
         réécriture, on renonce plutôt que de la perdre (le prochain passage la
@@ -241,13 +240,14 @@ class RunIndex:
             before = self.path.stat()
         except OSError:
             return False
-        latest = self.entries()
+        records = list(self.records())
+        latest = _latest(records)
         present = self._present_run_ids()
         kept = {
             run_id: record for run_id, record in latest.items() if run_id in present
         }
-        if len(kept) == len(latest):
-            return False  # rien de périmé : ne pas réécrire pour rien
+        if len(kept) == len(latest) and len(records) == len(kept):
+            return False  # déjà une ligne par run présent : ne rien réécrire
         tmp = self.path.with_name(self.path.name + ".tmp")
         try:
             with tmp.open("w", encoding="utf-8") as handle:
@@ -313,6 +313,17 @@ class RunIndex:
 # ---------------------------------------------------------------------------
 # Détection des runs interrompus
 # ---------------------------------------------------------------------------
+
+
+def _latest(records: Iterator[RunRecord]) -> dict[str, RunRecord]:
+    """Dernier état connu par exécution, en fusionnant les lignes successives."""
+    latest: dict[str, RunRecord] = {}
+    for record in records:
+        if not record.run_id:
+            continue
+        previous = latest.get(record.run_id)
+        latest[record.run_id] = record if previous is None else _merge(previous, record)
+    return latest
 
 
 def _merge(previous: RunRecord, record: RunRecord) -> RunRecord:

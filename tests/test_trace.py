@@ -560,6 +560,31 @@ def test_the_index_is_compacted_to_the_traces_still_present() -> None:
         assert index.compact() is False, "un index déjà compact ne doit pas être réécrit"
 
 
+def test_compaction_merges_repeated_states_of_a_present_run() -> None:
+    with tmpdir("index-doublons") as tmp:
+        directory = Path(tmp) / "runs"
+        directory.mkdir()
+        index = RunIndex(directory)
+        index.mark("repris", "started", manifest={"model": "m", "app_version": "1.0"})
+        index.mark("repris", "finished", ok=True, stop_reason="final")
+        index.mark("repris", "started")
+        index.mark("repris", "finished", ok=True, stop_reason="final")
+        (directory / "repris.jsonl").write_text("", encoding="utf-8")
+        before = len(index.path.read_text(encoding="utf-8").splitlines())
+        assert before == 4
+
+        assert index.compact() is True, "les états répétés doivent être dédupliqués"
+
+        lines = index.path.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 1, f"index non dédupliqué : {len(lines)} lignes"
+        entries = index.entries()
+        assert set(entries) == {"repris"}
+        assert entries["repris"].state == "finished"
+        assert entries["repris"].model == "m", "le manifeste du début doit survivre"
+        assert entries["repris"].ok is True
+        assert index.compact() is False, "un index déjà dédupliqué ne se réécrit pas"
+
+
 def test_retention_keeps_the_index_bounded_to_present_traces() -> None:
     with tmpdir("index-retention") as tmp:
         directory = Path(tmp) / "runs"
