@@ -166,6 +166,10 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             self.protocol("WM_DELETE_WINDOW", self._on_close)
 
             self._build_widgets()
+            try:
+                self._install_approval_gate()
+            except Exception:  # noqa: BLE001 - l'interface reste utilisable sans porte
+                logger.debug("porte d'approbation non installée", exc_info=True)
             if self._hotkey.start(self._global_stop_signal):
                 self._append(
                     "système",
@@ -382,6 +386,48 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
         def _cancel(self) -> None:
             self.controller.cancel()
             self._set_status("arrêt demandé…")
+
+        def _install_approval_gate(self) -> None:
+            """Branche les confirmations d'outils sur une boîte de dialogue."""
+            from core.approval import ApprovalGate
+
+            gate = ApprovalGate(
+                decide=self._tool_approval,
+                mode=str(self.settings.approvals.mode),
+                enabled=bool(self.settings.approvals.enabled),
+                session_grants=bool(self.settings.approvals.session_grants),
+                settings=self.settings,
+            )
+            self.bundle.registry.set_approval(gate)
+
+        def _tool_approval(self, request: Any) -> str:
+            """Demande la décision sur le fil Tk et attend, sans contournement."""
+            from tkinter import messagebox
+
+            outcome: dict[str, str] = {}
+            done = threading.Event()
+
+            def ask() -> None:
+                try:
+                    answer = messagebox.askyesnocancel(
+                        f"Confirmation requise — {request.tool}",
+                        request.preview[:1500]
+                        + "\n\nOui : autoriser une fois\n"
+                        "Non : autoriser pour la session\nAnnuler : refuser",
+                    )
+                    outcome["value"] = (
+                        "once" if answer is True else "session" if answer is False else "deny"
+                    )
+                finally:
+                    done.set()
+
+            try:
+                self.after(0, ask)
+            except Exception:  # noqa: BLE001 - fenêtre détruite : refus
+                return "deny"
+            if not done.wait(300):
+                return "deny"
+            return outcome.get("value", "deny")
 
         def _undo_last_run(self) -> None:
             """Aperçu du journal, puis annulation du dernier run après accord."""

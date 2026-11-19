@@ -12,12 +12,15 @@ Il ajoute à `ToolSet` les règles qui relèvent de la boucle et non des outils 
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable, Iterable, Mapping
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping
 
 from config import APP_ID
 from core.prompts import tool_catalogue
 from tools.base import Tool, ToolError, ToolResult, ToolSet
 from tools.spec import ToolSpec
+
+if TYPE_CHECKING:  # pragma: no cover - import de typage uniquement
+    from core.approval import ApprovalGate
 
 __all__ = ["NetworkGuard", "ToolError", "ToolRegistry", "ToolSpec"]
 
@@ -37,6 +40,7 @@ class ToolRegistry:
         max_output_chars: int = 12000,
         confirm: ConfirmHandler | None = None,
         network_guard: NetworkGuard | None = None,
+        approval: "ApprovalGate | None" = None,
     ) -> None:
         if isinstance(tools, ToolSet):
             self._tools = tools
@@ -45,6 +49,7 @@ class ToolRegistry:
         self.max_output_chars = max(0, int(max_output_chars))
         self._confirm = confirm
         self._network_guard = network_guard
+        self._approval = approval
         self._calls: dict[str, int] = {}
         self._failures: dict[str, int] = {}
         self._total_ms: dict[str, float] = {}
@@ -100,7 +105,14 @@ class ToolRegistry:
             if not allowed:
                 return ToolResult.failure(reason or "sortie réseau refusée", code="network_denied")
 
-        if tool.dangerous and not self._authorize(tool, payload):
+        if self._approval is not None and self._approval.required(tool):
+            allowed, reason = self._approval.authorize(tool, payload)
+            if not allowed:
+                return ToolResult.failure(
+                    reason or f"action '{tool.name}' non approuvee",
+                    code="confirmation_required",
+                )
+        elif tool.dangerous and not self._authorize(tool, payload):
             return ToolResult.failure(
                 f"action dangereuse '{tool.name}' non confirmée : demande l'accord "
                 "de l'utilisateur avant de réessayer",
@@ -123,6 +135,14 @@ class ToolRegistry:
         """
         previous = self._confirm
         self._confirm = confirm
+        if self._approval is not None:
+            self._approval.decide = confirm
+        return previous
+
+    def set_approval(self, approval: "ApprovalGate | None") -> "ApprovalGate | None":
+        """Installe la porte d'approbation (interface) et retourne la précédente."""
+        previous = self._approval
+        self._approval = approval
         return previous
 
     def _authorize(self, tool: Tool, arguments: Mapping[str, Any]) -> bool:

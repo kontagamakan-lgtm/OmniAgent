@@ -26,6 +26,7 @@ from config import APP_ID, Settings
 from core.agent_core import AgentCore
 from core.events import EventBus
 from core.llm_client import LLMClient
+from core.approval import build_approval_gate
 from core.budget import build_budget_recorder
 from core.metrics import build_metrics
 from core.profile import apply_profile, build_network_guard, resolve_profile
@@ -192,11 +193,14 @@ def build_agent(
                 logger.debug("fermeture après contrat invalide impossible", exc_info=True)
         raise
 
+    # Confirmateur historique (booléen) : une approbation vaut « une fois ».
+    approval = build_approval_gate(settings, confirm)
     registry = ToolRegistry(
         tools,
         max_output_chars=settings.agent.tool_output_max_chars,
         confirm=confirm,
         network_guard=build_network_guard(settings, run_profile),
+        approval=approval,
     )
     owns_llm = llm is None
     client = llm or LLMClient(settings.llm)

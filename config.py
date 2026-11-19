@@ -662,6 +662,15 @@ class IsolationConfig:
 
 
 @dataclass(slots=True)
+class ApprovalConfig:
+    """Approbation humaine au niveau de l'outil."""
+
+    enabled: bool = True
+    mode: Literal["dangerous", "write", "all", "none"] = "dangerous"
+    session_grants: bool = True
+
+
+@dataclass(slots=True)
 class LoggingConfig:
     """Journalisation et masquage des secrets."""
 
@@ -702,6 +711,7 @@ class Settings:
     budget: BudgetConfig = field(default_factory=BudgetConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     isolation: IsolationConfig = field(default_factory=IsolationConfig)
+    approvals: ApprovalConfig = field(default_factory=ApprovalConfig)
 
     # -- persistance --------------------------------------------------------
 
@@ -872,6 +882,11 @@ class Settings:
                 "enabled": self.metrics.enabled,
                 "max_entries": self.metrics.max_entries,
                 "max_bytes": self.metrics.max_bytes,
+            },
+            "approvals": {
+                "enabled": self.approvals.enabled,
+                "mode": self.approvals.mode,
+                "session_grants": self.approvals.session_grants,
             },
             "isolation": {
                 "profile": self.isolation.profile,
@@ -1154,6 +1169,13 @@ class Settings:
             err("metrics.max_entries", "doit être comprise entre 1 et 100000")
         if self.metrics.max_bytes < 1024:
             err("metrics.max_bytes", "doit être >= 1024 octets")
+
+        # --- Approbations d'outils
+        if self.approvals.mode not in {"dangerous", "write", "all", "none"}:
+            err(
+                "approvals.mode",
+                "mode inconnu (attendu : dangerous, write, all, none)",
+            )
 
         # --- Isolation par run
         if self.isolation.profile not in {"read-only", "files", "files-web", "full"}:
