@@ -41,11 +41,13 @@ __all__ = [
     "AuditEntry",
     "AuditReport",
     "audit_path",
+    "export_anchor",
     "record_hash",
     "record_policy_decision",
     "seal_all",
     "seal_trace",
     "verify",
+    "verify_anchor",
     "verify_trace",
 ]
 
@@ -284,11 +286,85 @@ def verify_trace(settings: Settings, trace: Path | str) -> list[str]:
     return problems
 
 
+def export_anchor(settings: Settings, destination: Path | str) -> dict[str, Any]:
+    """Copie le journal vers un support externe (USB, partage hors machine).
+
+    L'ancre est une copie exacte, volontairement sans mécanisme secret : sa
+    valeur vient du fait qu'elle quitte la machine. La vérification compare le
+    préfixe du journal courant à cette copie, donc une réécriture complète
+    (même rechaînée) est détectée tant que l'ancre est hors de portée de
+    l'attaquant.
+    """
+    source = audit_path(settings)
+    target = Path(destination)
+    try:
+        data = source.read_bytes() if source.is_file() else b""
+    except OSError as exc:
+        raise OSError(f"journal illisible : {exc}") from exc
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_name(target.name + ".tmp")
+    temporary.write_bytes(data)
+    temporary.replace(target)
+    entries = _parse_entries(data.decode("utf-8", errors="replace"))
+    return {
+        "path": str(target),
+        "entries": len(entries),
+        "head": str(entries[-1].get("hash") or "") if entries else "",
+    }
+
+
+def _parse_entries(text: str) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(value, dict):
+            entries.append(value)
+    return entries
+
+
+def verify_anchor(settings: Settings, anchor: Path | str) -> list[str]:
+    """Compare le journal courant au préfixe conservé hors machine."""
+    path = Path(anchor)
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return [f"ancre externe illisible : {exc}"]
+    anchored = _parse_entries(text)
+    if not anchored:
+        return ["ancre externe vide : aucune garantie"]
+    problems: list[str] = []
+    previous = ""
+    for index, entry in enumerate(anchored, start=1):
+        if int(entry.get("seq") or 0) != index:
+            problems.append(f"ancre entree {index} : sequence incoherente")
+        if str(entry.get("prev") or "") != previous:
+            problems.append(f"ancre entree {index} : chaine interne rompue")
+        if _entry_hash(entry) != str(entry.get("hash") or ""):
+            problems.append(f"ancre entree {index} : empreinte invalide")
+        previous = str(entry.get("hash") or "")
+    current = _Log(settings).read()
+    if len(current) < len(anchored):
+        problems.append(
+            f"journal plus court que l'ancre ({len(current)} < {len(anchored)} entrées)"
+        )
+    for index, expected in enumerate(anchored, start=1):
+        actual = current[index - 1] if index <= len(current) else {}
+        if str(actual.get("hash") or "") != str(expected.get("hash") or ""):
+            problems.append(f"entree {index} : differente de l'ancre externe")
+    return problems
+
+
 def verify(
     settings: Settings,
     *,
     key: bytes | None = None,
     traces: bool = True,
+    anchor: Path | str | None = None,
 ) -> AuditReport:
     """Vérifie la chaîne du journal, puis les racines des traces scellées."""
     report = AuditReport()
@@ -320,6 +396,10 @@ def verify(
             report.problems.extend(verify_trace(settings, path))
         report.traces = len(seen)
 
+    if anchor is not None:
+        report.problems.extend(verify_anchor(settings, anchor))
+        report.notes.append(f"ancre externe comparee : {anchor}")
+
     report.ok = not report.problems
     if report.ok and entries:
         report.notes.append(
@@ -337,6 +417,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--seal-all", action="store_true", help="scelle les traces non scellées")
     parser.add_argument("--seal", metavar="TRACE", help="scelle une trace précise")
     parser.add_argument("--verify", action="store_true", help="vérifie la chaîne et les traces")
+    parser.add_argument(
+        "--anchor",
+        metavar="FICHIER",
+        help="copie le journal hors machine, ou le compare avec --verify",
+    )
     args = parser.parse_args(argv)
 
     settings = Settings.load(strict=False)
@@ -350,8 +435,15 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print(f"Trace scellee : {entry.get('trace')} ({entry.get('count')} enregistrements)")
         return 0
+    if args.anchor and not args.verify:
+        result = export_anchor(settings, args.anchor)
+        print(
+            f"Ancre externe : {result['path']} "
+            f"({result['entries']} entree(s), tete {result['head'][:12] or '(vide)'})"
+        )
+        return 0
     if args.verify:
-        report = verify(settings)
+        report = verify(settings, anchor=args.anchor)
         print(report.format())
         return 0 if report.ok else 1
     parser.print_help()

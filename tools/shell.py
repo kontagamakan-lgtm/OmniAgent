@@ -1,14 +1,19 @@
 """Exécution de commandes shell, sous confirmation obligatoire.
 
-Ce n'est pas un bac à sable : la seule vraie barrière est la confirmation
-demandée par le registre (`dangerous=True`), complétée par des garde-fous
-utiles — répertoire de travail confiné aux racines autorisées, délai borné,
-sortie tronquée, et refus des commandes manifestement destructrices du disque.
+Ce n'est pas un bac à sable système : la seule vraie barrière reste la
+confirmation demandée par le registre (`dangerous=True`), complétée par des
+garde-fous utiles — répertoire de travail confiné aux racines autorisées,
+environnement expurgé des secrets, arbre de processus tué au délai, sortie
+tronquée et refus des commandes manifestement destructrices du disque. Un outil
+conservé garde les droits du processus ; pour les retirer, il faut un runtime
+séparé (conteneur, AppContainer, machine virtuelle).
 """
 
 from __future__ import annotations
 
 import logging
+import os
+import signal
 import subprocess
 import time
 from pathlib import Path
@@ -25,6 +30,32 @@ logger = logging.getLogger(f"{APP_ID}.shell")
 MAX_TIMEOUT_S = 120
 MAX_OUTPUT_CHARS = 20000
 MAX_COMMAND_CHARS = 4000
+_ESSENTIAL_ENV = {
+    "PATH",
+    "PATHEXT",
+    "SYSTEMROOT",
+    "WINDIR",
+    "COMSPEC",
+    "TEMP",
+    "TMP",
+    "USERPROFILE",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "TERM",
+    "PYTHONIOENCODING",
+}
+_SECRET_HINTS = (
+    "TOKEN",
+    "SECRET",
+    "PASSWORD",
+    "PASSWD",
+    "API_KEY",
+    "PRIVATE_KEY",
+    "CREDENTIAL",
+)
 
 # Filet de sécurité, pas une liste exhaustive : la confirmation reste le
 # véritable garde-fou. Ces motifs détruisent un disque en une commande.
@@ -46,6 +77,39 @@ class ShellRunner:
     def __init__(self, settings: Settings, manager: FileManager | None = None) -> None:
         self.settings = settings
         self.files = manager
+
+    def _environment(self) -> dict[str, str]:
+        """Environnement enfant sans secrets, mais utilisable (PATH, temp…).
+
+        Les variables essentielles sont conservées ; toute variable dont le nom
+        évoque un secret est retirée, y compris la clé du fournisseur courant.
+        Ce n'est pas une barrière de droits : un processus garde ceux de
+        l'utilisateur, mais il n'hérite plus des clés de l'application.
+        """
+        env: dict[str, str] = {}
+        for key, value in os.environ.items():
+            upper = key.upper()
+            if upper in _ESSENTIAL_ENV or not any(
+                hint in upper for hint in _SECRET_HINTS
+            ):
+                env[key] = value
+        env.pop(self.settings.llm.api_key_env, None)
+        return env
+
+    @staticmethod
+    def _kill_tree(process: subprocess.Popen) -> None:
+        """Tue la commande et ses enfants ; sans cela, un shell peut survivre."""
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+                capture_output=True,
+                check=False,
+            )
+            return
+        try:
+            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            process.kill()
 
     def _cwd(self, cwd: str) -> Path:
         if self.files is not None:
@@ -82,30 +146,36 @@ class ShellRunner:
         try:
             # `shell=True` est assumé : l'outil est marqué dangereux, donc
             # bloqué tant que l'utilisateur n'a pas confirmé la commande.
-            completed = subprocess.run(
+            process = subprocess.Popen(
                 text,
                 shell=True,
                 cwd=str(target),
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                timeout=timeout,
+                env=self._environment(),
+                start_new_session=os.name != "nt",
             )
+        except OSError as exc:
+            raise ToolError(f"exécution impossible : {exc}", code="command_failed") from exc
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
         except subprocess.TimeoutExpired as exc:
+            self._kill_tree(process)
+            process.communicate()
             raise ToolError(
                 f"commande interrompue après {timeout} s", code="command_timeout"
             ) from exc
-        except OSError as exc:
-            raise ToolError(f"exécution impossible : {exc}", code="command_failed") from exc
         duration_ms = round((time.perf_counter() - started) * 1000, 1)
-        stdout = completed.stdout or ""
-        stderr = completed.stderr or ""
+        stdout = stdout or ""
+        stderr = stderr or ""
         truncated = len(stdout) > MAX_OUTPUT_CHARS or len(stderr) > MAX_OUTPUT_CHARS
         return {
             "command": text,
             "cwd": str(target),
-            "returncode": completed.returncode,
+            "returncode": process.returncode,
             "stdout": stdout[:MAX_OUTPUT_CHARS],
             "stderr": stderr[:MAX_OUTPUT_CHARS],
             "truncated": truncated,
@@ -119,6 +189,9 @@ class ShellRunner:
             "max_output_chars": MAX_OUTPUT_CHARS,
             "roots": roots,
             "confirmation_required": True,
+            "environment_scrubbed": True,
+            "process_tree_killed_on_timeout": True,
+            "system_sandbox": False,
         }
 
 

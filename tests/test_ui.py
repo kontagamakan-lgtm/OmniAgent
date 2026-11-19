@@ -512,6 +512,34 @@ def test_context_trim_report_is_written_in_the_transcript() -> None:
     assert "5 résumé(s)" in text
 
 
+def test_approval_dialog_maps_yes_no_cancel_to_once_session_deny(monkeypatch) -> None:
+    """La boîte native à trois choix est traduite en une seule décision."""
+    from ui.app_gui import OmniAgentWindow
+
+    request = SimpleNamespace(tool="fs_delete", preview="Suppression de C:\\tmp\\x")
+    prompts: list[tuple[str, str]] = []
+    answers = [True, False, None]
+
+    def ask(title: str, message: str):
+        prompts.append((title, message))
+        return answers.pop(0)
+
+    monkeypatch.setattr("tkinter.messagebox.askyesnocancel", ask)
+    window = object.__new__(OmniAgentWindow)
+    window.after = lambda _ms, callback: callback()
+
+    assert window._tool_approval(request) == "once"
+    assert window._tool_approval(request) == "session"
+    assert window._tool_approval(request) == "deny"
+    assert len(prompts) == 3
+    title, message = prompts[0]
+    assert "fs_delete" in title
+    assert "Suppression de C:\\tmp\\x" in message
+    assert "Oui : autoriser une fois" in message
+    assert "Non : autoriser pour la session" in message
+    assert "Annuler : refuser" in message
+
+
 def test_close_stream_lowers_the_flag_even_without_a_displayed_attempt() -> None:
     """`_close_stream` referme la tentative : le drapeau ne reste jamais vrai."""
     from ui.app_gui import OmniAgentWindow, TranscriptBuffer

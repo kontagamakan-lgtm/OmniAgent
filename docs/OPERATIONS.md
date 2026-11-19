@@ -191,7 +191,12 @@ python app.py --task "resume mes notes" --profile read-only
 ```
 
 C'est une isolation au niveau des outils : un outil conservé garde les droits
-du processus, ce n'est pas un bac à sable système.
+du processus, ce n'est pas un bac à sable système. `shell_run` est seulement
+durci : son répertoire reste confiné, il n'hérite pas des variables qui
+ressemblent à des secrets (ni de la clé du fournisseur), et son arbre de
+processus est tué au délai. Pour retirer réellement les droits, il faut un
+runtime séparé (conteneur, AppContainer ou machine virtuelle), hors du périmètre
+de ce module.
 
 ## Journal d'audit
 
@@ -203,10 +208,17 @@ détectée ; les décisions de politique sont chaînées de la même façon.
 ```bat
 python app.py --audit-seal      :: migre les traces existantes
 python app.py --verify-audit
+python app.py --audit-anchor E:\audit\chain.jsonl
+python app.py --verify-audit --audit-anchor E:\audit\chain.jsonl
 ```
 
 Un attaquant qui possède la clé peut réécrire la trace et tout le journal :
 recopiez régulièrement `chain.jsonl` hors de la machine pour un ancrage externe.
+`--audit-anchor` produit cette copie (support USB, partage réseau) et
+`--verify-audit --audit-anchor` compare le journal courant au préfixe ancré :
+les entrées ajoutées après la copie restent valides, mais toute réécriture des
+entrées déjà copiées est signalée, même si l'attaquant a recalculé toute la
+chaîne. L'ancre ne protège que si elle reste hors de portée de l'attaquant.
 
 ## Notifications Windows
 

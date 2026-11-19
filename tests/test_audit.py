@@ -11,11 +11,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from support import make_settings, tmpdir  # noqa: E402
 
 from core.audit import (  # noqa: E402
+    _entry_hash,
     audit_path,
+    export_anchor,
     record_policy_decision,
     seal_all,
     seal_trace,
     verify,
+    verify_anchor,
     verify_trace,
 )
 
@@ -107,6 +110,46 @@ def test_policy_decisions_join_the_chain_and_chain_tampering_is_detected() -> No
         report = verify(settings)
         assert not report.ok
         assert any("empreinte invalide" in problem for problem in report.problems)
+
+
+def test_external_anchor_accepts_append_and_detects_a_rechained_rewrite() -> None:
+    with tmpdir("audit-ancre") as tmp:
+        settings = make_settings(tmp)
+        trace = _write_trace(tmp)
+        seal_trace(settings, trace)
+        record_policy_decision(
+            settings, tool="fs_delete", allowed=False, rule="regle 1 (deny)"
+        )
+        anchor = tmp / "hors-machine" / "chain.jsonl"
+        exported = export_anchor(settings, anchor)
+        assert exported["entries"] == 2 and exported["head"]
+        assert verify_anchor(settings, anchor) == []
+
+        # Un ajout légitime après la copie reste compatible avec l'ancre.
+        record_policy_decision(
+            settings, tool="shell_run", allowed=False, rule="regle 2 (deny)"
+        )
+        assert verify(settings, anchor=anchor).ok
+
+        # Réécriture complète et rechaînée : la chaîne interne reste valide,
+        # mais le préfixe ne correspond plus à la copie hors machine.
+        entries = [json.loads(line) for line in _lines(audit_path(settings))]
+        entries[1]["allowed"] = True
+        previous = ""
+        for index, entry in enumerate(entries, start=1):
+            entry["seq"] = index
+            entry["prev"] = previous
+            entry["hash"] = _entry_hash(entry)
+            previous = entry["hash"]
+        audit_path(settings).write_text(
+            "\n".join(json.dumps(entry) for entry in entries) + "\n",
+            encoding="utf-8",
+        )
+
+        assert verify(settings).ok, "la réécriture rechaînée est valide en interne"
+        report = verify(settings, anchor=anchor)
+        assert not report.ok
+        assert any("ancre externe" in problem for problem in report.problems)
 
 
 def test_missing_sealed_trace_is_reported() -> None:

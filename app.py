@@ -186,6 +186,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="scelle les traces qui ne sont pas encore dans le journal d'audit",
     )
     parser.add_argument(
+        "--audit-anchor",
+        metavar="FICHIER",
+        help="copie le journal d'audit vers un support externe pour ancrage",
+    )
+    parser.add_argument(
         "--budget",
         action="store_true",
         help="affiche le budget consommé (jour, semaine, mois) et la projection",
@@ -1231,7 +1236,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.verify_audit:
         from core.audit import verify
 
-        report = verify(settings)
+        report = verify(settings, anchor=args.audit_anchor)
         print(report.format())
         return 0 if report.ok else 1
 
@@ -1239,6 +1244,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         from core.audit import seal_all
 
         print(f"{seal_all(settings)} trace(s) scellee(s)")
+        return 0
+
+    if args.audit_anchor:
+        from core.audit import export_anchor
+
+        result = export_anchor(settings, args.audit_anchor)
+        print(
+            f"Ancre externe : {result['path']} "
+            f"({result['entries']} entree(s), tete {result['head'][:12] or '(vide)'})"
+        )
         return 0
 
     if args.budget:
