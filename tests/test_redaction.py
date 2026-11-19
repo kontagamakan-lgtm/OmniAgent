@@ -19,6 +19,48 @@ def test_openai_and_github_keys_are_masked() -> None:
     assert MASK in result
 
 
+def _assert_masked(secret: str) -> str:
+    result = redact(f"clé = {secret} fin")
+    assert secret not in result, result
+    assert MASK in result
+    return result
+
+
+def test_openai_key_ending_with_a_separator_is_masked() -> None:
+    for separator in ("-", "_"):
+        secret = "sk-" + "0" * 15 + separator
+        _assert_masked(secret)
+
+
+def test_jwt_ending_with_a_separator_is_masked() -> None:
+    for separator in ("-", "_"):
+        secret = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abcdefgh" + separator
+        _assert_masked(secret)
+
+
+def test_slack_token_ending_with_a_separator_is_masked() -> None:
+    # Le tiret fait partie du jeton Slack ; le souligné n'en fait pas partie.
+    _assert_masked("xoxb-abcdefghij-")
+
+
+def test_google_key_ending_with_a_separator_is_masked() -> None:
+    for separator in ("-", "_"):
+        secret = "AIza" + "a" * 30 + separator
+        _assert_masked(secret)
+
+
+def test_separator_masking_is_idempotent() -> None:
+    secrets = (
+        "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abcdefgh-",
+        "xoxb-abcdefghij-",
+        "AIza" + "a" * 30 + "_",
+    )
+    once = redact("jetons : " + " ".join(secrets))
+    for secret in secrets:
+        assert secret not in once, once
+    assert redact(once) == once
+
+
 def test_assigned_password_is_masked_but_keeps_structure() -> None:
     result = redact('mot de passe: password = "MonSuperMotDePasse!"')
     assert "MonSuperMotDePasse" not in result

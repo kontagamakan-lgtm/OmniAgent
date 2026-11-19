@@ -79,13 +79,35 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         "cookie_header",
         re.compile(r"(?i)\b(cookie|set-cookie)(\s*:\s*)(?!\[MASQUÉ)([^\r\n]{4,4096})"),
     ),
-    ("jwt", re.compile(r"\beyJ[A-Za-z0-9_\-]{8,4096}\.[A-Za-z0-9_\-]{8,4096}\.[A-Za-z0-9_\-]{8,4096}\b")),
-    ("openai_key", re.compile(r"\bsk-[A-Za-z0-9_\-]{16,256}\b")),
-    ("anthropic_key", re.compile(r"\bsk-ant-[A-Za-z0-9_\-]{16,256}\b")),
+    (
+        "jwt",
+        re.compile(
+            r"\beyJ[A-Za-z0-9_\-]{8,4096}\.[A-Za-z0-9_\-]{8,4096}"
+            r"\.[A-Za-z0-9_\-]{8,4096}(?![A-Za-z0-9_\-])"
+        ),
+    ),
+    # Pas de `\b` final : un tiret ou un souligné final est un caractère non
+    # mot, donc la limite de mot ne peut pas être satisfaite et la clé
+    # échapperait au masquage. Le lookahead interdit seulement de couper un
+    # jeton plus long.
+    (
+        "openai_key",
+        re.compile(r"\bsk-[A-Za-z0-9_\-]{16,256}(?![A-Za-z0-9_\-])"),
+    ),
+    (
+        "anthropic_key",
+        re.compile(r"\bsk-ant-[A-Za-z0-9_\-]{16,256}(?![A-Za-z0-9_\-])"),
+    ),
     ("github_token", re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,255}\b")),
     ("aws_key", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")),
-    ("slack_token", re.compile(r"\bxox[baprs]-[A-Za-z0-9\-]{10,255}\b")),
-    ("google_key", re.compile(r"\bAIza[0-9A-Za-z_\-]{30,64}\b")),
+    (
+        "slack_token",
+        re.compile(r"\bxox[baprs]-[A-Za-z0-9\-]{10,255}(?![A-Za-z0-9\-])"),
+    ),
+    (
+        "google_key",
+        re.compile(r"\bAIza[0-9A-Za-z_\-]{30,64}(?![A-Za-z0-9_\-])"),
+    ),
     (
         # Numero de carte : 16 chiffres, espaces ou tirets tolerés. Un motif
         # plus large masquerait des identifiants numeriques legitimes.
