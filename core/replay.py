@@ -528,6 +528,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="reconstruit runs.index depuis les traces presentes",
     )
     maintenance.add_argument(
+        "--index-doctor",
+        nargs="?",
+        const="",
+        metavar="DOSSIER",
+        help="diagnostique les ecarts entre runs.index et les traces",
+    )
+    maintenance.add_argument(
         "--rotate-key",
         nargs="?",
         const="",
@@ -572,6 +579,28 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"{str(item['action']).ljust(9)} {item['runs']} run(s)  {item['directory']}"
             )
         return 0
+
+    if args.index_doctor is not None:
+        from core.index_doctor import diagnose, format_issues as format_diagnosis
+
+        chosen = args.index_doctor
+        directory = Path(chosen) if chosen else _default_runs_dir()
+        issues = diagnose(directory)
+        if args.json:
+            print(
+                json.dumps(
+                    {
+                        "directory": str(directory),
+                        "issues": [issue.as_dict() for issue in issues],
+                    },
+                    indent=2,
+                    ensure_ascii=False,
+                )
+            )
+        else:
+            print(f"Index : {directory}")
+            print(format_diagnosis(issues))
+        return 1 if any(issue.error for issue in issues) else 0
 
     path = args.trace
     if path is None:

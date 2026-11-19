@@ -1,0 +1,93 @@
+name: Publication
+
+# Sur un tag `v*`, rejoue la vérification, construit les trois paquets, les
+# compresse et crée une GitHub Release avec les empreintes SHA-256. Le tag doit
+# pointer sur un commit déjà passé par la CI : ce workflow revérifie tout de
+# même, pour ne jamais publier un binaire non testé.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Construire et publier
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+            requirements-ci.txt
+
+      - name: Installer les dépendances (versions figées)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt -r requirements-ci.txt
+
+      - name: Ruff (F, B, E9)
+        run: >-
+          python -m ruff check --select F,B,E9 security tools config.py core
+          tests ui app.py smoke_exe.py pyinstaller_recipe.py build_smoke
+
+      - name: Pytest
+        env:
+          OMNIAGENT_SLOW_TESTS: "1"
+        run: python -m pytest -q
+
+      - name: Construire les trois paquets
+        shell: cmd
+        env:
+          PYTHONUTF8: "1"
+        run: |
+          build.bat --all --no-smoke || exit /b 1
+          build.bat --slim --no-smoke || exit /b 1
+
+      - name: Contrôles de fumée sans fenêtre
+        shell: cmd
+        env:
+          PYTHONUTF8: "1"
+        run: |
+          python smoke_exe.py --browser --exe dist\OmniAgent\OmniAgent.exe || exit /b 1
+          python smoke_exe.py --doc-index --exe dist\OmniAgent\OmniAgent.exe || exit /b 1
+          python smoke_exe.py --ocr --exe dist\OmniAgent\OmniAgent.exe || exit /b 1
+          python smoke_exe.py --browser --exe dist\OmniAgent-lite\OmniAgent.exe || exit /b 1
+          python smoke_exe.py --doc-index --exe dist\OmniAgent-lite\OmniAgent.exe || exit /b 1
+          python smoke_exe.py --ocr --exe dist\OmniAgent-lite\OmniAgent.exe || exit /b 1
+          python smoke_exe.py --browser --exe dist\OmniAgent-slim\OmniAgent.exe || exit /b 1
+          python smoke_exe.py --doc-index --exe dist\OmniAgent-slim\OmniAgent.exe || exit /b 1
+          python smoke_exe.py --ocr --exe dist\OmniAgent-slim\OmniAgent.exe || exit /b 1
+
+      # Empreintes et versions de build : un binaire publié reste identifiable
+      # et comparable sans reconstruire pour savoir ce qu'il contient.
+      - name: Empreintes et versions de build
+        shell: cmd
+        env:
+          PYTHONUTF8: "1"
+        run: python build_smoke\record_build.py || exit /b 1
+
+      - name: Compresser les paquets
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist/OmniAgent/* -DestinationPath dist/OmniAgent.zip
+          Compress-Archive -Path dist/OmniAgent-lite/* -DestinationPath dist/OmniAgent-lite.zip
+          Compress-Archive -Path dist/OmniAgent-slim/* -DestinationPath dist/OmniAgent-slim.zip
+
+      - name: Créer la GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$env:GITHUB_REF_NAME" `
+            dist/OmniAgent.zip dist/OmniAgent-lite.zip dist/OmniAgent-slim.zip `
+            dist/SHA256SUMS.txt dist/BUILD-INFO.txt `
+            --title "$env:GITHUB_REF_NAME" --generate-notes

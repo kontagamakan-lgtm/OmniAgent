@@ -15,6 +15,11 @@ on:
     branches: ["**"]
   pull_request:
   workflow_dispatch:
+  # Passage nocturne : les tests lents, les trois builds et les contrôles de
+  # fumée tournent aussi sans poussée, pour voir une dérive de dépendance ou de
+  # fabrication avant qu'un contributeur ne la découvre.
+  schedule:
+    - cron: "17 2 * * *"
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -22,15 +27,15 @@ concurrency:
 
 jobs:
   tests:
-    # Deux versions : le code promet 3.11+, la CI n'en éprouvait qu'une. Une
-    # régression propre à une version (tri, encodage, asyncio) passerait sinon.
+    # Trois versions : le code promet 3.11+, et une régression propre à une
+    # version (tri, encodage, asyncio, annotations) passerait sinon.
     name: Ruff et pytest (Python ${{ matrix.python-version }})
     runs-on: windows-latest
     timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.12", "3.14"]
+        python-version: ["3.11", "3.12", "3.14"]
     steps:
       - uses: actions/checkout@v4
 

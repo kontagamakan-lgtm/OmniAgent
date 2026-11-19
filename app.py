@@ -196,6 +196,22 @@ def diagnostics(settings: Settings) -> list[tuple[bool, str]]:
     vault = settings.paths.vault_file
     checks.append((True, f"coffre : {vault}" + ("" if vault.is_file() else " (à créer)")))
     checks.append((True, f"journal : {settings.paths.log_dir / 'omniagent.log'}"))
+    # L'index est un cache : désynchronisé, il fait mentir la liste des runs.
+    # Le diagnostic ne répare rien, il dit quoi faire (`--index-compact`).
+    try:
+        from core.index_doctor import diagnose, format_issues
+
+        issues = diagnose(
+            settings.paths.log_dir / "runs",
+            active_ttl_s=settings.trace.active_ttl_s,
+        )
+    except Exception as exc:  # noqa: BLE001 - un diagnostic ne bloque pas le démarrage
+        checks.append((True, f"index - diagnostic impossible : {type(exc).__name__}: {exc}"))
+    else:
+        if not issues:
+            checks.append((True, f"index - {format_issues(issues)}"))
+        for issue in issues[:8]:
+            checks.append((not issue.error, f"index - {issue}"))
     return checks
 
 

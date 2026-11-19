@@ -446,6 +446,23 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                     return
                 report_label.configure(text=format_maintenance_report(report))
 
+            def run_doctor() -> None:
+                """Explique les écarts index/traces, sans rien modifier."""
+                from core.index_doctor import diagnose
+                from core.index_doctor import format_issues as format_diagnosis
+
+                if not directory.is_dir():
+                    report_label.configure(
+                        text="Aucun dossier de traces : rien à diagnostiquer."
+                    )
+                    return
+                try:
+                    issues = diagnose(directory)
+                except OSError as exc:
+                    report_label.configure(text=f"diagnostic impossible : {exc}")
+                    return
+                report_label.configure(text=format_diagnosis(issues)[:1200])
+
             for label_text, rebuild in (("Compacter", False), ("Reconstruire", True)):
                 ctk.CTkButton(
                     toolbar,
@@ -453,6 +470,9 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                     width=110,
                     command=lambda r=rebuild: run_maintenance(rebuild=r),
                 ).pack(side="left", padx=(0, 6), pady=4)
+            ctk.CTkButton(
+                toolbar, text="Diagnostic", width=110, command=run_doctor
+            ).pack(side="left", padx=(0, 6), pady=4)
             report_label.pack(fill="x", pady=(2, 4))
             frame = ctk.CTkScrollableFrame(window, label_text=str(directory))
             frame.pack(fill="both", expand=True, padx=10, pady=(4, 10))
