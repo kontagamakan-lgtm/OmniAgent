@@ -43,7 +43,7 @@ OmniAgent/
 ├── OmniAgent-lite.spec        #    variante --lite (sans NumPy, Pillow conservé)
 ├── OmniAgent-slim.spec        #    alias de --lite : même paquet, dossier « slim »
 ├── .env.example / .gitignore / README.md
-├── assets/                    # icon.ico, thème JSON
+├── assets/                    # icon.ico, theme.json, tessdata/
 ├── core/
 │   ├── agent_core.py          # LIVRABLE 4 — boucle ReAct, budget, reprises
 │   ├── llm_client.py          #    client OpenAI-compatible + Ollama (streaming)
@@ -65,16 +65,18 @@ OmniAgent/
 │   ├── crypto.py              # ✔ LIVRABLE 2 — Argon2id/scrypt + AES-256-GCM
 │   └── redaction.py           # ✔ LIVRABLE 2 — masquage des secrets (logs + UI)
 ├── storage/
-│   ├── db.py                  #    SQLite WAL, migrations, FTS5
-│   └── schema.sql
+│   ├── db.py                  #    SQLite WAL, migrations, runs/événements, FTS5
+│   ├── schema.sql
+│   └── __init__.py
 ├── ui/
+│   ├── approval_dialog.py     # boîte Autoriser une fois / session / Refuser
 │   ├── controller.py          # ✔ LIVRABLE 5 — AgentCore dans un thread, file d'événements
 │   └── app_gui.py             # ✔ LIVRABLE 5 — fenêtre CustomTkinter (chat + journal d'outils)
 ├── tests/                     # suite pytest; tests opt-in ignorés par défaut
 └── data/                      # généré à l'exécution, ignoré par git
     ├── config.json            #    configuration persistée
     ├── vault.enc              #    coffre chiffré
-    ├── omniagent.db           #    historique, index FTS5, audit
+    ├── omniagent.db           #    base locale (runs, événements, documents FTS5)
     ├── index/  logs/  downloads/  cache/  reports/  browser_profile/
 ```
 

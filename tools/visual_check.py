@@ -21,6 +21,7 @@ import json
 import os
 import subprocess
 import sys
+import textwrap
 import time
 import unicodedata
 from ctypes import wintypes
@@ -257,11 +258,18 @@ def _dialog_child() -> int:
 
 def _path_child(text: str) -> int:
     import tkinter as tk
-    from tkinter import messagebox
 
+    # Une boîte `messagebox` s'élargit avec la ligne la plus longue ; depuis
+    # que le protocole contient app.py, elle dépasse l'écran et l'OCR perd le
+    # début. Une fenêtre fixe avec retour à la ligne garde tout le texte lisible.
     root = tk.Tk()
-    root.withdraw()
-    root.after(200, lambda: messagebox.showinfo(PATH_TITLE, text))
+    root.title(PATH_TITLE)
+    root.geometry("980x360+120+120")
+    root.attributes("-topmost", True)
+    widget = tk.Text(root, wrap="word", font=("Consolas", 10))
+    widget.insert("1.0", text)
+    widget.configure(state="disabled")
+    widget.pack(fill="both", expand=True, padx=12, pady=12)
     root.mainloop()
     return 0
 
@@ -397,11 +405,17 @@ def capture() -> dict[str, Any]:
 
     # --- Chemin .lnk / protocole ----------------------------------------
     paths = _notification_paths()
-    path_text = (
-        f"Raccourci : {paths['shortcut']}\n"
-        f"Cible : {paths['target']} {paths['arguments']}\n"
-        f"Protocole : {paths['protocol']}\n"
-        f"AUMID : {paths['aumid']} ({paths['aumid_in_shortcut']})"
+    # Le protocole contient maintenant le chemin complet d'app.py : sans
+    # retour à la ligne, la boîte native dépasse l'écran et l'OCR perd la fin.
+    path_text = "\n".join(
+        line
+        for raw in (
+            f"Raccourci : {paths['shortcut']}",
+            f"Cible : {paths['target']} {paths['arguments']}",
+            f"Protocole : {paths['protocol']}",
+            f"AUMID : {paths['aumid']} ({paths['aumid_in_shortcut']})",
+        )
+        for line in textwrap.wrap(raw, width=88, break_long_words=True)
     )
     child = _spawn("--path-child", path_text)
     try:

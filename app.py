@@ -347,6 +347,12 @@ def diagnostics(settings: Settings) -> list[tuple[bool, str]]:
     vault = settings.paths.vault_file
     checks.append((True, f"coffre : {vault}" + ("" if vault.is_file() else " (à créer)")))
     checks.append((True, f"journal : {settings.paths.log_dir / 'omniagent.log'}"))
+    try:
+        from storage.db import database_status
+
+        checks.append((True, f"base : {database_status(settings.paths.database_file)}"))
+    except Exception as exc:  # noqa: BLE001 - diagnostic, pas de blocage du démarrage
+        checks.append((False, f"base : indisponible ({type(exc).__name__}: {exc})"))
     if settings.trace.encrypt:
         from core.trace_crypto import TraceKeyError, load_key
 
@@ -1194,7 +1200,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         if windowed.is_file():
             target = windowed
         script = str(Path(__file__).resolve())
-        ok, message = install_notifications(str(target), f'"{script}"', icon=str(target))
+        icon = Path(__file__).resolve().parent / "assets" / "icon.ico"
+        ok, message = install_notifications(
+            str(target), f'"{script}"', icon=str(icon if icon.is_file() else target)
+        )
         print(message, file=sys.stdout if ok else sys.stderr)
         return 0 if ok else 1
 

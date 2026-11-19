@@ -12,6 +12,7 @@ import logging
 import queue
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 from config import APP_ID, APP_NAME, APP_VERSION, Settings
@@ -131,8 +132,15 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
 
         def __init__(self, settings: Settings, bundle: AgentBundle) -> None:
             ctk.set_appearance_mode(settings.ui.appearance)
-            ctk.set_default_color_theme("blue")
+            theme = Path(__file__).resolve().parent.parent / "assets" / "theme.json"
+            ctk.set_default_color_theme(str(theme) if theme.is_file() else "blue")
             super().__init__()
+            icon = Path(__file__).resolve().parent.parent / "assets" / "icon.ico"
+            if icon.is_file():
+                try:
+                    self.iconbitmap(str(icon))
+                except Exception:  # noqa: BLE001 - icône non bloquante
+                    logger.debug("icône de fenêtre non chargée", exc_info=True)
 
             self.settings = settings
             self.bundle = bundle

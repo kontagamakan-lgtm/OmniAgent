@@ -1,5 +1,5 @@
 {
-  "captured_at": "2026-11-19T20:04:21+0000",
+  "captured_at": "2026-11-19T20:30:32+0000",
   "machine": "DESKTOP-D7O1SEG",
   "session": "Console",
   "screen": [
@@ -56,16 +56,16 @@
       }
     ],
     "ocr": "Confirmation requise — fs_delete\n\nChoisissez explicitement I'action 8 appliquer:\n\nSuppression definitive de C:\\tmp\\rapport.txt\n(1 fichier, 42 octet(s)).\n\nAutoriser une fois Autoriser pour la session\n\n",
-    "buttons_ocr": "Autoriser une fois\n\nAutoriser pour la session\n\nRefuser\n\n|\n",
+    "buttons_ocr": "Autoriser une fois\n\nRefuser\n\nAutoriser pour la session\n\n||\n",
     "pixels": {
       "size": [
         795,
         499
       ],
-      "stddev": 63.496,
-      "mean": 222.379,
-      "unique_colors": 4578,
-      "dark_fraction": 0.1757
+      "stddev": 62.676,
+      "mean": 222.82,
+      "unique_colors": 4656,
+      "dark_fraction": 0.1747
     },
     "files": {
       "crop": "artifacts/visual/approval_dialog.png"
@@ -75,29 +75,29 @@
     "shortcut": "C:\\Users\\user\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\OmniAgent.lnk",
     "target": "C:\\Python314\\pythonw.exe",
     "arguments": "\"C:\\Users\\user\\Downloads\\Mon app K\\app.py\"",
-    "protocol": "\"C:\\Python314\\pythonw.exe\" --notify-action \"%1\"",
+    "protocol": "\"C:\\Python314\\pythonw.exe\" \"C:\\Users\\user\\Downloads\\Mon app K\\app.py\" --notify-action \"%1\"",
     "aumid": "OmniAgent.Desktop",
     "aumid_in_shortcut": true,
     "window": [
-      711,
-      443,
-      1230,
-      716
+      150,
+      150,
+      1395,
+      649
     ],
     "geometry": [
-      519,
-      273
+      1245,
+      499
     ],
-    "ocr": "¢ OmniAgent — chemin des notifications\n\nRaccourci\nC\\Users\\user\\AppData\\Roaming\\Microsoft\\Windows\\start\nMenu\\Programs\\OmniAgent.ink\n\nCible : C:\\Python314\\pythonw.exe\n‘C:\\Users\\user\\Downloads\\Mon app K\\app.py\n\nProtocole : “C:\\Python314\\pythonw.exe\" --notify-action \"961\nAUMID : OmniAgent.Desktop (True)\n\n",
+    "ocr": "Raccourci : C:\\Users\\user\\AppData\\Roaming\\Microsoft\\windows\\Start\nMenu\\Programs\\OmniAgent. Ink\n\nCible : C:\\python314\\pythonw.exe \"C:\\Users\\user\\Downloads\\Mon app K\\app.py”\nProtocole : “C:\\Python314\\pythonw.exe\" “C:\\Users\\user\\Downloads\\Mon app K\\app.py”\n=-notify-action \"XL\"\n\n|AUMID : OmniAgent.Desktop (True)\n\n",
     "pixels": {
       "size": [
-        519,
-        273
+        1245,
+        499
       ],
-      "stddev": 69.397,
-      "mean": 208.429,
-      "unique_colors": 11135,
-      "dark_fraction": 0.3146
+      "stddev": 59.262,
+      "mean": 230.959,
+      "unique_colors": 7051,
+      "dark_fraction": 0.1406
     },
     "files": {
       "crop": "artifacts/visual/notification_path.png"
@@ -105,7 +105,7 @@
   },
   "toast": {
     "title": "OmniAgent — vérification visuelle",
-    "message": "Les notifications fonctionnent. (20:04:19)",
+    "message": "Les notifications fonctionnent. (20:30:30)",
     "region": [
       1300,
       760,
@@ -122,18 +122,18 @@
       479,
       163
     ],
-    "changed_pixels": 62323,
-    "ocr": "Oi.\nBH OmniAgent\n\nOmniAgent — verification visuelle\nLes notifications fonctionnent. (20:04:19)\n\nLocal —_— of\n",
+    "changed_pixels": 62959,
+    "ocr": "_OmniAgent\n\nOmniAgent — verification visuelle\nLes notifications fonctionnent. (20:30:30)\n",
     "words": [],
     "pixels": {
       "size": [
         479,
         163
       ],
-      "stddev": 37.43,
-      "mean": 72.746,
-      "unique_colors": 877,
-      "dark_fraction": 0.9835
+      "stddev": 37.932,
+      "mean": 69.877,
+      "unique_colors": 405,
+      "dark_fraction": 0.9847
     },
     "files": {
       "crop": "artifacts/visual/toast.png"
