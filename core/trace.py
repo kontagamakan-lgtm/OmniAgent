@@ -221,7 +221,9 @@ def build_trace(settings: Settings, directory: Path | str | None = None) -> "Run
             key = load_key(cfg.key_env)
         except TraceKeyError as exc:
             # Fail-closed : mieux vaut pas de trace qu'une trace en clair.
-            logger.warning("traces désactivées : %s", exc)
+            logger.warning(
+                "traces désactivées : %s (aucune trace en clair ne sera écrite)", exc
+            )
             return None
     return RunTrace(
         root,

@@ -85,8 +85,7 @@ def load_key(env_name: str = KEY_ENV) -> bytes:
     raw = os.environ.get(env_name, "").strip()
     if not raw:
         raise TraceKeyError(
-            f"variable {env_name} absente : aucune trace chiffrée ne peut être écrite "
-            "(le repli en clair est refusé)"
+            f"variable {env_name} absente : clé des traces chiffrées introuvable"
         )
     key = _decode_key(raw)
     if key is None or len(key) != KEY_BYTES:
