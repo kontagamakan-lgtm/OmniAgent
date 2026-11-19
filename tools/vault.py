@@ -1151,7 +1151,7 @@ def build_vault_tools(vault: Vault) -> list[Tool]:
         tags: list[str] | None = None,
         totp_secret: str = "",
         overwrite: bool = False,
-    ) -> dict[str, Any]:
+    ) -> ToolResult:
         entry = vault.add(
             service,
             username,
@@ -1163,7 +1163,17 @@ def build_vault_tools(vault: Vault) -> list[Tool]:
             tags=tags or [],
             overwrite=overwrite,
         )
-        return {"ok": True, "entry": vault.public_entry(entry)}
+        # Le résultat porte les champs masqués : il reste local. Le modèle reçoit
+        # un résumé sans secret, assez pour savoir que l'écriture a réussi.
+        return ToolResult(
+            data={"ok": True, "entry": vault.public_entry(entry)},
+            sensitive=True,
+            safe_summary=(
+                f"identifiant enregistré pour {entry.service} "
+                f"({entry.username or 'sans identifiant'}) ; mot de passe et notes "
+                "non transmis au modèle."
+            ),
+        )
 
     def vault_update_entry(
         service: str,
@@ -1174,7 +1184,7 @@ def build_vault_tools(vault: Vault) -> list[Tool]:
         login_url: str = "",
         notes: str = "",
         tags: list[str] | None = None,
-    ) -> dict[str, Any]:
+    ) -> ToolResult:
         entry = vault.update(
             service,
             match_username=username or None,
@@ -1185,7 +1195,15 @@ def build_vault_tools(vault: Vault) -> list[Tool]:
             notes=notes or None,
             tags=tags,
         )
-        return {"ok": True, "entry": vault.public_entry(entry)}
+        return ToolResult(
+            data={"ok": True, "entry": vault.public_entry(entry)},
+            sensitive=True,
+            safe_summary=(
+                f"entrée mise à jour pour {entry.service} "
+                f"({entry.username or 'sans identifiant'}) ; valeurs non transmises "
+                "au modèle."
+            ),
+        )
 
     def vault_delete_entry(service: str, username: str = "") -> dict[str, Any]:
         deleted = vault.delete(service, username or None)
@@ -1301,6 +1319,7 @@ def build_vault_tools(vault: Vault) -> list[Tool]:
             ),
             vault_create_credential,
             read_only=False,
+            sensitive=True,
         ),
         FunctionTool(
             "vault_add_entry",
@@ -1323,6 +1342,7 @@ def build_vault_tools(vault: Vault) -> list[Tool]:
             ),
             vault_add_entry,
             read_only=False,
+            sensitive=True,
         ),
         FunctionTool(
             "vault_update_entry",
@@ -1342,6 +1362,7 @@ def build_vault_tools(vault: Vault) -> list[Tool]:
             ),
             vault_update_entry,
             read_only=False,
+            sensitive=True,
         ),
         FunctionTool(
             "vault_delete_entry",

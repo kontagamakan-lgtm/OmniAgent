@@ -316,7 +316,10 @@ def test_notes_cannot_smuggle_a_secret_to_the_model() -> None:
         assert added.ok
         assert secret not in json.dumps(added.data, ensure_ascii=False)
         assert secret not in added.to_text()
-        assert "notes masquées" in added.to_text()
+        # L'outil est déclaré sensible : le modèle ne reçoit qu'un résumé qui
+        # confirme l'écriture, jamais le contenu de l'entrée.
+        assert added.to_text().startswith("identifiant enregistré")
+        assert "non transmis" in added.to_text()
 
         listed = tools.dispatch("vault_list_entries", {"query": "banque"})
         assert listed.ok

@@ -5,6 +5,10 @@ Trois usages :
     python app.py                      # interface graphique
     python app.py --task "…"           # une tâche, en console, puis sortie
     python app.py --check              # diagnostic d'installation
+    python app.py --replay TRACE       # rejoue une trace, hors-ligne
+
+Codes de sortie de `--task` : 0 succès, 1 échec de l'agent, 3 succès mais
+trace incomplète (plafond de taille atteint).
 
 La logique de l'agent reste dans `core/` ; l'interface dans `ui/`. Ce module ne
 fait que câbler les deux, configurer le journal et traduire les erreurs en codes
@@ -28,7 +32,7 @@ import config
 from config import APP_NAME, APP_VERSION, Settings
 from core.events import Event, EventType
 from core.factory import build_agent
-from core.trace import RunTrace
+from core.trace import build_trace
 from security.redaction import redact
 
 __all__ = [
@@ -65,6 +69,21 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-browser",
         action="store_true",
         help="n'enregistre pas les outils de navigation",
+    )
+    parser.add_argument(
+        "--no-trace",
+        action="store_true",
+        help="n'écrit aucune trace sur disque (le contenu de la session reste en mémoire)",
+    )
+    parser.add_argument(
+        "--trace-metadata",
+        action="store_true",
+        help="trace les faits (étapes, outils) sans la tâche ni les réponses",
+    )
+    parser.add_argument(
+        "--replay",
+        metavar="TRACE",
+        help="rejoue une trace .jsonl hors-ligne, puis quitte",
     )
     parser.add_argument(
         "--browser-smoke",
@@ -528,8 +547,16 @@ def browser_smoke(settings: Settings) -> int:
 def _run_task(settings: Settings, args: argparse.Namespace) -> int:
     bundle = build_agent(settings, with_browser=not args.no_browser)
     stream = _ConsoleStream(sys.stdout)
-    trace = RunTrace(settings.paths.log_dir / "runs")
-    unsubscribe_trace = bundle.agent.bus.subscribe(trace)
+    if getattr(args, "no_trace", False):
+        trace = None
+    elif getattr(args, "trace_metadata", False):
+        settings.trace.content = "metadata"
+        trace = build_trace(settings)
+    else:
+        trace = build_trace(settings)
+    unsubscribe_trace = (
+        bundle.agent.bus.subscribe(trace) if trace is not None else (lambda: None)
+    )
     unsubscribe = bundle.agent.bus.subscribe(
         stream,
         types=[
@@ -555,11 +582,23 @@ def _run_task(settings: Settings, args: argparse.Namespace) -> int:
             print(reply.text or "(aucune réponse)")
         if not reply.ok:
             print(f"[{reply.stop_reason}] {reply.error}", file=sys.stderr)
-        return 0 if reply.ok else 1
+            return 1
+        # Une trace incomplète ne doit pas ressembler à une exécution propre :
+        # le dire sur stderr, et le signaler par un code de sortie distinct.
+        if trace is not None and trace.truncated:
+            print(
+                f"Attention : trace incomplète ({trace.path.name}), plafond de "
+                f"{trace.max_bytes} octets atteint ; la fin de l'exécution n'est "
+                "pas enregistrée.",
+                file=sys.stderr,
+            )
+            return 3
+        return 0
     finally:
         unsubscribe()
         unsubscribe_trace()
-        trace.close()
+        if trace is not None:
+            trace.close()
         bundle.close()
 
 
@@ -604,6 +643,16 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.compat_smoke:
         return compat_smoke(settings)
+
+    if args.replay:
+        from core.replay import format_run, replay
+
+        path = Path(args.replay)
+        if not path.is_file():
+            print(f"Trace introuvable : {path}", file=sys.stderr)
+            return 2
+        print(format_run(replay(path)))
+        return 0
 
     config.configure_logging(settings, redact)
     if args.task is not None:

@@ -45,6 +45,9 @@ APP_NAME = "OmniAgent Windows"
 APP_ID = "OmniAgent"
 APP_VERSION = "1.0.0"
 CONFIG_SCHEMA_VERSION = 1
+#: Version du format des fichiers de trace. À incrémenter quand la forme des
+#: enregistrements change : un lecteur peut alors refuser ou migrer.
+TRACE_FORMAT_VERSION = 2
 ENV_PREFIX = "OMNIAGENT_"
 
 DEFAULT_USER_AGENT = (
@@ -62,6 +65,13 @@ SEARCH_ENGINES = (
 )
 
 LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+
+#: Bornes par défaut de la rétention des traces. Elles vivent ici parce que
+#: `config.py` est la source unique des réglages ajustables.
+DEFAULT_TRACE_MAX_RUNS = 50
+DEFAULT_TRACE_MAX_AGE_DAYS = 30.0
+DEFAULT_TRACE_MAX_BYTES = 20 * 1024 * 1024
+TRACE_CONTENTS = ("full", "metadata")
 
 BROWSER_CHANNELS = (
     "",
@@ -414,6 +424,29 @@ class UIConfig:
 
 
 @dataclass(slots=True)
+class TraceConfig:
+    """Traces JSONL : activation, contenu conservé et rétention."""
+
+    enabled: bool = True
+    #: `full` écrit la tâche et les réponses ; `metadata` les retire et ne garde
+    #: que les faits (étapes, outils, compteurs), pour ne pas laisser le contenu
+    #: d'une session sur disque.
+    content: Literal["full", "metadata"] = "full"
+    max_runs: int = DEFAULT_TRACE_MAX_RUNS
+    max_age_days: float = DEFAULT_TRACE_MAX_AGE_DAYS
+    #: Plafond global, appliqué aussi au fichier courant ; 0 le désactive.
+    max_bytes: int = DEFAULT_TRACE_MAX_BYTES
+    #: Compresser les vieilles traces (`.jsonl.gz`) au lieu de les supprimer.
+    archive: bool = False
+    #: `fsync` groupé toutes les N lignes (0 = jamais) : survit à une coupure.
+    fsync_every: int = 0
+    #: Durée de validité du marqueur d'activité d'une exécution concurrente.
+    #: Supérieure au délai d'un appel au fournisseur (`llm.request_timeout_s`),
+    #: sinon un run légitimement silencieux paraîtrait abandonné.
+    active_ttl_s: float = 300.0
+
+
+@dataclass(slots=True)
 class LoggingConfig:
     """Journalisation et masquage des secrets."""
 
@@ -447,6 +480,7 @@ class Settings:
     agent: AgentConfig = field(default_factory=AgentConfig)
     ui: UIConfig = field(default_factory=UIConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
+    trace: TraceConfig = field(default_factory=TraceConfig)
 
     # -- persistance --------------------------------------------------------
 
@@ -578,6 +612,15 @@ class Settings:
                 "kdf": self.vault.kdf,
                 "exists": self.paths.vault_file.is_file(),
                 "auto_lock_minutes": self.vault.auto_lock_minutes,
+            },
+            "trace": {
+                "enabled": self.trace.enabled,
+                "content": self.trace.content,
+                "max_runs": self.trace.max_runs,
+                "max_age_days": self.trace.max_age_days,
+                "max_bytes": self.trace.max_bytes,
+                "archive": self.trace.archive,
+                "trace_format": TRACE_FORMAT_VERSION,
             },
             "agent": {
                 "action_first": self.agent.action_first,
@@ -758,6 +801,23 @@ class Settings:
             err("logging.file_max_bytes", "doit être >= 64 Kio")
         if self.logging.backup_count < 1:
             err("logging.backup_count", "doit être >= 1")
+
+        # --- Traces
+        trace = self.trace
+        if trace.content not in TRACE_CONTENTS:
+            err("trace.content", f"valeur inconnue (attendu: {', '.join(TRACE_CONTENTS)})")
+        if trace.max_runs < 1:
+            err("trace.max_runs", "doit être >= 1")
+        if trace.max_age_days < 0:
+            err("trace.max_age_days", "doit être >= 0 (0 désactive la limite d'âge)")
+        if trace.max_bytes < 0:
+            err("trace.max_bytes", "doit être >= 0 (0 désactive le plafond)")
+        if trace.fsync_every < 0:
+            err("trace.fsync_every", "doit être >= 0 (0 désactive la synchronisation)")
+        if trace.active_ttl_s < 1:
+            err("trace.active_ttl_s", "doit être >= 1 seconde")
+        if not trace.enabled and trace.archive:
+            warn("trace.archive", "sans effet : la trace est désactivée")
 
         return issues
 

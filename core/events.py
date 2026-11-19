@@ -52,6 +52,9 @@ class EventType:
     FINAL = "final"
     ERROR = "error"
     RUN_FINISHED = "run_finished"
+    #: Écrit dans la trace elle-même par `RunTrace`, jamais publié sur le bus :
+    #: il constate que le plafond de taille a interrompu l'enregistrement.
+    TRACE_TRUNCATED = "trace_truncated"
 
 
 @dataclass(slots=True)

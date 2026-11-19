@@ -19,8 +19,10 @@ uniques même quand le fournisseur n'en fournit pas.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import platform
 import threading
 import time
 import uuid
@@ -28,8 +30,8 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Callable, Sequence
 
-from config import APP_ID, Settings
-from core.context_manager import count_tokens, plan_trim
+from config import APP_ID, APP_VERSION, TRACE_FORMAT_VERSION, Settings
+from core.context_manager import TrimResult, count_tokens, plan_trim
 from core.errors import (
     AgentError,
     BudgetExhausted,
@@ -163,6 +165,13 @@ class AgentCore:
         self._run_guard = threading.Lock()
         self._schemas: list[dict[str, Any]] | None = None
         self._schema_tokens: int | None = None
+        #: Replis déjà calculés, par empreinte exacte de l'historique. Une
+        #: reprise après panne réémet la même requête : réutiliser le plan garde
+        #: le préfixe envoyé au fournisseur **identique à l'octet**, condition
+        #: d'un cache de prompt côté fournisseur, et évite un nouveau résumé.
+        self._trim_cache: dict[str, TrimResult] = {}
+        self._trim_cache_hits = 0
+        self._manifest_digest = ""
         self.run_count = 0
         self.run_id = ""
 
@@ -251,7 +260,7 @@ class AgentCore:
         signatures: Counter[tuple[str, str]] = Counter()
         recoveries = 0
 
-        self._emit(EventType.RUN_STARTED, {"task": prompt[:500], "max_steps": limit})
+        self._emit(EventType.RUN_STARTED, self._manifest(prompt, limit))
 
         for index in range(1, limit + 1):
             if self.cancelled:
@@ -558,6 +567,39 @@ class AgentCore:
             "content": observation,
         }
 
+    def _manifest(self, prompt: str, limit: int) -> dict[str, Any]:
+        """En-tête de run : de quoi comparer deux exécutions et migrer un format.
+
+        Rien de secret : un condensat des réglages, pas leur contenu ; le nom du
+        modèle et du backend, pas la clé. Le condensat ne dépend pas de `paths`,
+        qui changent d'une machine à l'autre sans changer de comportement.
+        """
+        return {
+            "task": prompt[:500],
+            "max_steps": limit,
+            "app_version": APP_VERSION,
+            "trace_format": TRACE_FORMAT_VERSION,
+            "model": self.settings.llm.model,
+            "backend": self.settings.llm.backend,
+            "budget_tokens": int(self.settings.agent.max_context_tokens),
+            "settings_digest": self._settings_digest(),
+            "python": platform.python_version(),
+        }
+
+    def _settings_digest(self) -> str:
+        """Empreinte courte des réglages non secrets, calculée une fois."""
+        if self._manifest_digest:
+            return self._manifest_digest
+        try:
+            payload = self.settings.to_dict()
+            payload.pop("paths", None)
+            text = json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str)
+        except Exception:  # noqa: BLE001 - un condensat manquant ne bloque rien
+            logger.debug("condensat des réglages impossible", exc_info=True)
+            return ""
+        self._manifest_digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+        return self._manifest_digest
+
     def _trim(self, messages: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
         """Borne l'historique en repartant d'un tour utilisateur complet.
 
@@ -565,7 +607,17 @@ class AgentCore:
         `tool_calls` de ses réponses `tool`, ce que le fournisseur rejette.
         Les schémas d'outils, envoyés à chaque appel mais absents de
         `messages`, sont réservés dans le budget.
+
+        Un historique strictement identique réutilise le repli déjà calculé :
+        c'est le cas d'une reprise après panne, qui réémet la même requête. Le
+        préfixe reste alors identique à l'octet, ce dont dépend le cache de
+        prompt du fournisseur.
         """
+        key = _messages_digest(messages)
+        plan = self._trim_cache.get(key)
+        if plan is not None:
+            self._trim_cache_hits += 1
+            return plan.messages
         plan = plan_trim(
             messages,
             max_messages=max(4, int(self.settings.agent.history_max_messages)),
@@ -573,6 +625,9 @@ class AgentCore:
             reserved_tokens=self._reserved_tokens(),
             sensitive_tools=self._sensitive_tool_names(),
         )
+        if len(self._trim_cache) >= 8:
+            self._trim_cache.clear()
+        self._trim_cache[key] = plan
         if plan.trimmed:
             # Sans cet événement, l'utilisateur voit l'agent « oublier » sans
             # savoir que c'est le budget qui l'a demandé.
@@ -647,6 +702,15 @@ class AgentCore:
 
     def _emit(self, event_type: str, payload: dict[str, Any] | None = None) -> None:
         self.bus.emit(event_type, payload, run_id=self.run_id)
+
+
+def _messages_digest(messages: Sequence[dict[str, Any]]) -> str:
+    """Empreinte exacte d'un historique, pour reconnaître une requête répétée."""
+    try:
+        text = json.dumps(messages, sort_keys=True, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):  # contenu non sérialisable : pas de cache
+        return ""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def _safe_arguments(arguments: dict[str, Any]) -> dict[str, Any]:

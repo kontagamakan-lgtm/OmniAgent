@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import json
 import os
 import time
@@ -9,11 +10,21 @@ from pathlib import Path
 
 from support import make_settings, tmpdir  # noqa: I001
 
+import config
 from core.agent_core import AgentCore
 from core.events import Event, EventBus, EventType
 from core.llm_client import LLMResponse, ParsedToolCall
 from core.tool_registry import ToolRegistry
-from core.trace import RunTrace, read_events
+from core.trace import (
+    DEFAULT_MAX_AGE_DAYS,
+    DEFAULT_MAX_BYTES,
+    DEFAULT_MAX_RUNS,
+    RunTrace,
+    TraceFormatError,
+    build_trace,
+    read_events,
+    read_trace,
+)
 from tools.base import FunctionTool, object_schema, param
 
 RESULT_SECRET = "vault-value-42-ne-doit-pas-fuiter"
@@ -241,3 +252,227 @@ def test_trace_opens_a_new_file_for_each_run() -> None:
         assert second is not None and second.stem == second_id
         assert first.read_text(encoding="utf-8").count("run_started") == 1
         assert second.read_text(encoding="utf-8").count("run_started") == 1
+
+
+def test_retention_spares_a_trace_opened_by_another_process() -> None:
+    """Un run concurrent n'est pas « le plus ancien » : son marqueur le protège."""
+    with tmpdir("actif") as tmp:
+        directory = Path(tmp) / "runs"
+        directory.mkdir()
+        live = _old_trace(directory, "vivant", age_days=90)
+        marker = directory / "vivant.active"
+        marker.write_text('{"pid": 4242}', encoding="utf-8")
+
+        trace = RunTrace(directory, max_runs=1, max_age_days=1, max_bytes=0)
+        trace(Event(type=EventType.RUN_STARTED, run_id="courant"))
+        trace.close()
+
+        assert live.exists(), "une trace ouverte ailleurs ne doit pas être purgée"
+        assert marker.exists(), "le marqueur d'un autre processus ne doit pas être effacé"
+
+
+def test_a_stale_activity_marker_stops_protecting_its_trace() -> None:
+    """Processus tué : le marqueur périmé ne bloque plus la rétention."""
+    with tmpdir("perime") as tmp:
+        directory = Path(tmp) / "runs"
+        directory.mkdir()
+        dead = _old_trace(directory, "mort", age_days=90)
+        marker = directory / "mort.active"
+        marker.write_text('{"pid": 4243}', encoding="utf-8")
+        old = time.time() - 3_600
+        os.utime(marker, (old, old))
+
+        trace = RunTrace(directory, max_runs=1, max_age_days=1, max_bytes=0, active_ttl_s=60)
+        trace(Event(type=EventType.RUN_STARTED, run_id="courant"))
+        trace.close()
+
+        assert not marker.exists(), "le marqueur périmé doit être rangé"
+        assert not dead.exists(), "la trace n'est plus protégée : elle est purgée"
+
+
+def test_trace_closes_its_activity_marker() -> None:
+    with tmpdir("marqueur") as tmp:
+        directory = Path(tmp) / "runs"
+        trace = RunTrace(directory)
+        trace(Event(type=EventType.RUN_STARTED, run_id="seul"))
+        assert (directory / "seul.active").exists(), "le marqueur doit exister pendant le run"
+        trace(Event(type=EventType.RUN_FINISHED, payload={}, run_id="seul"))
+        assert not (directory / "seul.active").exists(), "le marqueur doit disparaître à la fin"
+
+
+def test_the_ceiling_leaves_a_visible_truncation_record() -> None:
+    """Une trace coupée doit le dire elle-même, pas seulement en mémoire."""
+    with tmpdir("coupe") as tmp:
+        directory = Path(tmp) / "runs"
+        trace = RunTrace(directory, max_runs=5, max_age_days=0, max_bytes=4_000)
+        trace(Event(type=EventType.RUN_STARTED, run_id="bavard"))
+        for _ in range(60):
+            trace(
+                Event(
+                    type=EventType.STREAM_CHUNK,
+                    payload={"step": 1, "text": "z" * 120},
+                    run_id="bavard",
+                )
+            )
+        trace.close()
+
+        assert trace.truncated is True
+        assert trace.path is not None
+        assert trace.path.stat().st_size <= 4_000
+        records = list(read_events(trace.path))
+        assert records[-1]["type"] == EventType.TRACE_TRUNCATED, (
+            "le dernier enregistrement doit annoncer la coupure"
+        )
+        assert records[-1]["payload"]["max_bytes"] == 4_000
+        assert trace.summary()["truncated"] is True
+
+
+def test_metadata_trace_keeps_facts_without_session_content() -> None:
+    with tmpdir("meta") as tmp:
+        settings = make_settings(tmp)
+        bus = EventBus()
+        trace = RunTrace(settings.paths.log_dir / "runs", content="metadata")
+        unsubscribe = bus.subscribe(trace)
+        core = AgentCore(
+            settings,
+            _ScriptedLLM(LLMResponse(text="réponse confidentielle", finish_reason="stop")),
+            ToolRegistry([]),
+            bus=bus,
+        )
+        try:
+            assert core.run("tâche confidentielle").ok
+        finally:
+            unsubscribe()
+            trace.close()
+
+        raw = _trace_file(trace.directory, core.run_id).read_text(encoding="utf-8")
+        assert "confidentielle" not in raw, "le contenu de la session ne doit pas rester"
+        types = [json.loads(line)["type"] for line in raw.splitlines()]
+        assert "run_started" in types and "final" in types
+        assert "stream_chunk" not in types, "aucun fragment de réponse en mode métadonnées"
+        started = json.loads(raw.splitlines()[0])
+        assert started["payload"]["model"], "les métadonnées du manifeste restent"
+        assert "task" not in started["payload"]
+
+
+def test_archive_compresses_instead_of_deleting() -> None:
+    with tmpdir("archive") as tmp:
+        directory = Path(tmp) / "runs"
+        directory.mkdir()
+        for index in range(3):
+            _old_trace(directory, f"vieux{index}")
+
+        trace = RunTrace(
+            directory, max_runs=2, max_age_days=0, max_bytes=0, archive=True
+        )
+        trace(Event(type=EventType.RUN_STARTED, run_id="courant"))
+        trace.close()
+
+        archives = sorted(directory.glob("*.jsonl.gz"))
+        assert archives, "les vieilles traces doivent être archivées, pas détruites"
+        with gzip.open(archives[0], "rt", encoding="utf-8") as handle:
+            assert "run_started" in handle.read()
+        assert len(list(directory.glob("*.jsonl"))) == 2, (
+            "max_runs compte les traces en clair, pas les archives"
+        )
+
+
+def test_reader_report_distinguishes_corruption_from_a_cut() -> None:
+    with tmpdir("bilan") as tmp:
+        path = Path(tmp) / "run.jsonl"
+        path.write_text(
+            '{"type": "run_started", "seq": 0}\n'
+            "\n"
+            '{"type": "final", "seq": 1}\n'
+            '{"type": "run_finished", "seq": 2}\n',
+            encoding="utf-8",
+        )
+
+        records, report = read_trace(path)
+
+        assert [record["type"] for record in records] == ["run_started", "final", "run_finished"]
+        assert report.ignored == 1 and report.events == 3 and report.lines == 4
+        assert report.truncated_final is False, (
+            "une ligne vide au milieu n'est pas une coupure finale"
+        )
+        try:
+            list(read_events(path, strict=True))
+        except TraceFormatError:
+            pass
+        else:
+            raise AssertionError("le mode strict doit signaler la ligne illisible")
+
+
+def test_grouped_fsync_keeps_every_event() -> None:
+    with tmpdir("fsync") as tmp:
+        trace = RunTrace(
+            Path(tmp) / "runs", max_age_days=0, max_bytes=0, fsync_every=2
+        )
+        trace(Event(type=EventType.RUN_STARTED, run_id="r"))
+        for index in range(5):
+            trace(Event(type=EventType.STEP_STARTED, payload={"index": index}, run_id="r"))
+        trace(Event(type=EventType.RUN_FINISHED, payload={}, run_id="r"))
+
+        records = list(read_events(trace.path))
+        assert len(records) == 7
+        assert records[-1]["type"] == EventType.RUN_FINISHED
+
+
+def test_run_started_carries_a_manifest() -> None:
+    with tmpdir("manifeste") as tmp:
+        settings = make_settings(tmp)
+        bus = EventBus()
+        trace = RunTrace(settings.paths.log_dir / "runs")
+        unsubscribe = bus.subscribe(trace)
+        core = AgentCore(
+            settings,
+            _ScriptedLLM(LLMResponse(text="ok", finish_reason="stop")),
+            ToolRegistry([]),
+            bus=bus,
+        )
+        try:
+            assert core.run("manifeste").ok
+        finally:
+            unsubscribe()
+            trace.close()
+
+        payload = json.loads(_trace_file(trace.directory, core.run_id).read_text(encoding="utf-8").splitlines()[0])["payload"]
+        assert payload["app_version"] == config.APP_VERSION
+        assert payload["trace_format"] == config.TRACE_FORMAT_VERSION >= 2
+        assert payload["model"] == settings.llm.model
+        assert payload["backend"] == settings.llm.backend
+        assert payload["budget_tokens"] == settings.agent.max_context_tokens
+        digest = payload["settings_digest"]
+        assert len(digest) == 16 and int(digest, 16) >= 0, "empreinte hexadécimale attendue"
+
+
+def test_trace_settings_drive_defaults_and_validation() -> None:
+    settings = config.Settings()
+    assert settings.trace.enabled is True and settings.trace.content == "full"
+    assert settings.trace.max_runs == DEFAULT_MAX_RUNS
+    assert settings.trace.max_age_days == DEFAULT_MAX_AGE_DAYS
+    assert settings.trace.max_bytes == DEFAULT_MAX_BYTES
+
+    settings.trace.max_runs = 0
+    settings.trace.content = "tout"
+    settings.trace.fsync_every = -1
+    settings.trace.max_bytes = -1
+    errors = {issue.field for issue in settings.validate() if issue.level == "error"}
+    assert {"trace.max_runs", "trace.content", "trace.fsync_every", "trace.max_bytes"} <= errors
+
+
+def test_build_trace_honours_the_configuration() -> None:
+    with tmpdir("reglage") as tmp:
+        settings = make_settings(tmp)
+        settings.trace.enabled = False
+        assert build_trace(settings) is None, "trace désactivée : rien ne doit être créé"
+
+        settings.trace.enabled = True
+        settings.trace.content = "metadata"
+        settings.trace.max_runs = 7
+        settings.trace.archive = True
+        trace = build_trace(settings)
+        assert trace is not None
+        assert trace.directory == settings.paths.log_dir / "runs"
+        assert trace.content == "metadata"
+        assert trace.max_runs == 7 and trace.archive is True

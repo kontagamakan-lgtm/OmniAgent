@@ -1574,5 +1574,34 @@ def test_prompts_describe_rules_and_tools() -> None:
     assert tool_catalogue([]) == "(aucun outil disponible)"
 
 
+def test_trim_reuses_an_identical_history_for_a_stable_prefix() -> None:
+    """Une reprise réémet la même requête : le repli ne doit pas être recalculé.
+
+    Le préfixe envoyé au fournisseur reste alors identique à l'octet, ce dont
+    dépend son cache de prompt ; le coût du résumé n'est pas payé deux fois.
+    """
+    with tmpdir("cache") as tmp:
+        settings = _settings(tmp, history_max=8)
+        core = AgentCore(settings, FakeLLM([]), ToolRegistry([]))
+        messages = [
+            {"role": "system", "content": "consigne"},
+            {"role": "user", "content": "tâche " + "x" * 4000},
+        ] + [
+            {"role": "assistant", "content": f"réponse {index} " + "y" * 400}
+            for index in range(10)
+        ]
+
+        first = core._trim(messages)
+        second = core._trim(messages)
+
+        assert first is second, "le repli identique doit être réutilisé, pas recalculé"
+        assert core._trim_cache_hits == 1
+        assert first[0]["content"] == "consigne"
+
+        messages.append({"role": "assistant", "content": "suite"})
+        core._trim(messages)
+        assert core._trim_cache_hits == 1, "un historique différent ne doit pas taper le cache"
+
+
 if __name__ == "__main__":
     sys.exit(run(globals()))
