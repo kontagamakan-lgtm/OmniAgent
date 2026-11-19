@@ -68,6 +68,13 @@ chevaucher. La désinscription (`--schedule-uninstall` ou le bouton) appelle
 `schtasks /Delete /TN ... /F`. Aucune tâche n'est créée sans cette demande
 explicite, et sous un autre système que Windows les deux commandes refusent
 sans rien exécuter.
+
+Le test d'intégration réel est lui aussi opt-in : sous Windows, avec
+`OMNIAGENT_TASK_INTEGRATION=1`, `tests/test_taskscheduler_integration.py`
+enregistre une tâche à nom unique, relit sa définition via
+`schtasks /Query /XML`, puis la désinscrit et vérifie qu'elle a disparu. Sans
+cette variable (ou hors Windows), le test est ignoré et la suite ne touche
+jamais au Planificateur.
 `--schedule-checks` borne l'attente et sert aux essais. À la fin de chaque
 session, une toast Windows native est affichée (« OmniAgent — session
 planifiée ») via PowerShell/WinRT, sans paquet supplémentaire ;

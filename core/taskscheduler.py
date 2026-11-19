@@ -37,10 +37,12 @@ from config import APP_ID, Settings, is_frozen
 from core.schedule import Schedule, load_schedule
 
 __all__ = [
+    "INTEGRATION_ENV",
     "TASK_DESCRIPTION",
     "TASK_NAME",
     "build_task_xml",
     "install_task",
+    "integration_enabled",
     "supported",
     "task_command",
     "uninstall_task",
@@ -53,6 +55,9 @@ TASK_DESCRIPTION = (
     "OmniAgent - session autonome planifiee : ouverture de session, reveil et "
     "rattrapage des fenetres manquees"
 )
+# Le test d'intégration n'enregistre une vraie tâche que si cette variable vaut
+# exactement "1" ; la suite normale ne touche jamais au Planificateur.
+INTEGRATION_ENV = "OMNIAGENT_TASK_INTEGRATION"
 
 Runner = Callable[[list[str]], Any]
 _XML_HEADER = '<?xml version="1.0" encoding="UTF-16"?>'
@@ -61,6 +66,19 @@ _XML_HEADER = '<?xml version="1.0" encoding="UTF-16"?>'
 def supported() -> bool:
     """Le Planificateur de tâches n'existe que sous Windows."""
     return os.name == "nt"
+
+
+def integration_enabled(environ: dict[str, str] | None = None) -> bool:
+    """Autorisation explicite du test qui enregistre une vraie tâche.
+
+    Strictement `"1"` : ni `true`, ni `yes`, ni une valeur vide. Hors Windows,
+    le Planificateur n'existe pas, donc le test reste inactif même si la
+    variable est posée.
+    """
+    if not supported():
+        return False
+    source = os.environ if environ is None else environ
+    return source.get(INTEGRATION_ENV, "").strip() == "1"
 
 
 def task_command() -> tuple[str, str, str]:
@@ -95,6 +113,7 @@ def build_task_xml(
     end_hour: int = 6,
     now: datetime | None = None,
     wake: bool = True,
+    name: str = TASK_NAME,
 ) -> str:
     """Définition XML de la tâche, prête pour `schtasks /Create /XML`.
 
@@ -114,7 +133,7 @@ def build_task_xml(
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
     <Description>{escape(TASK_DESCRIPTION)}</Description>
-    <URI>\\{escape(TASK_NAME)}</URI>
+    <URI>\\{escape(name)}</URI>
   </RegistrationInfo>
   <Triggers>
     <LogonTrigger>
@@ -186,6 +205,7 @@ def install_task(
     user: str = "",
     runner: Runner | None = None,
     now: datetime | None = None,
+    name: str = TASK_NAME,
 ) -> tuple[bool, str]:
     """Écrit la définition puis l'enregistre ; `(succès, message lisible)`.
 
@@ -204,6 +224,7 @@ def install_task(
         start_hour=chosen.start_hour,
         end_hour=chosen.end_hour,
         now=now,
+        name=name,
     )
     target = settings.paths.cache_dir / "omniagent-task.xml"
     try:
@@ -212,18 +233,20 @@ def install_task(
     except OSError as exc:
         return False, f"definition non ecrite : {exc}"
     result = (runner or _run)(
-        ["schtasks", "/Create", "/TN", TASK_NAME, "/XML", str(target), "/F"]
+        ["schtasks", "/Create", "/TN", name, "/XML", str(target), "/F"]
     )
     if int(getattr(result, "returncode", 1)) != 0:
         return False, _failure(result)
-    return True, f"tache enregistree : {TASK_NAME}"
+    return True, f"tache enregistree : {name}"
 
 
-def uninstall_task(*, runner: Runner | None = None) -> tuple[bool, str]:
+def uninstall_task(
+    *, name: str = TASK_NAME, runner: Runner | None = None
+) -> tuple[bool, str]:
     """Désinscrit la tâche ; succès seulement si `schtasks` l'a confirmé."""
     if not supported():
         return False, "Planificateur de taches : Windows uniquement"
-    result = (runner or _run)(["schtasks", "/Delete", "/TN", TASK_NAME, "/F"])
+    result = (runner or _run)(["schtasks", "/Delete", "/TN", name, "/F"])
     if int(getattr(result, "returncode", 1)) != 0:
         return False, _failure(result)
-    return True, f"tache desinscrite : {TASK_NAME}"
+    return True, f"tache desinscrite : {name}"

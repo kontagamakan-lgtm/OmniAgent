@@ -117,6 +117,19 @@ def test_uninstall_deletes_the_registered_task(monkeypatch) -> None:
     assert calls == [["schtasks", "/Delete", "/TN", tasks.TASK_NAME, "/F"]]
 
 
+def test_integration_is_strictly_opt_in(monkeypatch) -> None:
+    monkeypatch.setattr(tasks, "supported", lambda: True)
+
+    assert tasks.integration_enabled({}) is False
+    assert tasks.integration_enabled({tasks.INTEGRATION_ENV: ""}) is False
+    assert tasks.integration_enabled({tasks.INTEGRATION_ENV: "0"}) is False
+    assert tasks.integration_enabled({tasks.INTEGRATION_ENV: "true"}) is False
+    assert tasks.integration_enabled({tasks.INTEGRATION_ENV: "1"}) is True
+
+    monkeypatch.setattr(tasks, "supported", lambda: False)
+    assert tasks.integration_enabled({tasks.INTEGRATION_ENV: "1"}) is False
+
+
 def test_nothing_runs_off_windows(monkeypatch) -> None:
     monkeypatch.setattr(tasks, "supported", lambda: False)
 
