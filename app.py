@@ -126,6 +126,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="nouvelle tâche pour --autonomy-edit",
     )
     parser.add_argument(
+        "--notify-install",
+        action="store_true",
+        help="crée le raccourci du menu Démarrer et déclare le protocole omniagent://",
+    )
+    parser.add_argument(
+        "--notify-action",
+        metavar="URI",
+        help="traite l'action d'un bouton de notification (trace ou arrêt)",
+    )
+    parser.add_argument(
         "--support-bundle",
         nargs="?",
         const="",
@@ -164,6 +174,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--undo-apply",
         action="store_true",
         help="avec --undo-run : applique réellement l'annulation",
+    )
+    parser.add_argument(
+        "--verify-audit",
+        action="store_true",
+        help="vérifie le journal chaîné et les traces scellées, puis quitte",
+    )
+    parser.add_argument(
+        "--audit-seal",
+        action="store_true",
+        help="scelle les traces qui ne sont pas encore dans le journal d'audit",
     )
     parser.add_argument(
         "--metrics",
@@ -819,6 +839,55 @@ def browser_smoke(settings: Settings) -> int:
             shutil.rmtree(workdir, ignore_errors=True)
 
 
+def _notify_action(settings: Settings, uri: str) -> int:
+    """Bouton de toast : ouvre la trace visée ou écrit le fichier STOP."""
+    import subprocess
+
+    from core.notify import parse_toast_action
+    from core.stopfile import request_stop, stop_path
+
+    action = parse_toast_action(uri)
+    if action is None:
+        print(f"Action inconnue : {uri}", file=sys.stderr)
+        return 2
+    kind, run_id = action
+    if kind == "stop":
+        request_stop(settings, "notification")
+        print(f"Arrêt demandé : {stop_path(settings)}")
+        return 0
+    runs = settings.paths.log_dir / "runs"
+    candidates = sorted(
+        path
+        for path in runs.glob("*")
+        if path.is_file()
+        and path.name.endswith((".jsonl", ".jsonl.gz"))
+        and (not run_id or path.name.startswith(run_id))
+    )
+    if not candidates:
+        print(f"Trace introuvable pour {run_id or '(dernier run)'}", file=sys.stderr)
+        return 2
+    trace = candidates[-1]
+    try:
+        if os.name == "nt":
+            subprocess.run(["explorer", "/select,", str(trace)], check=False)
+        else:  # pragma: no cover - Windows uniquement
+            print(trace)
+    except OSError as exc:
+        print(f"Ouverture impossible : {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _seal_trace(settings: Settings, trace: Any) -> None:
+    """Scelle la trace fermée ; un audit indisponible ne change pas le code de sortie."""
+    path = getattr(trace, "path", None)
+    if trace is None or path is None:
+        return
+    from core.audit import seal_trace
+
+    seal_trace(settings, path)
+
+
 def _run_task(settings: Settings, args: argparse.Namespace) -> int:
     bundle = build_agent(settings, with_browser=not args.no_browser)
     stream = _ConsoleStream(sys.stdout)
@@ -874,6 +943,7 @@ def _run_task(settings: Settings, args: argparse.Namespace) -> int:
         unsubscribe_trace()
         if trace is not None:
             trace.close()
+            _seal_trace(settings, trace)
         bundle.close()
 
 
@@ -945,6 +1015,7 @@ def _run_autonomy(settings: Settings, args: argparse.Namespace) -> int:
         unsubscribe_trace()
         if trace is not None:
             trace.close()
+            _seal_trace(settings, trace)
         bundle.close()
     print(f"Journal : {journal_path(settings)}")
     return 1 if failures else 0
@@ -981,6 +1052,7 @@ def _run_schedule(settings: Settings, args: argparse.Namespace) -> int:
         unsubscribe_trace()
         if trace is not None:
             trace.close()
+            _seal_trace(settings, trace)
         bundle.close()
     if not results:
         print(f"Aucune session lancée (fenêtre {schedule_path(settings)}).")
@@ -1041,6 +1113,7 @@ def _resume(
         unsubscribe_trace()
         if trace is not None:
             trace.close()
+            _seal_trace(settings, trace)
         bundle.close()
     print(reply.text or "(aucune reponse)")
     if not reply.ok:
@@ -1085,6 +1158,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.clean or args.clean_apply:
         return _clean(settings, apply=args.clean_apply)
 
+    if args.notify_install:
+        from core.notify import install_notifications
+
+        target = sys.executable
+        script = str(Path(__file__).resolve())
+        ok, message = install_notifications(target, f'"{script}"', icon=target)
+        print(message, file=sys.stdout if ok else sys.stderr)
+        return 0 if ok else 1
+
+    if args.notify_action is not None:
+        return _notify_action(settings, args.notify_action)
+
     if args.support_bundle is not None:
         return _support_bundle(settings, args.support_bundle)
 
@@ -1116,6 +1201,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.undo_apply:
         print("--undo-apply exige --undo-run RUN", file=sys.stderr)
         return 2
+
+    if args.verify_audit:
+        from core.audit import verify
+
+        report = verify(settings)
+        print(report.format())
+        return 0 if report.ok else 1
+
+    if args.audit_seal:
+        from core.audit import seal_all
+
+        print(f"{seal_all(settings)} trace(s) scellee(s)")
+        return 0
 
     if args.metrics:
         from core.metrics import MetricsRecorder, format_summary, metrics_path

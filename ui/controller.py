@@ -174,6 +174,16 @@ class AgentController:
             run.duration_s = round(time.monotonic() - self._started, 3)
             run.finished = True
             self._finished.set()
+            # Scelle la trace terminée : une modification ulérieure sera
+            # détectable par `--verify-audit`.
+            trace = self.trace
+            if trace is not None and trace.path is not None:
+                try:
+                    from core.audit import seal_trace
+
+                    seal_trace(self.agent.settings, trace.path)
+                except Exception:  # noqa: BLE001 - l'audit ne casse pas le run
+                    logger.debug("scellement d'audit impossible", exc_info=True)
 
     def __repr__(self) -> str:  # pragma: no cover - confort
         return f"<AgentController busy={self.busy}>"
