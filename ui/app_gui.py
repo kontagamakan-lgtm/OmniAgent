@@ -66,6 +66,33 @@ class TranscriptBuffer:
         return str(self.widget.get("1.0", "end"))
 
 
+def format_autonomy_journal(records: list[dict[str, Any]], *, limit: int = 50) -> str:
+    """Rendu lisible des derniers cycles autonomes, du plus récent au plus ancien."""
+    blocks: list[str] = []
+    for record in reversed(records[-max(1, limit) :]):
+        kind = record.get("type")
+        stamp = str(record.get("at") or "")[:16].replace("T", " ")
+        if kind == "no_goals":
+            blocks.append(f"{stamp} · aucun objectif : session arrêtée sans action")
+            continue
+        if kind != "cycle_finished":
+            continue
+        status = (
+            "ok"
+            if record.get("ok")
+            else f"échec ({record.get('stop_reason') or '?'})"
+        )
+        run_id = str(record.get("run_id") or "?")
+        excerpt = " ".join(str(record.get("excerpt") or "").split())
+        block = f"Cycle {record.get('cycle', '?')} · {stamp} · {status} · run {run_id}"
+        if excerpt:
+            block += f"\n    {excerpt}"
+        if record.get("error"):
+            block += f"\n    erreur : {record['error']}"
+        blocks.append(block)
+    return "\n\n".join(blocks) if blocks else "Aucun cycle autonome enregistré."
+
+
 def _missing_dependency_message() -> str:
     return (
         "customtkinter est absent : l'interface graphique ne peut pas démarrer.\n"
@@ -168,6 +195,10 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 actions, text="Autonomie", width=110, command=self._toggle_autonomy
             )
             self.autonomy_button.pack(fill="x", pady=(6, 0))
+            self.journal_button = ctk.CTkButton(
+                actions, text="Journal", width=110, command=self._open_journal
+            )
+            self.journal_button.pack(fill="x", pady=(6, 0))
             # Trace sur disque : l'utilisateur doit pouvoir refuser qu'une
             # session laisse la tâche et les réponses en clair sur la machine.
             self.trace_switch = ctk.CTkSwitch(
@@ -350,6 +381,31 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 self._autonomy_messages.put(f"autonomie interrompue : {exc}")
             finally:
                 self._autonomy_messages.put("__autonomy_done__")
+
+        def _open_journal(self) -> None:
+            """Relit les derniers cycles autonomes : résultat et extrait."""
+            from core.autonomy import AutonomyJournal, journal_path
+
+            path = journal_path(self.settings)
+            records = AutonomyJournal(
+                path,
+                max_entries=self.settings.autonomy.journal_max_entries,
+                max_bytes=self.settings.autonomy.journal_max_bytes,
+            ).tail(50)
+            window = ctk.CTkToplevel(self)
+            window.title("Journal d'autonomie")
+            window.geometry("780x520")
+            window.transient(self)
+            frame = ctk.CTkScrollableFrame(window, label_text=str(path))
+            frame.pack(fill="both", expand=True, padx=10, pady=10)
+            ctk.CTkLabel(
+                frame,
+                text=format_autonomy_journal(records),
+                justify="left",
+                anchor="w",
+                wraplength=700,
+                font=(self.settings.ui.font_family, self.settings.ui.font_size - 1),
+            ).pack(fill="x", padx=6, pady=6)
 
         def _open_traces(self) -> None:
             """Liste les exécutions enregistrées et en relit une à la demande."""

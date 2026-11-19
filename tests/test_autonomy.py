@@ -234,6 +234,41 @@ def test_a_session_journal_respects_the_configured_bound() -> None:
         assert records[-1]["cycle"] == 4
 
 
+def test_the_autonomy_journal_can_be_read_in_the_interface() -> None:
+    from ui.app_gui import format_autonomy_journal
+
+    records = [
+        {"type": "cycle_started", "cycle": 1, "at": "2026-11-19T10:00:00+00:00"},
+        {
+            "type": "cycle_finished",
+            "cycle": 1,
+            "ok": True,
+            "stop_reason": "final",
+            "run_id": "abc",
+            "excerpt": "bilan un",
+            "at": "2026-11-19T10:05:00+00:00",
+        },
+        {
+            "type": "cycle_finished",
+            "cycle": 2,
+            "ok": False,
+            "stop_reason": "llm_error",
+            "run_id": "def",
+            "excerpt": "",
+            "error": "panne simulee",
+            "at": "2026-11-19T11:00:00+00:00",
+        },
+    ]
+
+    text = format_autonomy_journal(records)
+
+    assert text.index("Cycle 2") < text.index("Cycle 1"), "le plus récent d'abord"
+    assert "échec (llm_error)" in text and "run def" in text
+    assert "erreur : panne simulee" in text
+    assert "bilan un" in text
+    assert format_autonomy_journal([]) == "Aucun cycle autonome enregistré."
+
+
 def test_the_journal_tolerates_a_missing_directory() -> None:
     with tmpdir("autonomie-journal") as tmp:
         journal = AutonomyJournal(Path(tmp) / "absent" / "journal.jsonl")
