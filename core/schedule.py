@@ -24,25 +24,34 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 from config import APP_ID, Settings
 from core.autonomy import autonomy_dir
 
 __all__ = [
+    "CATCH_UP_MODES",
     "SCHEDULE_NAME",
     "Schedule",
+    "StartDecision",
     "load_schedule",
+    "missed_slot",
+    "plan_start",
     "sessions_path",
     "should_start",
     "system_idle_seconds",
     "system_on_battery",
     "schedule_path",
+    "window_end",
 ]
 
 logger = logging.getLogger(f"{APP_ID}.schedule")
 
 SCHEDULE_NAME = "schedule.json"
+
+#: `none` : une fenêtre manquée est abandonnée. `latest` : la dernière fenêtre
+#: manquée est rattrapée une fois, si elle n'est pas trop ancienne.
+CATCH_UP_MODES = ("none", "latest")
 
 
 def schedule_path(settings: Settings) -> Path:
@@ -62,6 +71,12 @@ class Schedule:
     min_idle_s: int = 300
     require_ac: bool = True
     check_interval_s: int = 60
+    #: Politique de rattrapage d'une fenêtre manquée (réveil, session
+    #: interrompue, poste éteint).
+    catch_up: Literal["none", "latest"] = "latest"
+    #: Au-delà de cet âge depuis la fin de la fenêtre, un rattrapage n'a plus
+    #: de sens : l'environnement a changé et la tâche serait trompeuse.
+    catch_up_hours: float = 18.0
 
     def in_window(self, now: datetime) -> bool:
         hour = now.hour
@@ -98,12 +113,21 @@ def load_schedule(settings: Settings) -> Schedule:
 
     start = max(0, min(23, integer("start_hour", defaults.start_hour)))
     end = max(0, min(24, integer("end_hour", defaults.end_hour)))
+    catch_up = str(raw.get("catch_up", defaults.catch_up)).strip().lower()
+    if catch_up not in CATCH_UP_MODES:
+        catch_up = defaults.catch_up
+    try:
+        catch_up_hours = float(raw.get("catch_up_hours", defaults.catch_up_hours))
+    except (TypeError, ValueError):
+        catch_up_hours = defaults.catch_up_hours
     return Schedule(
         start_hour=start,
         end_hour=end,
         min_idle_s=max(0, integer("min_idle_s", defaults.min_idle_s)),
         require_ac=bool(raw.get("require_ac", defaults.require_ac)),
         check_interval_s=max(5, integer("check_interval_s", defaults.check_interval_s)),
+        catch_up=catch_up,  # type: ignore[arg-type]
+        catch_up_hours=min(168.0, max(0.0, catch_up_hours)),
     )
 
 
@@ -123,6 +147,110 @@ def _last_slot(settings: Settings) -> str:
     return ""
 
 
+@dataclass(slots=True)
+class StartDecision:
+    """Démarrage décidé, avec la fenêtre à enregistrer et son origine."""
+
+    run: bool
+    slot: str = ""
+    #: Vrai quand la session rattrape une fenêtre finie, hors fenêtre courante.
+    catch_up: bool = False
+    reason: str = ""
+
+
+def window_end(
+    schedule: Schedule, slot: str, *, tzinfo: Any = None
+) -> datetime | None:
+    """Fin de la fenêtre `slot` (identifiant = date de début), ou `None`."""
+    try:
+        day = datetime.fromisoformat(f"{slot}T00:00:00")
+    except ValueError:
+        return None
+    if tzinfo is not None:
+        day = day.replace(tzinfo=tzinfo)
+    if schedule.start_hour == schedule.end_hour:
+        return day + timedelta(days=1)
+    # Une fenêtre qui commence plus tard qu'elle ne finit se termine le
+    # lendemain (22 h -> 6 h).
+    days = 1 if schedule.start_hour > schedule.end_hour else 0
+    return day + timedelta(days=days, hours=schedule.end_hour)
+
+
+def missed_slot(schedule: Schedule, now: datetime) -> str:
+    """Identifiant de la dernière fenêtre *terminée* avant `now`.
+
+    Sert au rattrapage : `slot(now)` désigne la fenêtre courante ou à venir,
+    pas celle qui vient de se terminer. Vide si aucune fenêtre identifiable.
+    """
+    if schedule.start_hour == schedule.end_hour:
+        return schedule.slot(now)
+    for offset in (0, 1, 2):
+        candidate = (now.date() - timedelta(days=offset)).isoformat()
+        end = window_end(schedule, candidate, tzinfo=now.tzinfo)
+        if end is not None and end <= now:
+            return candidate
+    return ""
+
+
+def plan_start(
+    schedule: Schedule,
+    now: datetime,
+    *,
+    idle_s: float,
+    on_battery: bool,
+    last_slot: str = "",
+) -> StartDecision:
+    """Décide du démarrage, y compris le rattrapage d'une fenêtre manquée.
+
+    Le verrou anti-double exécution reste `last_slot` : une fenêtre déjà
+    honorée, courante ou rattrapée, est refusée. Une fenêtre rattrapée est
+    enregistrée avec son propre identifiant, donc elle ne peut pas repartir.
+    """
+    if schedule.in_window(now):
+        slot = schedule.slot(now)
+        if slot == last_slot:
+            return StartDecision(False, slot, False, "session deja faite pour cette fenetre")
+        if idle_s < schedule.min_idle_s:
+            return StartDecision(
+                False,
+                slot,
+                False,
+                f"machine active (inactivite {int(idle_s)} s < {schedule.min_idle_s} s)",
+            )
+        if schedule.require_ac and on_battery:
+            return StartDecision(False, slot, False, "machine sur batterie")
+        return StartDecision(True, slot, False, "conditions reunies")
+
+    if schedule.catch_up == "none":
+        return StartDecision(False, "", False, "hors fenetre horaire")
+    if idle_s < schedule.min_idle_s:
+        return StartDecision(
+            False,
+            "",
+            False,
+            f"machine active (inactivite {int(idle_s)} s < {schedule.min_idle_s} s)",
+        )
+    if schedule.require_ac and on_battery:
+        return StartDecision(False, "", False, "machine sur batterie")
+    slot = missed_slot(schedule, now)
+    if not slot:
+        return StartDecision(False, "", False, "hors fenetre horaire")
+    if slot == last_slot:
+        return StartDecision(False, slot, False, "session deja faite pour cette fenetre")
+    end = window_end(schedule, slot, tzinfo=now.tzinfo)
+    if end is None:
+        return StartDecision(False, "", False, "hors fenetre horaire")
+    age_hours = (now - end).total_seconds() / 3600.0
+    if age_hours > schedule.catch_up_hours:
+        return StartDecision(
+            False,
+            slot,
+            False,
+            f"fenetre manquee trop ancienne ({age_hours:.1f} h > {schedule.catch_up_hours:.0f} h)",
+        )
+    return StartDecision(True, slot, True, f"rattrapage de la fenetre {slot}")
+
+
 def should_start(
     schedule: Schedule,
     now: datetime,
@@ -132,15 +260,10 @@ def should_start(
     last_slot: str = "",
 ) -> tuple[bool, str]:
     """Décide du démarrage, avec la raison du refus (testable sans horloge)."""
-    if not schedule.in_window(now):
-        return False, "hors fenetre horaire"
-    if schedule.slot(now) == last_slot:
-        return False, "session deja faite pour cette fenetre"
-    if idle_s < schedule.min_idle_s:
-        return False, f"machine active (inactivite {int(idle_s)} s < {schedule.min_idle_s} s)"
-    if schedule.require_ac and on_battery:
-        return False, "machine sur batterie"
-    return True, "conditions reunies"
+    decision = plan_start(
+        schedule, now, idle_s=idle_s, on_battery=on_battery, last_slot=last_slot
+    )
+    return decision.run, decision.reason
 
 
 def system_idle_seconds() -> float:
@@ -219,7 +342,7 @@ def run_scheduled(
     while max_checks is None or checks < max_checks:
         checks += 1
         current = now()
-        allowed, reason = should_start(
+        decision = plan_start(
             schedule,
             current,
             idle_s=idle(),
@@ -227,14 +350,18 @@ def run_scheduled(
             last_slot=_last_slot(settings),
         )
         if on_event is not None:
-            on_event(f"{current.isoformat()} : {reason}")
-        if allowed:
+            on_event(f"{current.isoformat()} : {decision.reason}")
+        if decision.run:
             started = time.monotonic()
             session = AutonomySession(settings, agent)
             records = session.run(cycles=settings.autonomy.max_cycles, interval_s=0)
             summary = {
                 "type": "scheduled_session",
-                "slot": schedule.slot(current),
+                # La fenêtre enregistrée est celle qui a effectivement tourné :
+                # celle du rattrapage diffère de la fenêtre courante. C'est ce
+                # slot qui empêche la seconde exécution.
+                "slot": decision.slot,
+                "catch_up": decision.catch_up,
                 "at": datetime.now(timezone.utc).isoformat(),
                 "cycles": len(records),
                 "ok": all(record.get("ok") for record in records) if records else False,

@@ -35,15 +35,39 @@ démarrage, `--check` signale que les traces chiffrées ne seront pas écrites.
 
 ```json
 {"start_hour": 1, "end_hour": 6, "min_idle_s": 300,
- "require_ac": true, "check_interval_s": 60}
+ "require_ac": true, "check_interval_s": 60,
+ "catch_up": "latest", "catch_up_hours": 18}
 ```
 
 ```bat
 python app.py --autonomy-schedule
 python app.py --autonomy-schedule --schedule-checks 1
+python app.py --schedule-install
+python app.py --schedule-uninstall
 ```
 
 Une session au plus par fenêtre (l'historique est `autonomy/sessions.jsonl`).
+
+**Rattrapage.** Hors fenêtre, `catch_up = "latest"` autorise une seule
+session de rattrapage pour la dernière fenêtre terminée, si elle s'est finie
+il y a moins de `catch_up_hours` heures ; `"none"` l'interdit. La fenêtre
+rattrapée est enregistrée avec son propre identifiant et l'indicateur
+`catch_up`, donc elle ne peut pas repartir : le verrou anti-double exécution
+reste `last_slot`.
+
+**Tâche Windows (facultative).** `--schedule-install` (ou le bouton
+**Planificateur** de l'interface, qui propose aussi **Désinscrire**) écrit
+`cache/omniagent-task.xml` puis appelle
+`schtasks /Create /TN "OmniAgent - Session planifiee" /XML ... /F`. La tâche
+se déclenche à l'ouverture de session et à l'heure de début de fenêtre, avec
+répétition horaire pendant la fenêtre et `WakeToRun` pour le réveil ;
+`StartWhenAvailable` la relance après une veille ou un poste éteint, et c'est
+`core.schedule` qui décide si le rattrapage est encore acceptable.
+`MultipleInstancesPolicy=IgnoreNew` empêche deux instances de la tâche de se
+chevaucher. La désinscription (`--schedule-uninstall` ou le bouton) appelle
+`schtasks /Delete /TN ... /F`. Aucune tâche n'est créée sans cette demande
+explicite, et sous un autre système que Windows les deux commandes refusent
+sans rien exécuter.
 `--schedule-checks` borne l'attente et sert aux essais. À la fin de chaque
 session, une toast Windows native est affichée (« OmniAgent — session
 planifiée ») via PowerShell/WinRT, sans paquet supplémentaire ;

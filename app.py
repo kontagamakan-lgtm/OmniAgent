@@ -86,6 +86,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="nombre de vérifications avant de quitter (défaut : sans fin)",
     )
     parser.add_argument(
+        "--schedule-install",
+        action="store_true",
+        help="enregistre la tâche Windows (ouverture de session, réveil, rattrapage)",
+    )
+    parser.add_argument(
+        "--schedule-uninstall",
+        action="store_true",
+        help="désinscrit la tâche Windows existante",
+    )
+    parser.add_argument(
         "--config",
         metavar="CHEMIN",
         help="fichier de configuration alternatif (JSON)",
@@ -1167,6 +1177,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             detail=f"code de sortie {code}",
         )
         return code
+
+    if args.schedule_install:
+        from core.taskscheduler import install_task
+
+        ok, message = install_task(settings)
+        print(message, file=sys.stdout if ok else sys.stderr)
+        return 0 if ok else 1
+
+    if args.schedule_uninstall:
+        from core.taskscheduler import uninstall_task
+
+        ok, message = uninstall_task()
+        print(message, file=sys.stdout if ok else sys.stderr)
+        return 0 if ok else 1
 
     if args.autonomy_propose:
         return _run_proposal(settings, args)

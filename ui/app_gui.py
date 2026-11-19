@@ -229,6 +229,12 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 actions, text="Autonomie", width=110, command=self._toggle_autonomy
             )
             self.autonomy_button.pack(fill="x", pady=(6, 0))
+            # Enregistrement optionnel dans le Planificateur de tâches
+            # Windows : la fenêtre permet d'inscrire et de désinscrire.
+            self.schedule_button = ctk.CTkButton(
+                actions, text="Planificateur", width=110, command=self._open_scheduler
+            )
+            self.schedule_button.pack(fill="x", pady=(6, 0))
             # Toujours visible, y compris quand une fenêtre modale a le focus :
             # l'arrêt ne doit pas dépendre du bouton « Autonomie » masqué.
             self.emergency_button = ctk.CTkButton(
@@ -408,6 +414,72 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 "trace active"
                 if enabled
                 else "trace désactivée : rien n'est écrit sur disque"
+            )
+
+        # -- Planificateur de tâches Windows --------------------------------
+
+        def _open_scheduler(self) -> None:
+            """Fenêtre dédiée : inscrire ou désinscrire la tâche Windows."""
+            window = ctk.CTkToplevel(self)
+            window.title("Planificateur de tâches Windows")
+            window.geometry("560x300")
+            ctk.CTkLabel(
+                window,
+                text=(
+                    "Inscription facultative dans le Planificateur de tâches "
+                    "Windows.\n\n"
+                    "L'application sera lancée à l'ouverture de session et au "
+                    "réveil, avec rattrapage de la dernière fenêtre manquée "
+                    "(autonomy/schedule.json : catch_up, catch_up_hours).\n\n"
+                    "Le verrou anti-double exécution reste en place : une "
+                    "fenêtre déjà honorée n'est jamais relancée."
+                ),
+                justify="left",
+                wraplength=520,
+                anchor="w",
+            ).pack(fill="x", padx=16, pady=(16, 10))
+            buttons = ctk.CTkFrame(window)
+            buttons.pack(fill="x", padx=16, pady=(0, 12))
+            ctk.CTkButton(
+                buttons,
+                text="Enregistrer la tâche",
+                command=self._install_schedule_task,
+            ).pack(side="left", padx=(0, 8))
+            ctk.CTkButton(
+                buttons,
+                text="Désinscrire",
+                fg_color="#B91C1C",
+                hover_color="#991B1B",
+                command=self._uninstall_schedule_task,
+            ).pack(side="left", padx=(0, 8))
+            ctk.CTkButton(buttons, text="Fermer", command=window.destroy).pack(
+                side="left"
+            )
+
+        def _install_schedule_task(self) -> None:
+            """Enregistre la tâche ; l'échec est dit, jamais silencieux."""
+            from core.taskscheduler import install_task
+
+            try:
+                ok, message = install_task(self.settings)
+            except Exception as exc:  # noqa: BLE001 - un refus ne casse pas l'UI
+                ok, message = False, f"{type(exc).__name__}: {exc}"
+            self._append("système" if ok else "erreur", message)
+            self._set_status(
+                "tâche planifiée" if ok else "enregistrement de la tâche refusé"
+            )
+
+        def _uninstall_schedule_task(self) -> None:
+            """Désinscrit la tâche existante, sur demande explicite."""
+            from core.taskscheduler import uninstall_task
+
+            try:
+                ok, message = uninstall_task()
+            except Exception as exc:  # noqa: BLE001 - un refus ne casse pas l'UI
+                ok, message = False, f"{type(exc).__name__}: {exc}"
+            self._append("système" if ok else "erreur", message)
+            self._set_status(
+                "tâche désinscrite" if ok else "désinscription de la tâche refusée"
             )
 
         def _toggle_autonomy(self) -> None:
