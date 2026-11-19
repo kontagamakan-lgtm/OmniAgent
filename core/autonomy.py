@@ -27,7 +27,9 @@ from pathlib import Path
 from typing import Any, Callable
 
 from config import APP_ID, Settings
+from core.cost import estimate_cost, load_prices
 from core.events import EventType
+from core.locking import LockTimeout, file_lock
 
 __all__ = [
     "GOALS_NAME",
@@ -135,12 +137,19 @@ class AutonomyJournal:
         body = {"at": datetime.now(tz=timezone.utc).isoformat(), **record}
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            with self.path.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(body, ensure_ascii=False, default=str) + "\n")
+            with file_lock(self._lock_path()):
+                with self.path.open("a", encoding="utf-8") as handle:
+                    handle.write(
+                        json.dumps(body, ensure_ascii=False, default=str) + "\n"
+                    )
+                    handle.flush()
+                self._prune_locked()
+        except LockTimeout:
+            logger.warning("journal d'autonomie verrouille : entree non ecrite")
+            return False
         except OSError:
             logger.debug("journal d'autonomie non écrit", exc_info=True)
             return False
-        self.prune()
         return True
 
     def prune(self) -> bool:
@@ -150,6 +159,18 @@ class AutonomyJournal:
         seule la taille maximale : mieux vaut un journal trop gros qu'un cycle
         dont il ne reste aucune trace. Retourne vrai si le fichier a été réécrit.
         """
+        try:
+            with file_lock(self._lock_path()):
+                return self._prune_locked()
+        except LockTimeout:
+            logger.warning("journal d'autonomie verrouille : compaction differee")
+            return False
+
+    def _lock_path(self) -> Path:
+        return self.path.with_name(f"{self.path.name}.lock")
+
+    def _prune_locked(self) -> bool:
+        """Compaction supposée sous verrou (appelée par `append`)."""
         try:
             raw = self.path.read_text(encoding="utf-8", errors="replace")
         except OSError:
@@ -204,6 +225,8 @@ class _BudgetWatch:
 
     def __init__(self, cfg: Any, agent: Any) -> None:
         self.tokens = 0
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
         self.tools = 0
         self.reason = ""
         self._limit_tokens = int(getattr(cfg, "max_tokens_per_cycle", 0) or 0)
@@ -227,9 +250,11 @@ class _BudgetWatch:
         payload = event.payload if isinstance(event.payload, dict) else {}
         if event.type == EventType.LLM_RESPONSE:
             tokens = payload.get("tokens") or {}
-            self.tokens += int(tokens.get("prompt", 0) or 0) + int(
-                tokens.get("completion", 0) or 0
-            )
+            prompt = int(tokens.get("prompt", 0) or 0)
+            completion = int(tokens.get("completion", 0) or 0)
+            self.prompt_tokens += prompt
+            self.completion_tokens += completion
+            self.tokens += prompt + completion
         elif event.type == EventType.TOOL_STARTED:
             self.tools += 1
         if self.reason:
@@ -276,6 +301,12 @@ class AutonomySession:
             max_bytes=settings.autonomy.journal_max_bytes,
         )
         self.stop = threading.Event()
+        self.tokens_used = 0
+        self.cost_used = 0.0
+        self._stop_unsubscribe: Callable[[], None] | None = None
+        from core.policy import load_policy
+
+        self.policy = load_policy(settings)
 
     def request_stop(self) -> None:
         """Demande l'arrêt : effectif entre deux étapes et entre deux cycles."""
@@ -284,12 +315,39 @@ class AutonomySession:
         if callable(cancel):
             cancel()
 
-    def _deny(self, tool: Any, arguments: Any) -> bool:
-        """Refus explicite en autonomie : aucune action dangereuse sans humain."""
-        logger.warning(
-            "autonomie : outil dangereux refusé (%s)", getattr(tool, "name", "?")
+    def _authorize(self, tool: Any, arguments: Any) -> bool:
+        """Décide d'un outil dangereux selon `autonomy/policy.json`.
+
+        Sans politique, le comportement reste le refus total. Chaque décision
+        est journalisée avec la règle appliquée : un refus doit être explicable
+        après coup, et une autorisation aussi.
+        """
+        name = str(getattr(tool, "name", "?") or "?")
+        allowed, rule = self.policy.decide(name, arguments or {})
+        self.journal.append(
+            {
+                "type": "policy_decision",
+                "tool": name,
+                "allowed": allowed,
+                "rule": rule,
+            }
         )
-        return False
+        logger.log(
+            logging.INFO if allowed else logging.WARNING,
+            "autonomie : %s %s (%s)",
+            name,
+            "autorise" if allowed else "refuse",
+            rule,
+        )
+        return allowed
+
+    def _watch_stop(self, _event: Any) -> None:
+        """Lit le fichier STOP à chaque événement de l'agent."""
+        from core.stopfile import stop_requested
+
+        if not self.stop.is_set() and stop_requested(self.settings):
+            self.journal.append({"type": "stop_requested", "source": "STOP"})
+            self.request_stop()
 
     def run(
         self,
@@ -312,22 +370,38 @@ class AutonomySession:
         records: list[dict[str, Any]] = []
         failures = 0
         self.tokens_used = 0
+        self.cost_used = 0.0
         total_limit = int(cfg.max_total_tokens)
+        total_cost = float(getattr(cfg, "max_total_cost", 0.0) or 0.0)
         previous = None
         installed = False
         registry = getattr(self.agent, "registry", None)
         if registry is not None and hasattr(registry, "set_confirm"):
-            previous = registry.set_confirm(self._deny)
+            previous = registry.set_confirm(self._authorize)
             installed = True
+        bus = getattr(self.agent, "bus", None)
+        if bus is not None:
+            try:
+                self._stop_unsubscribe = bus.subscribe(self._watch_stop)
+            except Exception:  # noqa: BLE001 - surveillance best effort
+                self._stop_unsubscribe = None
         try:
             for number in range(1, total + 1):
                 if self.stop.is_set():
+                    break
+                from core.stopfile import stop_requested
+
+                if stop_requested(self.settings):
+                    self.journal.append(
+                        {"type": "stop_requested", "source": "STOP"}
+                    )
                     break
                 if total_limit and self.tokens_used >= total_limit:
                     break
                 record = self._cycle(number)
                 records.append(record)
                 self.tokens_used += int(record.get("tokens") or 0)
+                self.cost_used += float(record.get("cost") or 0.0)
                 if on_cycle is not None:
                     try:
                         on_cycle(record)
@@ -341,23 +415,34 @@ class AutonomySession:
                         "autonomie : %d échecs consécutifs, session arrêtée", failures
                     )
                     break
-                if total_limit and self.tokens_used >= total_limit:
+                if (total_limit and self.tokens_used >= total_limit) or (
+                    total_cost and self.cost_used >= total_cost
+                ):
                     exhausted = {
                         "type": "budget_exhausted",
                         "cycle": number,
                         "tokens": self.tokens_used,
                         "limit": total_limit,
+                        "cost": round(self.cost_used, 4),
+                        "cost_limit": total_cost,
                     }
                     self.journal.append(exhausted)
                     records.append(exhausted)
                     logger.warning(
-                        "autonomie : budget de %d tokens atteint, session arrêtée",
+                        "autonomie : budget atteint (%d tokens, %.4f USD), session arrêtée",
                         total_limit,
+                        self.cost_used,
                     )
                     break
                 if number < total and self.stop.wait(interval):
                     break
         finally:
+            if self._stop_unsubscribe is not None:
+                try:
+                    self._stop_unsubscribe()
+                except Exception:  # noqa: BLE001
+                    pass
+                self._stop_unsubscribe = None
             # Drapeau, pas `previous is not None` : l'absence de confirmateur
             # avant la session est un état à restaurer aussi, sinon le refus
             # autonome resterait installé pour toutes les tâches suivantes.
@@ -407,6 +492,15 @@ class AutonomySession:
         finally:
             spent.stop()
         tokens = spent["tokens"]
+        prices = load_prices(self.settings)
+        cost = estimate_cost(
+            self.settings.llm.model,
+            spent["prompt_tokens"],
+            spent["completion_tokens"],
+            prices=prices,
+            prompt_price=self.settings.llm.price_prompt_per_million,
+            completion_price=self.settings.llm.price_completion_per_million,
+        )
         record = {
             "type": "cycle_finished",
             "cycle": number,
@@ -417,6 +511,9 @@ class AutonomySession:
             "excerpt": " ".join(text.split())[:MAX_EXCERPT],
             "error": error[:200],
             "tokens": tokens,
+            "prompt_tokens": spent["prompt_tokens"],
+            "completion_tokens": spent["completion_tokens"],
+            "cost": cost,
             "tool_calls": spent["tools"],
         }
         if spent["reason"]:

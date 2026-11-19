@@ -75,6 +75,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="minutes entre deux cycles (défaut : autonomy.interval_minutes)",
     )
     parser.add_argument(
+        "--autonomy-schedule",
+        action="store_true",
+        help="attend la fenêtre autonomy/schedule.json puis lance une session",
+    )
+    parser.add_argument(
+        "--schedule-checks",
+        type=int,
+        metavar="N",
+        help="nombre de vérifications avant de quitter (défaut : sans fin)",
+    )
+    parser.add_argument(
         "--config",
         metavar="CHEMIN",
         help="fichier de configuration alternatif (JSON)",
@@ -95,11 +106,39 @@ def build_parser() -> argparse.ArgumentParser:
         help="rejette une proposition sans l'exécuter, puis quitte",
     )
     parser.add_argument(
+        "--autonomy-edit",
+        metavar="ID",
+        help="modifie la tâche d'une proposition en attente (avec --autonomy-task)",
+    )
+    parser.add_argument(
+        "--autonomy-task",
+        metavar="TEXTE",
+        help="nouvelle tâche pour --autonomy-edit",
+    )
+    parser.add_argument(
         "--support-bundle",
         nargs="?",
         const="",
         metavar="FICHIER",
         help="écrit un paquet de support rouge (par défaut dans reports/) et quitte",
+    )
+    parser.add_argument(
+        "--backup",
+        nargs="?",
+        const="",
+        metavar="FICHIER",
+        help="écrit une sauvegarde des données critiques (chiffrée si "
+        "OMNIAGENT_BACKUP_PASSPHRASE est définie), puis quitte",
+    )
+    parser.add_argument(
+        "--restore",
+        metavar="FICHIER",
+        help="vérifie une sauvegarde ; avec --apply-restore, la restaure",
+    )
+    parser.add_argument(
+        "--apply-restore",
+        action="store_true",
+        help="exécute réellement --restore après vérification",
     )
     parser.add_argument(
         "--metrics",
@@ -122,6 +161,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="affiche l'état de l'installation (dépendances, configuration) et quitte",
     )
     parser.add_argument(
+        "--fix",
+        action="store_true",
+        help="avec --check : répare l'index et les marqueurs sans toucher aux traces",
+    )
+    parser.add_argument(
         "--no-browser",
         action="store_true",
         help="n'enregistre pas les outils de navigation",
@@ -140,6 +184,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--replay",
         metavar="TRACE",
         help="rejoue une trace .jsonl hors-ligne, puis quitte",
+    )
+    parser.add_argument(
+        "--resume",
+        metavar="TRACE",
+        help="prépare la reprise d'une trace interrompue (aperçu sans exécution)",
+    )
+    parser.add_argument(
+        "--resume-apply",
+        action="store_true",
+        help="avec --resume : lance l'agent avec le contexte reconstruit",
     )
     parser.add_argument(
         "--browser-smoke",
@@ -233,6 +287,20 @@ def diagnostics(settings: Settings) -> list[tuple[bool, str]]:
     vault = settings.paths.vault_file
     checks.append((True, f"coffre : {vault}" + ("" if vault.is_file() else " (à créer)")))
     checks.append((True, f"journal : {settings.paths.log_dir / 'omniagent.log'}"))
+    if settings.trace.encrypt:
+        from core.trace_crypto import TraceKeyError, load_key
+
+        try:
+            load_key(settings.trace.key_env)
+        except TraceKeyError as exc:
+            checks.append(
+                (
+                    False,
+                    f"traces chiffrees : cle absente ({exc}) ; aucune trace ne sera ecrite",
+                )
+            )
+        else:
+            checks.append((True, "traces chiffrees : cle presente"))
     # L'index est un cache : désynchronisé, il fait mentir la liste des runs.
     # Le diagnostic ne répare rien, il dit quoi faire (`--index-compact`).
     try:
@@ -287,6 +355,46 @@ def _support_bundle(settings: Settings, target: str) -> int:
     return 0
 
 
+def _backup(settings: Settings, target: str) -> int:
+    """Archive chiffrée ou claire des données critiques."""
+    from core.backup import PASSPHRASE_ENV, create_backup
+
+    passphrase = os.environ.get(PASSPHRASE_ENV, "").strip() or None
+    try:
+        path = create_backup(
+            settings, Path(target) if target else None, passphrase=passphrase
+        )
+    except (OSError, ValueError) as exc:
+        print(f"Sauvegarde impossible : {exc}", file=sys.stderr)
+        return 1
+    kind = "chiffrée" if passphrase else "claire (définir OMNIAGENT_BACKUP_PASSPHRASE)"
+    print(f"Sauvegarde {kind} : {path}")
+    return 0
+
+
+def _restore(settings: Settings, source: str, *, apply: bool) -> int:
+    """Vérifie puis, sur demande, restaure sans écraser de fichier inconnu."""
+    from core.backup import PASSPHRASE_ENV, backup_summary, restore_backup
+
+    passphrase = os.environ.get(PASSPHRASE_ENV, "").strip() or None
+    try:
+        result = restore_backup(
+            settings, Path(source), passphrase=passphrase, apply=apply
+        )
+    except (OSError, ValueError) as exc:
+        print(f"Restauration impossible : {exc}", file=sys.stderr)
+        return 1
+    print(backup_summary(result))
+    if not result.get("ok"):
+        return 1
+    if not apply:
+        print("Aperçu seulement : relancer avec --apply-restore pour écrire.")
+        return 0
+    for path in result.get("files") or []:
+        print(f"  restauré {path}")
+    return 0
+
+
 def _clean(settings: Settings, *, apply: bool) -> int:
     """Aperçu puis, sur demande explicite, purge des dossiers de travail."""
     from core.retention import apply_cleanup, format_plans, plan_cleanup
@@ -308,7 +416,7 @@ def _clean(settings: Settings, *, apply: bool) -> int:
     return 1 if failures else 0
 
 
-def _report(settings: Settings) -> int:
+def _report(settings: Settings, *, fix: bool = False) -> int:
     print(f"{APP_NAME} {APP_VERSION}")
     blocking = 0
     for ok, line in diagnostics(settings):
@@ -317,6 +425,20 @@ def _report(settings: Settings) -> int:
             blocking += 1
     for issue in settings.validate():
         print(f"  ~~  {issue}")
+    if fix:
+        from core.index_repair import format_repair_plan, repair
+
+        directory = settings.paths.log_dir / "runs"
+        try:
+            actions = repair(
+                directory, apply=True, active_ttl_s=settings.trace.active_ttl_s
+            )
+        except OSError as exc:
+            print(f"  !!  réparation impossible : {exc}", file=sys.stderr)
+            return 1
+        print(format_repair_plan(actions, applied=True))
+        if any(action.get("error") or action.get("applied") is False for action in actions):
+            return 1
     return 1 if blocking else 0
 
 
@@ -733,11 +855,19 @@ def _run_task(settings: Settings, args: argparse.Namespace) -> int:
 def _run_autonomy(settings: Settings, args: argparse.Namespace) -> int:
     """Session autonome en console : objectifs dans goals.md, journal JSONL."""
     from core.autonomy import AutonomySession, goals_path, journal_path, read_goals
+    from core.stopfile import stop_path, stop_requested
 
     goals = goals_path(settings)
     if not read_goals(goals):
         print(
             f"Aucun objectif : renseignez {goals} avant de lancer l'autonomie.",
+            file=sys.stderr,
+        )
+        return 2
+    if stop_requested(settings):
+        print(
+            f"Arrêt d'urgence présent : {stop_path(settings)}. "
+            "Supprimez ce fichier pour relancer une session.",
             file=sys.stderr,
         )
         return 2
@@ -767,7 +897,10 @@ def _run_autonomy(settings: Settings, args: argparse.Namespace) -> int:
         reason = record.get("stop_reason") or "?"
         print(
             f"Cycle {record.get('cycle')} : {status} "
-            f"({reason}, {record.get('duration_s')} s, run {record.get('run_id') or '?'})"
+            f"({reason}, {record.get('duration_s')} s, "
+            f"{record.get('tokens', 0)} tokens, "
+            f"{float(record.get('cost') or 0):.4f} USD, "
+            f"run {record.get('run_id') or '?'})"
         )
         excerpt = str(record.get("excerpt") or "")
         if excerpt:
@@ -790,6 +923,93 @@ def _run_autonomy(settings: Settings, args: argparse.Namespace) -> int:
         bundle.close()
     print(f"Journal : {journal_path(settings)}")
     return 1 if failures else 0
+
+
+def _run_schedule(settings: Settings, args: argparse.Namespace) -> int:
+    """Attend la fenêtre planifiée, puis exécute une session autonome."""
+    from core.autonomy import goals_path, read_goals
+    from core.schedule import run_scheduled, schedule_path
+    from core.stopfile import stop_requested
+
+    if not read_goals(goals_path(settings)):
+        print(f"Aucun objectif : renseignez {goals_path(settings)}.", file=sys.stderr)
+        return 2
+    if stop_requested(settings):
+        print("Arrêt d'urgence présent : supprimez le fichier STOP.", file=sys.stderr)
+        return 2
+    bundle = build_agent(settings, with_browser=not args.no_browser)
+    trace = None if getattr(args, "no_trace", False) else build_trace(settings)
+    unsubscribe_trace = (
+        bundle.agent.bus.subscribe(trace) if trace is not None else (lambda: None)
+    )
+    try:
+        results = run_scheduled(
+            settings,
+            bundle.agent,
+            max_checks=args.schedule_checks,
+            on_event=print,
+        )
+    except KeyboardInterrupt:
+        print("Planificateur interrompu.", file=sys.stderr)
+        return 130
+    finally:
+        unsubscribe_trace()
+        if trace is not None:
+            trace.close()
+        bundle.close()
+    if not results:
+        print(f"Aucune session lancée (fenêtre {schedule_path(settings)}).")
+        return 0
+    for result in results:
+        print(
+            f"Session {result['slot']} : {result['cycles']} cycle(s), "
+            f"{result['tokens']} tokens, {result['cost']:.4f} USD, "
+            f"{result['duration_s']} s"
+        )
+    return 0 if all(result.get("ok") for result in results) else 1
+
+
+def _resume(
+    settings: Settings, source: str, *, apply: bool, no_trace: bool = False
+) -> int:
+    """Aperçu ou reprise : aucun outil de la trace n'est rejoué."""
+    from core.resume import build_plan, format_plan, resume_prompt
+    from core.trace_crypto import TraceKeyError, optional_key
+
+    path = Path(source)
+    if not path.is_file():
+        print(f"Trace introuvable : {path}", file=sys.stderr)
+        return 2
+    try:
+        key = optional_key(settings.trace.key_env)
+    except TraceKeyError as exc:
+        print(f"Cle de trace illisible : {exc}", file=sys.stderr)
+        return 2
+    try:
+        plan = build_plan(path, key=key)
+    except Exception as exc:  # noqa: BLE001 - la CLI rapporte, elle ne plante pas
+        print(f"Trace illisible : {exc}", file=sys.stderr)
+        return 2
+    print(format_plan(plan))
+    if plan.ok or not apply:
+        return 0
+    bundle = build_agent(settings, with_browser=False)
+    trace = None if no_trace else build_trace(settings)
+    unsubscribe_trace = (
+        bundle.agent.bus.subscribe(trace) if trace is not None else (lambda: None)
+    )
+    try:
+        reply = bundle.agent.run(resume_prompt(plan))
+    finally:
+        unsubscribe_trace()
+        if trace is not None:
+            trace.close()
+        bundle.close()
+    print(reply.text or "(aucune reponse)")
+    if not reply.ok:
+        print(f"[{reply.stop_reason}] {reply.error}", file=sys.stderr)
+        return 1
+    return 0
 
 
 def _run_gui(settings: Settings) -> int:
@@ -820,13 +1040,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
 
     if args.check:
-        return _report(settings)
+        return _report(settings, fix=args.fix)
+    if args.fix:
+        print("--fix s'utilise avec --check", file=sys.stderr)
+        return 2
 
     if args.clean or args.clean_apply:
         return _clean(settings, apply=args.clean_apply)
 
     if args.support_bundle is not None:
         return _support_bundle(settings, args.support_bundle)
+
+    if args.backup is not None:
+        return _backup(settings, args.backup)
+
+    if args.restore is not None:
+        return _restore(settings, args.restore, apply=args.apply_restore)
+    if args.apply_restore:
+        print("--apply-restore exige --restore FICHIER", file=sys.stderr)
+        return 2
 
     if args.metrics:
         from core.metrics import MetricsRecorder, format_summary, metrics_path
@@ -859,6 +1091,33 @@ def main(argv: Sequence[str] | None = None) -> int:
     config.configure_logging(settings, redact, filters=(RunIdFilter(),))
     # Après le journal : une approbation exécute une tâche (et écrit donc une
     # trace) ; elle ne doit pas précéder la configuration du logging.
+    if args.resume is not None:
+        return _resume(
+            settings,
+            args.resume,
+            apply=args.resume_apply,
+            no_trace=args.no_trace,
+        )
+    if args.resume_apply:
+        print("--resume-apply exige --resume TRACE", file=sys.stderr)
+        return 2
+
+    if args.autonomy_edit:
+        from core.proposals import set_proposal_task
+
+        if not args.autonomy_task:
+            print("--autonomy-edit exige --autonomy-task TEXTE", file=sys.stderr)
+            return 2
+        record = set_proposal_task(settings, args.autonomy_edit, args.autonomy_task)
+        if record is None:
+            print(
+                f"Proposition modifiable introuvable : {args.autonomy_edit}",
+                file=sys.stderr,
+            )
+            return 2
+        print(f"Proposition {record['id']} modifiée : {record.get('task', '')}")
+        return 0
+
     if args.autonomy_reject:
         from core.proposals import reject_proposal
 
@@ -870,7 +1129,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if args.autonomy_approve:
-        from core.proposals import approve_proposal
+        from core.proposals import approve_proposal, finish_proposal
 
         record = approve_proposal(settings, args.autonomy_approve)
         if record is None:
@@ -878,10 +1137,29 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 2
         print(f"Proposition {record['id']} approuvée : {record.get('task', '')}")
         args.task = str(record.get("task") or "")
-        return _run_task(settings, args)
+        code = _run_task(settings, args)
+        run_id = ""
+        try:
+            from core.metrics import MetricsRecorder, metrics_path
+
+            records = MetricsRecorder(metrics_path(settings)).all()
+            if records:
+                run_id = str(records[-1].get("run_id") or "")
+        except Exception:  # noqa: BLE001 - un historique manquant ne bloque pas
+            run_id = ""
+        finish_proposal(
+            settings,
+            record["id"],
+            ok=code == 0,
+            run_id=run_id,
+            detail=f"code de sortie {code}",
+        )
+        return code
 
     if args.autonomy_propose:
         return _run_proposal(settings, args)
+    if args.autonomy_schedule:
+        return _run_schedule(settings, args)
     if args.autonomy:
         return _run_autonomy(settings, args)
     if args.task is not None:

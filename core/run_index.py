@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from config import APP_ID
+from core.locking import LockTimeout, file_lock
 
 __all__ = [
     "INDEX_NAME",
@@ -137,12 +138,21 @@ class RunIndex:
         line = json.dumps(record.as_dict(), ensure_ascii=False, default=str) + "\n"
         try:
             self.directory.mkdir(parents=True, exist_ok=True)
-            with self.path.open("a", encoding="utf-8") as handle:
-                handle.write(line)
+            with file_lock(self._lock_path()):
+                with self.path.open("a", encoding="utf-8") as handle:
+                    handle.write(line)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+        except LockTimeout:
+            logger.warning("index des runs verrouille : etat non ecrit")
+            return False
         except OSError:
             logger.debug("index des runs non écrit", exc_info=True)
             return False
         return True
+
+    def _lock_path(self) -> Path:
+        return self.path.with_name(f"{self.path.name}.lock")
 
     def mark(
         self,
@@ -270,6 +280,15 @@ class RunIndex:
             before = self.path.stat()
         except OSError:
             return False
+        try:
+            with file_lock(self._lock_path()):
+                return self._compact_locked(before)
+        except LockTimeout:
+            logger.warning("index des runs verrouille : compaction differee")
+            return False
+
+    def _compact_locked(self, before: os.stat_result) -> bool:
+        """Compaction sous verrou : aucune écriture concurrente ne se glisse."""
         records, physical = self._scan()
         latest = _latest(iter(records))
         present = self._present_run_ids()
@@ -492,6 +511,40 @@ def maintain(
             }
         )
     return report
+
+
+def workspace_indexes(root: Path | str) -> list[Path]:
+    """Index de la racine et de ses sous-dossiers d'espace de travail.
+
+    `trace.per_workspace` écrit `runs/<slug>/runs.index` : le panneau Traces et
+    la maintenance doivent lire les deux niveaux, sinon les runs d'atelier
+    apparaissent sans état ni modèle.
+    """
+    base = Path(root)
+    targets = [base]
+    try:
+        targets += sorted({path.parent for path in base.glob(f"*/{INDEX_NAME}")})
+    except OSError:
+        pass
+    return targets
+
+
+def merged_entries(root: Path | str) -> dict[str, RunRecord]:
+    """Dernier état de chaque run, tous espaces de travail confondus.
+
+    Un identifiant de run reste unique (aléatoire) ; en cas de collision entre
+    deux dossiers, l'état le plus récent gagne plutôt que d'écraser un run au
+    hasard. L'ordre retourné va du plus récent au plus ancien.
+    """
+    merged: dict[str, RunRecord] = {}
+    for directory in workspace_indexes(root):
+        for run_id, record in RunIndex(directory).entries().items():
+            previous = merged.get(run_id)
+            if previous is None or record.updated >= previous.updated:
+                merged[run_id] = record
+    return dict(
+        sorted(merged.items(), key=lambda item: item[1].updated, reverse=True)
+    )
 
 
 def scan_interrupted(

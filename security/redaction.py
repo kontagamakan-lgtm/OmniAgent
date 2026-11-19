@@ -86,6 +86,12 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("aws_key", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")),
     ("slack_token", re.compile(r"\bxox[baprs]-[A-Za-z0-9\-]{10,255}\b")),
     ("google_key", re.compile(r"\bAIza[0-9A-Za-z_\-]{30,64}\b")),
+    (
+        # Numero de carte : 16 chiffres, espaces ou tirets tolerés. Un motif
+        # plus large masquerait des identifiants numeriques legitimes.
+        "card_number",
+        re.compile(r"(?<!\d)(?:\d{4}[ -]?){3}\d{4}(?!\d)"),
+    ),
     ("bearer", re.compile(r"(?i)\b(Bearer)\s+([A-Za-z0-9._\-+/=]{8,2048})")),
     (
         "url_credentials",

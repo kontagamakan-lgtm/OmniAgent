@@ -18,7 +18,9 @@ from pathlib import Path
 from typing import Any
 
 from config import APP_ID, Settings
+from core.cost import estimate_cost
 from core.events import EventType
+from core.locking import LockTimeout, file_lock
 
 __all__ = [
     "METRICS_NAME",
@@ -131,19 +133,29 @@ class MetricsRecorder:
             ),
             "retries": self._retries,
         }
+        record["cost"] = estimate_cost(
+            record["model"], record["prompt_tokens"], record["completion_tokens"]
+        )
         self._write(record)
 
     def _write(self, record: dict[str, Any]) -> None:
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            with self.path.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+            with file_lock(self.path.with_name(f"{self.path.name}.lock")):
+                with self.path.open("a", encoding="utf-8") as handle:
+                    handle.write(
+                        json.dumps(record, ensure_ascii=False, default=str) + "\n"
+                    )
+                    handle.flush()
+                self._prune_locked()
+        except LockTimeout:
+            logger.warning("metriques verrouillees : run non enregistre")
+            return
         except OSError:
             logger.debug("métrique non écrite", exc_info=True)
             return
-        self._prune()
 
-    def _prune(self) -> None:
+    def _prune_locked(self) -> None:
         try:
             raw = self.path.read_text(encoding="utf-8", errors="replace")
         except OSError:
@@ -208,6 +220,7 @@ def summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
         "completion_tokens": sum(
             int(r.get("completion_tokens", 0) or 0) for r in records
         ),
+        "cost": round(sum(float(r.get("cost", 0) or 0) for r in records), 4),
         "trims": sum(int(r.get("trims", 0) or 0) for r in records),
         "tool_errors": dict(errors.most_common(8)),
         "models": dict(models.most_common(5)),
@@ -225,6 +238,7 @@ def format_summary(records: list[dict[str, Any]]) -> str:
         f"(prompt {data['prompt_tokens']}, completion {data['completion_tokens']})",
         f"Duree : {data['duration_s']} s, {data['steps']} etape(s), "
         f"{data['tool_calls']} appel(s) d'outil, {data['trims']} repli(s) de contexte",
+        f"Cout estime : {data['cost']:.4f} USD",
     ]
     if data["tool_errors"]:
         errors = ", ".join(f"{name}:{count}" for name, count in data["tool_errors"].items())
@@ -232,4 +246,10 @@ def format_summary(records: list[dict[str, Any]]) -> str:
     if data["models"]:
         models = ", ".join(f"{name}:{count}" for name, count in data["models"].items())
         lines.append(f"Modeles : {models}")
+    from core.anomalies import detect_anomalies
+
+    alerts = detect_anomalies(records)
+    if alerts:
+        lines.append("Alertes :")
+        lines.extend(f"- {alert}" for alert in alerts)
     return "\n".join(lines)

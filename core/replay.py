@@ -42,7 +42,12 @@ from core.trace_crypto import (
     load_key,
     optional_key,
 )
-from core.trace_rotate import NEXT_KEY_ENV, rotate_traces
+from core.trace_rotate import (
+    NEXT_KEY_ENV,
+    preview_rotation,
+    rotate_traces,
+    verify_traces,
+)
 
 __all__ = [
     "ReplayExhausted",
@@ -500,6 +505,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="ecrit un bundle partageable (sans tache ni reponse)",
     )
     parser.add_argument(
+        "--import-bundle",
+        metavar="FICHIER",
+        type=Path,
+        help="valide et resume un bundle exporte (format 1)",
+    )
+    parser.add_argument(
         "--key-env",
         default=KEY_ENV,
         metavar="NOM",
@@ -511,6 +522,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         metavar="NOM",
         help="variable contenant la nouvelle cle de rotation "
         f"(defaut : {NEXT_KEY_ENV})",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="avec --rotate-key : montrer les fichiers concernes sans ecrire",
+    )
+    parser.add_argument(
+        "--key-backup",
+        metavar="FICHIER",
+        help="scelle l'ancienne cle dans FICHIER avec OMNIAGENT_BACKUP_PASSPHRASE",
     )
     maintenance = parser.add_mutually_exclusive_group()
     maintenance.add_argument(
@@ -541,7 +562,52 @@ def main(argv: Sequence[str] | None = None) -> int:
         metavar="DOSSIER",
         help="rechiffre les traces avec la cle de --new-key-env",
     )
+    maintenance.add_argument(
+        "--migrate",
+        nargs="?",
+        const="",
+        metavar="DOSSIER",
+        help="migre les traces v2 vers v3 (apercu sans --migrate-apply)",
+    )
+    parser.add_argument(
+        "--migrate-apply",
+        action="store_true",
+        help="avec --migrate : ecrit la migration et cree une copie .v2.bak",
+    )
     args = parser.parse_args(argv)
+
+    if args.import_bundle is not None:
+        from core.export import import_bundle
+
+        try:
+            summary = import_bundle(args.import_bundle)
+        except ValueError as exc:
+            print(f"Bundle invalide : {exc}", file=sys.stderr)
+            return 2
+        print(json.dumps(summary, indent=2, ensure_ascii=False, default=str))
+        return 0
+
+    if args.migrate is not None:
+        from core.trace_migrate import migrate_directory
+
+        chosen = args.migrate
+        directory = Path(chosen) if chosen else _default_runs_dir()
+        if not directory.is_dir():
+            print(f"Dossier de traces introuvable : {directory}", file=sys.stderr)
+            return 2
+        try:
+            key = optional_key(args.key_env)
+        except TraceKeyError as exc:
+            print(f"Cle de trace illisible : {exc}", file=sys.stderr)
+            return 2
+        failures = 0
+        for item in migrate_directory(directory, apply=args.migrate_apply, key=key):
+            detail = f"  ({item['detail']})" if item["detail"] else ""
+            print(f"{item['status'].ljust(12)} {item['path']}{detail}")
+            failures += item["status"] == "failed"
+        if not args.migrate_apply:
+            print("Apercu seulement : relancer avec --migrate-apply pour ecrire.")
+        return 1 if failures else 0
 
     if args.rotate_key is not None:
         chosen = args.rotate_key
@@ -558,6 +624,32 @@ def main(argv: Sequence[str] | None = None) -> int:
         if old_key == new_key:
             print("Les deux cles sont identiques : rien a tourner.", file=sys.stderr)
             return 2
+        if args.dry_run:
+            failures = 0
+            for item in preview_rotation(directory, old_key, new_key):
+                detail = f"  ({item['detail']})" if item["detail"] else ""
+                print(f"{item['status'].ljust(9)} {item['path']}{detail}")
+                failures += item["status"] == "failed"
+            print("Simulation seulement : aucun fichier n'a ete ecrit.")
+            return 1 if failures else 0
+        if args.key_backup:
+            import os
+
+            from core.keybackup import seal_key
+
+            passphrase = os.environ.get("OMNIAGENT_BACKUP_PASSPHRASE", "").strip()
+            if not passphrase:
+                print(
+                    "OMNIAGENT_BACKUP_PASSPHRASE absente : cle non sauvegardee.",
+                    file=sys.stderr,
+                )
+                return 2
+            try:
+                path = seal_key(old_key, args.key_backup, passphrase)
+            except (OSError, ValueError) as exc:
+                print(f"Sauvegarde de cle impossible : {exc}", file=sys.stderr)
+                return 2
+            print(f"Ancienne cle scellee : {path}")
         failures = 0
         report = rotate_traces(directory, old_key, new_key)
         for item in report:
@@ -565,6 +657,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"{item['status'].ljust(9)} {item['path']}{detail}")
             failures += item["status"] == "failed"
         print(f"{len(report)} fichier(s), {failures} echec(s)")
+        verification = verify_traces(directory, new_key)
+        verified = sum(1 for item in verification if item["status"] == "verified")
+        broken = [item for item in verification if item["status"] == "failed"]
+        print(f"Verification avec la nouvelle cle : {verified} fichier(s) relu(s)")
+        for item in broken:
+            print(f"  !! {item['path']} : {item['detail']}", file=sys.stderr)
+        failures += len(broken)
         return 1 if failures else 0
 
     if args.index_compact is not None or args.index_rebuild is not None:

@@ -15,7 +15,7 @@ import json
 import logging
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -28,16 +28,19 @@ from core.autonomy import (
     journal_path,
     read_goals,
 )
+from core.locking import LockTimeout, file_lock
 
 __all__ = [
     "PROPOSALS_NAME",
     "ProposalStore",
     "approve_proposal",
+    "finish_proposal",
     "parse_proposal",
     "pending_proposals",
     "propose",
     "proposals_path",
     "reject_proposal",
+    "set_proposal_task",
 ]
 
 logger = logging.getLogger(f"{APP_ID}.proposals")
@@ -45,6 +48,8 @@ logger = logging.getLogger(f"{APP_ID}.proposals")
 PROPOSALS_NAME = "proposals.jsonl"
 #: Une proposition reste lisible sans recopier tout un raisonnement.
 MAX_PROPOSALS = 200
+#: Une proposition oubliée devient dangereuse : l'environnement a changé.
+DEFAULT_MAX_AGE_DAYS = 14
 
 _SYSTEM = (
     "Tu prépares une proposition de tâche pour un agent Windows. Tu n'exécutes "
@@ -127,15 +132,25 @@ class ProposalStore:
         body = {"at": datetime.now(tz=timezone.utc).isoformat(), **record}
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            with self.path.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(body, ensure_ascii=False, default=str) + "\n")
+            with file_lock(self._lock_path()):
+                with self.path.open("a", encoding="utf-8") as handle:
+                    handle.write(
+                        json.dumps(body, ensure_ascii=False, default=str) + "\n"
+                    )
+                    handle.flush()
+                self._prune_locked()
+        except LockTimeout:
+            logger.warning("propositions verrouillees : entree non ecrite")
+            return False
         except OSError:
             logger.debug("proposition non écrite", exc_info=True)
             return False
-        self._prune()
         return True
 
-    def _prune(self) -> None:
+    def _lock_path(self) -> Path:
+        return self.path.with_name(f"{self.path.name}.lock")
+
+    def _prune_locked(self) -> None:
         lines = self.all()[-(self.max_entries) :]
         try:
             raw_lines = [
@@ -168,11 +183,30 @@ class ProposalStore:
 
     def set_state(self, proposal_id: str, state: str) -> dict[str, Any] | None:
         """Change l'état et réécrit le fichier ; `None` si l'identifiant manque."""
+        return self.update(proposal_id, state=state)
+
+    def update(self, proposal_id: str, **changes: Any) -> dict[str, Any] | None:
+        """Change des champs (état, tâche, run_id) sous verrou.
+
+        La réécriture complète est nécessaire : une proposition est un objet
+        unique, pas un flux append-only. Le verrou évite qu'une approbation
+        concurrente perde l'édition de l'autre.
+        """
+        try:
+            with file_lock(self._lock_path()):
+                return self._update_locked(proposal_id, changes)
+        except LockTimeout:
+            logger.warning("propositions verrouillees : etat non ecrit")
+            return None
+
+    def _update_locked(
+        self, proposal_id: str, changes: dict[str, Any]
+    ) -> dict[str, Any] | None:
         records = self.all()
         found: dict[str, Any] | None = None
         for record in records:
             if str(record.get("id")) == proposal_id:
-                record["state"] = state
+                record.update(changes)
                 found = record
                 break
         if found is None:
@@ -191,6 +225,34 @@ class ProposalStore:
                 pass
             return None
         return found
+
+    def expire(self, max_age_days: float = DEFAULT_MAX_AGE_DAYS) -> list[str]:
+        """Marque `expired` les propositions en attente trop anciennes."""
+        if max_age_days <= 0:
+            return []
+        cutoff = datetime.now(tz=timezone.utc) - timedelta(days=max_age_days)
+        expired: list[str] = []
+        for record in self.all():
+            if record.get("type") != "proposal" or record.get("state") != "pending":
+                continue
+            created = _parse_time(record.get("at"))
+            if created is None or created >= cutoff:
+                continue
+            if self.update(str(record.get("id")), state="expired"):
+                expired.append(str(record.get("id")))
+        return expired
+
+
+def _parse_time(value: Any) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _normalized_task(task: Any) -> str:
+    return " ".join(str(task or "").lower().split())
 
 
 def propose(settings: Settings, agent: Any) -> tuple[dict[str, Any] | None, str]:
@@ -219,6 +281,13 @@ def propose(settings: Settings, agent: Any) -> tuple[dict[str, Any] | None, str]
     proposal = parse_proposal(str(getattr(response, "text", "") or ""))
     if not proposal["task"]:
         return None, "réponse vide : aucune proposition"
+    store = ProposalStore(proposals_path(settings))
+    # Une même tâche proposée deux fois encombre la file et sera approuvée
+    # deux fois : la proposition en attente existante fait foi.
+    normalized = _normalized_task(proposal["task"])
+    for existing in pending_proposals(settings):
+        if _normalized_task(existing.get("task")) == normalized:
+            return existing, ""
     record = {
         "type": "proposal",
         "id": uuid.uuid4().hex[:8],
@@ -226,22 +295,74 @@ def propose(settings: Settings, agent: Any) -> tuple[dict[str, Any] | None, str]
         "goals_file": str(goals_path(settings)),
         **proposal,
     }
-    if not ProposalStore(proposals_path(settings)).append(record):
+    if not store.append(record):
         return None, "proposition non enregistrée (fichier inaccessible)"
     return record, ""
 
 
 def pending_proposals(settings: Settings) -> list[dict[str, Any]]:
+    store = ProposalStore(proposals_path(settings))
+    store.expire(float(getattr(settings.autonomy, "proposal_max_age_days", 14)))
     return [
         record
-        for record in ProposalStore(proposals_path(settings)).all()
+        for record in store.all()
         if record.get("type") == "proposal" and record.get("state") == "pending"
     ]
 
 
 def approve_proposal(settings: Settings, proposal_id: str) -> dict[str, Any] | None:
-    return ProposalStore(proposals_path(settings)).set_state(proposal_id, "approved")
+    """Approuve une proposition encore en attente, sinon `None`.
+
+    Une proposition expirée ou déjà traitée ne peut pas être relancée par une
+    approbation tardive : son environnement a pu changer.
+    """
+    store = ProposalStore(proposals_path(settings))
+    record = store.find(proposal_id)
+    if record is None or record.get("state") != "pending":
+        return None
+    return store.update(proposal_id, state="approved")
 
 
 def reject_proposal(settings: Settings, proposal_id: str) -> dict[str, Any] | None:
     return ProposalStore(proposals_path(settings)).set_state(proposal_id, "rejected")
+
+
+def set_proposal_task(
+    settings: Settings, proposal_id: str, task: str
+) -> dict[str, Any] | None:
+    """Édite la tâche avant approbation ; refusé hors état `pending`."""
+    clean = " ".join(str(task or "").split())[:MAX_EXCERPT]
+    if not clean:
+        return None
+    store = ProposalStore(proposals_path(settings))
+    record = store.find(proposal_id)
+    if record is None or record.get("state") != "pending":
+        return None
+    return store.update(proposal_id, task=clean, edited=True)
+
+
+def finish_proposal(
+    settings: Settings,
+    proposal_id: str,
+    *,
+    ok: bool,
+    run_id: str = "",
+    detail: str = "",
+) -> dict[str, Any] | None:
+    """Clôt une proposition approuvée : `executed` ou `failed`.
+
+    L'historique conserve le run, le résultat et un détail, pour distinguer une
+    approbation d'une exécution réelle.
+    """
+    store = ProposalStore(proposals_path(settings))
+    record = store.find(proposal_id)
+    if record is None or record.get("state") != "approved":
+        return None
+    return store.update(
+        proposal_id,
+        state="executed" if ok else "failed",
+        run_id=run_id,
+        ok=bool(ok),
+        detail=str(detail)[:300],
+        finished_at=datetime.now(tz=timezone.utc).isoformat(),
+    )

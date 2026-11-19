@@ -36,7 +36,9 @@ from core.trace_crypto import (
 __all__ = [
     "NEXT_KEY_ENV",
     "RotationError",
+    "preview_rotation",
     "rotate_traces",
+    "verify_traces",
 ]
 
 #: Variable proposée pour la nouvelle clé, le temps de la rotation.
@@ -239,4 +241,113 @@ def rotate_traces(
             report.append({"path": str(path), "status": status, "detail": detail})
         if rotated:
             _refresh_indexes(target, rotated)
+    return report
+
+
+def preview_rotation(
+    directory: Path | str, old_key: bytes, new_key: bytes
+) -> list[dict[str, str]]:
+    """États qu'aurait la rotation, sans réécrire un seul fichier."""
+    root = Path(directory)
+    report: list[dict[str, str]] = []
+    for target in _targets(root):
+        try:
+            files = sorted(
+                path
+                for path in target.glob("*.jsonl*")
+                if path.is_file() and path.name != INDEX_NAME
+            )
+        except OSError:
+            continue
+        for path in files:
+            try:
+                records, note = _read_records(path)
+            except (OSError, EOFError, gzip.BadGzipFile, RotationError) as exc:
+                report.append({"path": str(path), "status": FAILED, "detail": str(exc)})
+                continue
+            encrypted = [is_encrypted(record) for record in records]
+            if not any(encrypted):
+                report.append(
+                    {
+                        "path": str(path),
+                        "status": PLAINTEXT,
+                        "detail": _with_note("trace en clair : inchangee", note),
+                    }
+                )
+                continue
+            if not all(encrypted):
+                report.append(
+                    {
+                        "path": str(path),
+                        "status": FAILED,
+                        "detail": "trace melangeant clair et chiffre",
+                    }
+                )
+                continue
+            try:
+                [decrypt_record(record, old_key) for record in records]
+            except TraceKeyError as old_failure:
+                try:
+                    [decrypt_record(record, new_key) for record in records]
+                except TraceKeyError:
+                    report.append(
+                        {
+                            "path": str(path),
+                            "status": FAILED,
+                            "detail": f"ni l'ancienne ni la nouvelle cle : {old_failure}",
+                        }
+                    )
+                else:
+                    report.append(
+                        {"path": str(path), "status": ALREADY, "detail": "deja tournee"}
+                    )
+            else:
+                report.append(
+                    {
+                        "path": str(path),
+                        "status": ROTATED,
+                        "detail": _with_note("serait tournee (simulation)", note),
+                    }
+                )
+    return report
+
+
+def verify_traces(directory: Path | str, key: bytes) -> list[dict[str, str]]:
+    """Relit chaque trace chiffrée avec `key` : preuve que la rotation tient.
+
+    Une trace en clair est épargnée (elle n'est pas sous clé). Un fichier qui
+    ne se relit pas produit une entrée `failed`, jamais une exception.
+    """
+    root = Path(directory)
+    report: list[dict[str, str]] = []
+    for target in _targets(root):
+        try:
+            files = sorted(
+                path
+                for path in target.glob("*.jsonl*")
+                if path.is_file() and path.name != INDEX_NAME
+            )
+        except OSError:
+            continue
+        for path in files:
+            try:
+                records, _note = _read_records(path)
+            except (OSError, EOFError, gzip.BadGzipFile, RotationError) as exc:
+                report.append({"path": str(path), "status": FAILED, "detail": str(exc)})
+                continue
+            if not records or not any(is_encrypted(record) for record in records):
+                continue
+            try:
+                for record in records:
+                    decrypt_record(record, key)
+            except TraceKeyError as exc:
+                report.append({"path": str(path), "status": FAILED, "detail": str(exc)})
+            else:
+                report.append(
+                    {
+                        "path": str(path),
+                        "status": "verified",
+                        "detail": f"{len(records)} enregistrement(s)",
+                    }
+                )
     return report

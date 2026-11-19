@@ -207,6 +207,17 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 actions, text="Autonomie", width=110, command=self._toggle_autonomy
             )
             self.autonomy_button.pack(fill="x", pady=(6, 0))
+            # Toujours visible, y compris quand une fenêtre modale a le focus :
+            # l'arrêt ne doit pas dépendre du bouton « Autonomie » masqué.
+            self.emergency_button = ctk.CTkButton(
+                actions,
+                text="Arrêt d'urgence",
+                width=110,
+                fg_color="#B91C1C",
+                hover_color="#991B1B",
+                command=self._emergency_stop,
+            )
+            self.emergency_button.pack(fill="x", pady=(6, 0))
             self.journal_button = ctk.CTkButton(
                 actions, text="Journal", width=110, command=self._open_journal
             )
@@ -229,6 +240,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 self.trace_switch.select()
             else:
                 self.trace_switch.deselect()
+            self.bind_all("<Control-Alt-s>", lambda _event: self._emergency_stop())
 
         # -- affichage ------------------------------------------------------
 
@@ -326,6 +338,22 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
         def _cancel(self) -> None:
             self.controller.cancel()
             self._set_status("arrêt demandé…")
+
+        def _emergency_stop(self) -> None:
+            """Écrit STOP et annule tout run, sans dépendre de la session."""
+            from core.stopfile import request_stop, stop_path
+
+            request_stop(self.settings, "interface")
+            self.controller.cancel()
+            session = self._autonomy_session
+            if session is not None:
+                session.request_stop()
+            self._set_status(f"arrêt d'urgence : {stop_path(self.settings).name} écrit")
+            self._append(
+                "système",
+                f"arrêt d'urgence : {stop_path(self.settings)} "
+                "(supprimez ce fichier avant une nouvelle session)",
+            )
 
         def _toggle_trace(self) -> None:
             enabled = bool(self.trace_switch.get())
@@ -433,6 +461,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 approve_proposal,
                 pending_proposals,
                 reject_proposal,
+                set_proposal_task,
             )
 
             window = ctk.CTkToplevel(self)
@@ -471,6 +500,18 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                     window.destroy()
                     self._open_proposals()
 
+                def edit(proposal_id: str = str(record.get("id"))) -> None:
+                    dialog = ctk.CTkInputDialog(
+                        text="Nouvelle tache :", title="Modifier la proposition"
+                    )
+                    value = dialog.get_input()
+                    if value and set_proposal_task(self.settings, proposal_id, value):
+                        window.destroy()
+                        self._open_proposals()
+
+                ctk.CTkButton(row, text="Modifier", width=70, command=edit).pack(
+                    side="right", padx=4, pady=4
+                )
                 ctk.CTkButton(row, text="Rejeter", width=70, command=reject).pack(
                     side="right", padx=4, pady=4
                 )
@@ -531,7 +572,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 except OSError as exc:
                     report_label.configure(text=f"diagnostic impossible : {exc}")
                     return
-                report_label.configure(text=format_diagnosis(issues)[:1200])
+                report_label.configure(text=format_diagnosis(issues, with_help=True)[:1800])
 
             for label_text, rebuild in (("Compacter", False), ("Reconstruire", True)):
                 ctk.CTkButton(
@@ -583,9 +624,11 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             entries: dict[str, Any] = {}
             if directory.is_dir():
                 try:
-                    from core.run_index import RunIndex
+                    from core.run_index import merged_entries
 
-                    entries = RunIndex(directory).entries()
+                    # Espaces de travail (`trace.per_workspace`) compris : un
+                    # index par sous-dossier, fusionné pour la liste et les filtres.
+                    entries = merged_entries(directory)
                 except Exception:  # noqa: BLE001 - un cache ne bloque pas l'interface
                     logger.debug("index des runs illisible", exc_info=True)
             files: list[Any] = []
@@ -684,6 +727,8 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                         label += f"   [{state}]"
                     if entry is not None and entry.model:
                         label += f"   {entry.model}"
+                    if entry is not None and entry.workspace:
+                        label += f"   @{entry.workspace}"
                     variable = ctk.BooleanVar(value=stem in selected)
 
                     def toggle(checked: bool, run_id: str = stem, path: Any = path) -> None:

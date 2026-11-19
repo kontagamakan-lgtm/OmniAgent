@@ -214,7 +214,9 @@ class AgentCore:
 
     # -- exécution ----------------------------------------------------------
 
-    def run(self, task: str, *, max_steps: int | None = None) -> AgentReply:
+    def run(
+        self, task: str, *, max_steps: int | None = None, context: str = ""
+    ) -> AgentReply:
         """Exécute la boucle ReAct, une exécution à la fois.
 
         `run_id` et le flux d'événements sont uniques à l'agent : une seconde
@@ -230,7 +232,7 @@ class AgentCore:
                 error_code="agent_busy",
             )
         try:
-            return self._run_locked(task, max_steps=max_steps)
+            return self._run_locked(task, max_steps=max_steps, context=context)
         finally:
             self._run_guard.release()
             # Le contexte ne doit pas survivre au run : un journal d'interface
@@ -242,7 +244,9 @@ class AgentCore:
         if token is not None:
             reset_run_id(token)
 
-    def _run_locked(self, task: str, *, max_steps: int | None = None) -> AgentReply:
+    def _run_locked(
+        self, task: str, *, max_steps: int | None = None, context: str = ""
+    ) -> AgentReply:
         """Corps de `run`, exécuté sous le verrou d'exécution."""
         prompt = str(task or "").strip()
         if not prompt:
@@ -272,6 +276,14 @@ class AgentCore:
         with self._lock:
             self.reset_cancel()
 
+        user_content = prompt
+        if str(context or "").strip():
+            # Reprise d'une trace : l'etat deja atteint est une donnee, pas une
+            # instruction systeme ; il reste dans le message utilisateur.
+            user_content = (
+                f"{prompt}\n\nContexte de reprise (deja effectue, ne pas rejouer) :\n"
+                f"{str(context).strip()}"
+            )
         messages: list[dict[str, Any]] = [
             {
                 "role": "system",
@@ -282,7 +294,7 @@ class AgentCore:
                     action_first=cfg.action_first,
                 ),
             },
-            {"role": "user", "content": prompt},
+            {"role": "user", "content": user_content},
         ]
         steps: list[AgentStep] = []
         signatures: Counter[tuple[str, str]] = Counter()

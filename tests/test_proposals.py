@@ -101,7 +101,8 @@ def test_approval_and_rejection_change_only_the_state() -> None:
         _goals(settings)
         agent = _Agent(json.dumps({"task": "Tâche A", "tools": [], "risk": "moyen"}))
         first, _ = propose(settings, agent)
-        second, _ = propose(settings, agent)
+        other = _Agent(json.dumps({"task": "Tâche B", "tools": [], "risk": "moyen"}))
+        second, _ = propose(settings, other)
 
         approved = approve_proposal(settings, first["id"])
         assert approved is not None and approved["state"] == "approved"
@@ -167,7 +168,7 @@ def test_approval_from_the_command_line_runs_the_stored_task(monkeypatch) -> Non
         assert order == ["logging", "task:Ranger les rapports"], (
             "le journal doit être configuré avant l'exécution de la tâche approuvée"
         )
-        assert store.find("abc12345")["state"] == "approved"
+        assert store.find("abc12345")["state"] == "executed"
 
 
 def test_approving_an_unknown_proposal_changes_nothing(monkeypatch) -> None:

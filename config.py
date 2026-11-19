@@ -242,6 +242,9 @@ class LLMConfig:
     force_json_tool_calls: bool = True
     ollama_base_url: str = "http://127.0.0.1:11434"
     ollama_keep_alive: str = "15m"
+    #: Prix par million de tokens (USD). 0 = table de `core.cost` selon le modele.
+    price_prompt_per_million: float = 0.0
+    price_completion_per_million: float = 0.0
 
     def api_key(self) -> str:
         return os.environ.get(self.api_key_env, "").strip()
@@ -483,6 +486,11 @@ class AutonomyConfig:
     max_tokens_per_cycle: int = 60_000
     #: Appels d'outils par cycle avant annulation. 0 = aucun plafond.
     max_tool_calls_per_cycle: int = 40
+    #: Une proposition non traitée au-delà de ce délai expire : l'environnement
+    #: a pu changer, et une approbation tardive n'aurait plus de sens.
+    proposal_max_age_days: int = 14
+    #: Plafond de la session en devise (USD estimee). 0 = aucun.
+    max_total_cost: float = 0.0
 
 
 @dataclass(slots=True)
@@ -706,6 +714,8 @@ class Settings:
                 "max_total_tokens": self.autonomy.max_total_tokens,
                 "max_tokens_per_cycle": self.autonomy.max_tokens_per_cycle,
                 "max_tool_calls_per_cycle": self.autonomy.max_tool_calls_per_cycle,
+                "proposal_max_age_days": self.autonomy.proposal_max_age_days,
+                "max_total_cost": self.autonomy.max_total_cost,
             },
             "storage": {
                 "reports_max_age_days": self.storage.reports_max_age_days,
@@ -945,6 +955,13 @@ class Settings:
                 err(f"autonomy.{name}", "doit être comprise entre 0 et 10 000 000")
         if not (0 <= int(autonomy.max_tool_calls_per_cycle) <= 1000):
             err("autonomy.max_tool_calls_per_cycle", "doit être comprise entre 0 et 1000")
+        if not (0 <= int(autonomy.proposal_max_age_days) <= 3650):
+            err(
+                "autonomy.proposal_max_age_days",
+                "doit être comprise entre 0 et 3650 jours",
+            )
+        if not (0.0 <= float(autonomy.max_total_cost) <= 1_000_000.0):
+            err("autonomy.max_total_cost", "doit être comprise entre 0 et 1 000 000 USD")
 
         # --- Rétention des dossiers de travail
         storage = self.storage

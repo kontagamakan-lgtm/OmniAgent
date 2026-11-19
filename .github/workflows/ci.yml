@@ -65,6 +65,17 @@ jobs:
           OMNIAGENT_SLOW_TESTS: "1"
         run: python -m pytest -q
 
+      # Mesure reproductible, seulement la nuit : un index de 100 000 lignes,
+      # 2 000 traces, puis compaction/reconstruction/diagnostic. Le facteur
+      # laisse de la marge aux runners lents sans masquer une vraie regression.
+      - name: Benchmark des traces (nocturne)
+        if: github.event_name == 'schedule'
+        env:
+          BENCHMARK_MAX_FACTOR: "2"
+        run: >-
+          python tools/benchmark_traces.py --runs 100000 --traces 2000
+          --max-seconds 60
+
   build:
     name: build.bat --all et contrôles de fumée
     needs: tests

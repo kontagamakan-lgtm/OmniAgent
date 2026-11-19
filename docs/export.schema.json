@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/omniagent/export.schema.json",
+  "title": "OmniAgent export bundle",
+  "description": "Faits d'un run, sans tache, reponse ni arguments d'outils.",
+  "type": "object",
+  "required": [
+    "export_format",
+    "run_id",
+    "app_version",
+    "model",
+    "ok",
+    "stop_reason",
+    "summary",
+    "errors",
+    "steps"
+  ],
+  "properties": {
+    "export_format": { "type": "integer", "const": 1 },
+    "run_id": { "type": "string" },
+    "app_version": { "type": "string" },
+    "trace_format": { "type": "integer", "minimum": 0 },
+    "model": { "type": "string" },
+    "backend": { "type": "string" },
+    "settings_digest": { "type": "string" },
+    "workspace": { "type": "string" },
+    "budget_tokens": { "type": "integer", "minimum": 0 },
+    "stop_reason": { "type": "string" },
+    "ok": { "type": "boolean" },
+    "truncated": { "type": "boolean" },
+    "interrupted": { "type": "boolean" },
+    "summary": { "type": "object" },
+    "errors": { "type": "array", "items": { "type": "string" } },
+    "report": { "type": "object" },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["index", "calls"],
+        "properties": {
+          "index": { "type": "integer", "minimum": 1 },
+          "calls": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["tool"],
+              "properties": {
+                "tool": { "type": "string" },
+                "ok": { "type": "boolean" },
+                "error_code": { "type": "string" },
+                "sensitive": { "type": "boolean" },
+                "duration_ms": { "type": "number" }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

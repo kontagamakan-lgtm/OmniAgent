@@ -19,7 +19,64 @@ from typing import Any
 
 from core.run_index import INDEX_NAME, RunIndex, _run_id_of, _tail_is_terminal
 
-__all__ = ["IndexIssue", "diagnose", "format_issues"]
+__all__ = ["HELP", "IndexIssue", "diagnose", "explain", "format_issues"]
+
+#: Cause et remede par code. Le diagnostic doit etre autosuffisant : un code
+#: sans commande de correction oblige a chercher dans le code source.
+HELP: dict[str, tuple[str, str]] = {
+    "missing_directory": (
+        "aucune trace n'a encore ete ecrite dans ce dossier",
+        "lancer une tache ; le dossier sera cree",
+    ),
+    "missing_index": (
+        "des traces existent sans runs.index (index supprime ou premier demarrage)",
+        "python -m core.replay --index-rebuild",
+    ),
+    "index_unreadable": (
+        "une ligne de l'index n'est pas du JSON valide (coupure d'ecriture)",
+        "python -m core.replay --index-rebuild, ou --check --fix",
+    ),
+    "index_duplicate": (
+        "plusieurs etats pour le meme run, l'index n'a pas ete compacte",
+        "python -m core.replay --index-compact, ou --check --fix",
+    ),
+    "index_orphan": (
+        "une entree designe une trace supprimee par la retention",
+        "python -m core.replay --index-compact, ou --check --fix",
+    ),
+    "index_stale_bytes": (
+        "la taille notee dans l'index ne correspond plus au fichier",
+        "--check --fix, ou --index-rebuild",
+    ),
+    "index_stale_path": (
+        "le chemin note dans l'index a change (archive, deplacement)",
+        "--check --fix, ou --index-rebuild",
+    ),
+    "index_oversized": (
+        "l'index contient plus d'ecritures que de runs presents",
+        "python -m core.replay --index-compact",
+    ),
+    "trace_not_indexed": (
+        "une trace existe mais aucune entree ne la decrit",
+        "python -m core.replay --index-rebuild, ou --check --fix",
+    ),
+    "active_orphan": (
+        "un marqueur .active designe un run dont la trace a disparu",
+        "supprimer le marqueur : --check --fix",
+    ),
+    "active_stale": (
+        "un marqueur perime accompagne une trace sans fin (processus tue)",
+        "--check --fix marque le run interrompu et retire le marqueur",
+    ),
+}
+
+
+def explain(code: str) -> str:
+    """Cause et remede d'un code, ou chaine vide s'il est inconnu."""
+    cause, fix = HELP.get(str(code), ("", ""))
+    if not cause:
+        return ""
+    return f"  cause : {cause}\n  remede : {fix}"
 
 
 @dataclass(slots=True)
@@ -200,8 +257,15 @@ def diagnose(directory: Path | str, *, active_ttl_s: float = 300.0) -> list[Inde
     return issues
 
 
-def format_issues(issues: list[IndexIssue]) -> str:
+def format_issues(issues: list[IndexIssue], *, with_help: bool = False) -> str:
     """Rendu lisible ; un index sain le dit explicitement."""
     if not issues:
         return "Index cohérent avec les traces."
-    return "\n".join(str(issue) for issue in issues)
+    lines: list[str] = []
+    for issue in issues:
+        lines.append(str(issue))
+        if with_help:
+            hint = explain(issue.code)
+            if hint:
+                lines.append(hint)
+    return "\n".join(lines)
