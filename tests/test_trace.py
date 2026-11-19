@@ -675,6 +675,58 @@ def test_a_finished_run_leaves_a_single_line_in_the_index() -> None:
         assert trace.path is not None and entry.bytes == trace.path.stat().st_size
 
 
+def test_rebuild_infers_the_finished_state_from_the_file_end() -> None:
+    with tmpdir("index-rebuild-etats") as tmp:
+        directory = Path(tmp) / "runs"
+        plain = RunTrace(directory)
+        plain(
+            Event(
+                type=EventType.RUN_STARTED,
+                run_id="fini",
+                payload={"model": "m", "trace_format": 3},
+                seq=1,
+            )
+        )
+        plain(
+            Event(
+                type=EventType.RUN_FINISHED,
+                run_id="fini",
+                payload={"ok": True, "stop_reason": "final"},
+                seq=2,
+            )
+        )
+        archived = RunTrace(directory, archive=True, archive_min_bytes=1)
+        archived(
+            Event(
+                type=EventType.RUN_STARTED,
+                run_id="archive",
+                payload={"model": "m", "trace_format": 3},
+                seq=1,
+            )
+        )
+        archived(
+            Event(
+                type=EventType.RUN_FINISHED,
+                run_id="archive",
+                payload={"ok": True, "stop_reason": "final"},
+                seq=2,
+            )
+        )
+        original = RunIndex(directory).entries()
+        assert {run_id: entry.state for run_id, entry in original.items()} == {
+            "fini": "finished",
+            "archive": "finished",
+        }
+
+        rebuilt = RunIndex(directory).rebuild(reset=True)
+
+        assert {run_id: entry.state for run_id, entry in rebuilt.items()} == {
+            run_id: entry.state for run_id, entry in original.items()
+        }, "la reconstruction doit retrouver l'état d'origine"
+        assert rebuilt["archive"].path.endswith(".jsonl.gz")
+        assert rebuilt["fini"].model == "m"
+
+
 def test_a_killed_run_is_marked_interrupted_by_the_next_one() -> None:
     with tmpdir("interrompu") as tmp:
         directory = Path(tmp) / "runs"

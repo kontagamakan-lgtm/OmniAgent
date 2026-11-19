@@ -23,6 +23,7 @@ traceur puisse l'appeler sans cycle d'import.
 from __future__ import annotations
 
 import copy
+import gzip
 import json
 import logging
 import os
@@ -346,7 +347,10 @@ class RunIndex:
             manifest = _manifest_of(path)
             record = RunRecord(
                 run_id=run_id,
-                state=ARCHIVED if path.name.endswith(".gz") else STARTED,
+                # Le fichier fait foi : une trace qui porte `run_finished` (ou
+                # `trace_truncated`) est terminée, même si elle a été purgée
+                # de l'index entre-temps.
+                state=FINISHED if _tail_is_terminal(path) else STARTED,
                 path=str(path),
                 app_version=str(manifest.get("app_version") or ""),
                 model=str(manifest.get("model") or ""),
@@ -433,14 +437,25 @@ def _manifest_of(path: Path) -> dict[str, Any]:
 
 
 def _tail_is_terminal(path: Path) -> bool:
-    """Vrai si la fin du fichier porte un marqueur de fin d'exécution."""
+    """Vrai si la fin du fichier porte un marqueur de fin d'exécution.
+
+    Vaut pour une trace en clair comme pour une archive `.gz` : la fin de
+    l'index doit refléter le fichier, pas son extension. Un fichier illisible
+    est réputé terminé pour ne pas inventer un run interrompu.
+    """
     try:
-        with path.open("rb") as handle:
-            size = handle.seek(0, os.SEEK_END)
-            handle.seek(max(0, size - _TAIL_BYTES))
-            tail = handle.read().decode("utf-8", errors="replace")
-    except OSError:
-        return True  # illisible : ne pas inventer un run interrompu
+        if path.name.endswith(".gz"):
+            with gzip.open(path, "rb") as handle:
+                size = handle.seek(0, os.SEEK_END)
+                handle.seek(max(0, size - _TAIL_BYTES))
+                tail = handle.read().decode("utf-8", errors="replace")
+        else:
+            with path.open("rb") as handle:
+                size = handle.seek(0, os.SEEK_END)
+                handle.seek(max(0, size - _TAIL_BYTES))
+                tail = handle.read().decode("utf-8", errors="replace")
+    except (OSError, EOFError):
+        return True
     return '"run_finished"' in tail or '"trace_truncated"' in tail
 
 
