@@ -601,6 +601,10 @@ class RunTrace:
             if self._discard(entry[2]):
                 archives.remove(entry)
                 total -= entry[1]
+        # L'index suit la même rétention : une ligne par trace encore présente,
+        # pas une ligne par run historique, sinon il grossirait sans fin.
+        if self.index:
+            RunIndex(self.directory).compact()
 
     def _discard(self, path: Path) -> bool:
         """Supprime une trace, ou l'archive en `.gz` si l'archivage est actif."""

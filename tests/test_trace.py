@@ -533,6 +533,66 @@ def test_run_index_records_started_and_finished_states() -> None:
         assert entries["idx"].ok is True
 
 
+def test_the_index_is_compacted_to_the_traces_still_present() -> None:
+    with tmpdir("index-compact") as tmp:
+        directory = Path(tmp) / "runs"
+        directory.mkdir()
+        index = RunIndex(directory)
+        index.mark("garde", "started", manifest={"model": "m", "app_version": "1.0"})
+        index.mark("garde", "finished", ok=True, stop_reason="final")
+        index.mark("purgé", "started", manifest={"model": "m"})
+        index.mark("purgé", "finished", ok=True)
+        index.mark("vieux", "started")
+        (directory / "garde.jsonl").write_text("", encoding="utf-8")
+        (directory / "vieux.jsonl.gz").write_bytes(b"")
+        before = len(index.path.read_text(encoding="utf-8").splitlines())
+
+        assert index.compact() is True
+
+        entries = index.entries()
+        assert set(entries) == {"garde", "vieux"}, "seules les traces présentes restent"
+        assert entries["garde"].state == "finished"
+        assert entries["garde"].model == "m", "le manifeste du début doit survivre"
+        assert entries["garde"].ok is True
+        lines = index.path.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 2
+        assert before > len(lines)
+        assert index.compact() is False, "un index déjà compact ne doit pas être réécrit"
+
+
+def test_retention_keeps_the_index_bounded_to_present_traces() -> None:
+    with tmpdir("index-retention") as tmp:
+        directory = Path(tmp) / "runs"
+        for number in range(1, 5):
+            trace = RunTrace(directory, max_runs=1)
+            trace(
+                Event(
+                    type=EventType.RUN_STARTED,
+                    run_id=f"r{number}",
+                    payload={"trace_format": 2},
+                    seq=1,
+                )
+            )
+            trace(
+                Event(
+                    type=EventType.RUN_FINISHED,
+                    run_id=f"r{number}",
+                    payload={"ok": True},
+                    seq=2,
+                )
+            )
+
+        index = RunIndex(directory)
+        entries = index.entries()
+        present = {
+            path.name[: -len(".jsonl")] for path in directory.glob("*.jsonl")
+        }
+
+        assert present == {"r4"}, "la rétention ne garde qu'une trace"
+        assert set(entries) == present, "l'index ne garde pas les runs purgés"
+        assert len(index.path.read_text(encoding="utf-8").splitlines()) == 2
+
+
 def test_a_killed_run_is_marked_interrupted_by_the_next_one() -> None:
     with tmpdir("interrompu") as tmp:
         directory = Path(tmp) / "runs"

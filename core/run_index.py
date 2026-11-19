@@ -6,6 +6,11 @@ chaque fichier, et pour distinguer un run tué d'un run encore en cours
 d'écriture, il faut une vue latérale : chaque ligne de l'index décrit un
 changement d'état (`started`, `finished`, `interrupted`, `archived`).
 
+Le journal est append-only, mais il est compacté à chaque application de la
+rétention (`compact`) : une ligne par exécution dont la trace existe encore.
+Sans cela, il garderait les états de runs purgés et grossirait sans fin alors
+que le dossier des traces, lui, reste borné.
+
 L'index est un cache, jamais une source de vérité : s'il est absent ou
 tronqué, il se reconstruit en balayant les traces (`rebuild`). Chaque lecture
 repart donc des fichiers quand l'index ne dit rien.
@@ -206,6 +211,68 @@ class RunIndex:
         return dict(
             sorted(latest.items(), key=lambda item: item[1].updated, reverse=True)
         )
+
+    def _present_run_ids(self) -> set[str]:
+        """Identifiants des traces encore sur disque (archives comprises)."""
+        try:
+            files = list(self.directory.glob("*.jsonl*"))
+        except OSError:
+            return set()
+        return {
+            _run_id_of(path)
+            for path in files
+            if path.is_file() and path.name != INDEX_NAME
+        }
+
+    def compact(self) -> bool:
+        """Réécrit l'index : une ligne par exécution dont la trace existe encore.
+
+        Les états des runs présents sont conservés fusionnés (dernier état
+        connu), donc un run terminé garde son modèle, sa version et sa raison
+        d'arrêt. Seules les exécutions dont la rétention a supprimé la trace
+        disparaissent : la taille de l'index suit le nombre de traces, pas le
+        nombre de runs historiques.
+
+        Un index est un cache : si une autre écriture se glisse pendant la
+        réécriture, on renonce plutôt que de la perdre (le prochain passage la
+        compactera). Retourne vrai si le fichier a été réécrit.
+        """
+        try:
+            before = self.path.stat()
+        except OSError:
+            return False
+        latest = self.entries()
+        present = self._present_run_ids()
+        kept = {
+            run_id: record for run_id, record in latest.items() if run_id in present
+        }
+        if len(kept) == len(latest):
+            return False  # rien de périmé : ne pas réécrire pour rien
+        tmp = self.path.with_name(self.path.name + ".tmp")
+        try:
+            with tmp.open("w", encoding="utf-8") as handle:
+                for record in sorted(kept.values(), key=lambda item: item.updated):
+                    handle.write(
+                        json.dumps(record.as_dict(), ensure_ascii=False, default=str)
+                        + "\n"
+                    )
+            after = self.path.stat()
+            if (after.st_size, after.st_mtime_ns) != (
+                before.st_size,
+                before.st_mtime_ns,
+            ):
+                logger.debug("compaction abandonnée : index modifié entre-temps")
+                tmp.unlink(missing_ok=True)
+                return False
+            os.replace(tmp, self.path)
+        except OSError:
+            logger.debug("compaction de l'index impossible", exc_info=True)
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return False
+        return True
 
     def rebuild(self, *, max_files: int = 200) -> dict[str, RunRecord]:
         """Reconstruit l'état de chaque trace présente, si l'index manque."""
