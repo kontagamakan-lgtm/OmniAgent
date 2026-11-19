@@ -12,6 +12,7 @@ si le rejeu ne retrouve pas les faits, la trace a un problème.
     python -m core.replay <trace> --export rapport.json
     python -m core.replay --index-compact [dossier]
     python -m core.replay --index-rebuild [dossier]
+    python -m core.replay --rotate-key [dossier] --new-key-env AUTRE_VARIABLE
 
 `TraceReplayLLM` réinjecte les réponses du modèle lues dans une trace : la
 boucle ReAct peut alors être exercée hors-ligne, sur un scénario réel, sans
@@ -35,7 +36,13 @@ from core.llm_client import LLMResponse
 from core.react_parser import ParsedToolCall
 from core.run_index import maintain
 from core.trace import TraceReadReport, read_trace
-from core.trace_crypto import KEY_ENV, TraceKeyError, optional_key
+from core.trace_crypto import (
+    KEY_ENV,
+    TraceKeyError,
+    load_key,
+    optional_key,
+)
+from core.trace_rotate import NEXT_KEY_ENV, rotate_traces
 
 __all__ = [
     "ReplayExhausted",
@@ -498,6 +505,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         metavar="NOM",
         help=f"variable contenant la cle des traces chiffrees (defaut : {KEY_ENV})",
     )
+    parser.add_argument(
+        "--new-key-env",
+        default=NEXT_KEY_ENV,
+        metavar="NOM",
+        help="variable contenant la nouvelle cle de rotation "
+        f"(defaut : {NEXT_KEY_ENV})",
+    )
     maintenance = parser.add_mutually_exclusive_group()
     maintenance.add_argument(
         "--index-compact",
@@ -513,7 +527,38 @@ def main(argv: Sequence[str] | None = None) -> int:
         metavar="DOSSIER",
         help="reconstruit runs.index depuis les traces presentes",
     )
+    maintenance.add_argument(
+        "--rotate-key",
+        nargs="?",
+        const="",
+        metavar="DOSSIER",
+        help="rechiffre les traces avec la cle de --new-key-env",
+    )
     args = parser.parse_args(argv)
+
+    if args.rotate_key is not None:
+        chosen = args.rotate_key
+        directory = Path(chosen) if chosen else _default_runs_dir()
+        if not directory.is_dir():
+            print(f"Dossier de traces introuvable : {directory}", file=sys.stderr)
+            return 2
+        try:
+            old_key = load_key(args.key_env)
+            new_key = load_key(args.new_key_env)
+        except TraceKeyError as exc:
+            print(f"Cle de trace illisible : {exc}", file=sys.stderr)
+            return 2
+        if old_key == new_key:
+            print("Les deux cles sont identiques : rien a tourner.", file=sys.stderr)
+            return 2
+        failures = 0
+        report = rotate_traces(directory, old_key, new_key)
+        for item in report:
+            detail = f"  ({item['detail']})" if item["detail"] else ""
+            print(f"{item['status'].ljust(9)} {item['path']}{detail}")
+            failures += item["status"] == "failed"
+        print(f"{len(report)} fichier(s), {failures} echec(s)")
+        return 1 if failures else 0
 
     if args.index_compact is not None or args.index_rebuild is not None:
         rebuild = args.index_rebuild is not None
