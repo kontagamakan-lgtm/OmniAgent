@@ -335,8 +335,18 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             """Rejoue une trace dans la conversation, sans relancer l'agent."""
             from core.replay import format_run, replay
 
+            key = None
+            trace_cfg = self.controller.agent.settings.trace
+            if trace_cfg.encrypt:
+                from core.trace_crypto import TraceKeyError, load_key
+
+                try:
+                    key = load_key(trace_cfg.key_env)
+                except TraceKeyError as exc:
+                    self._append("erreur", f"trace chiffrée : {exc}")
+                    return
             try:
-                run = replay(path)
+                run = replay(path, key=key)
             except Exception as exc:  # noqa: BLE001 - une trace cassée ne doit rien casser
                 self._append("erreur", f"trace illisible : {exc}")
                 return

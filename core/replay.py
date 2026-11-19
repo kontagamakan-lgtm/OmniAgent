@@ -32,6 +32,7 @@ from core.events import EventType
 from core.llm_client import LLMResponse
 from core.react_parser import ParsedToolCall
 from core.trace import TraceReadReport, read_trace
+from core.trace_crypto import KEY_ENV, TraceKeyError, optional_key
 
 __all__ = [
     "ReplayExhausted",
@@ -158,15 +159,18 @@ def _step(steps: list[ReplayStep], index: int) -> ReplayStep:
     return created
 
 
-def replay(path: Path | str, *, strict: bool = False) -> ReplayRun:
+def replay(
+    path: Path | str, *, strict: bool = False, key: bytes | None = None
+) -> ReplayRun:
     """Reconstitue une exécution depuis son fichier de trace.
 
     Le manifeste de `run_started` fournit le contexte (version, modèle,
     condensat des réglages) ; sans lui, un rejeu ne saurait pas dans quelles
-    conditions la trace a été produite.
+    conditions la trace a été produite. Une trace chiffrée exige `key`, sinon
+    `TraceKeyError` plutôt qu'un rejeu vide.
     """
     target = Path(path)
-    records, report = read_trace(target, strict=strict)
+    records, report = read_trace(target, strict=strict, key=key)
     run = ReplayRun(path=target, report=report)
     steps: list[ReplayStep] = []
     finished = False
@@ -372,9 +376,9 @@ class TraceReplayLLM:
 
     supports_stream = False
 
-    def __init__(self, path: Path | str) -> None:
+    def __init__(self, path: Path | str, *, key: bytes | None = None) -> None:
         self.path = Path(path)
-        self._script = _llm_script(self.path)
+        self._script = _llm_script(self.path, key=key)
         self._cursor = 0
 
     def __len__(self) -> int:
@@ -408,10 +412,10 @@ class TraceReplayLLM:
         return
 
 
-def _llm_script(path: Path) -> list[dict[str, Any]]:
+def _llm_script(path: Path, *, key: bytes | None = None) -> list[dict[str, Any]]:
     """Réponses du modèle, dans l'ordre, avec les appels qui les ont suivies."""
     try:
-        records, _report = read_trace(path)
+        records, _report = read_trace(path, key=key)
     except OSError:
         return []
     steps: dict[int, dict[str, Any]] = {}
@@ -473,6 +477,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=Path,
         help="ecrit un bundle partageable (sans tache ni reponse)",
     )
+    parser.add_argument(
+        "--key-env",
+        default=KEY_ENV,
+        metavar="NOM",
+        help=f"variable contenant la cle des traces chiffrees (defaut : {KEY_ENV})",
+    )
     args = parser.parse_args(argv)
 
     path = args.trace
@@ -480,10 +490,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Trace introuvable : {path}", file=sys.stderr)
         return 2
 
+    try:
+        key = optional_key(args.key_env)
+    except TraceKeyError as exc:
+        print(f"Cle de trace illisible : {exc}", file=sys.stderr)
+        return 2
+
     if args.check:
         from core.trace_lint import format_issues, lint_file
 
-        issues, report = lint_file(path, strict=args.strict)
+        issues, report = lint_file(path, strict=args.strict, key=key)
         if args.json:
             print(
                 json.dumps(
@@ -502,7 +518,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1 if any(issue.error for issue in issues) else 0
 
     try:
-        run = replay(path, strict=args.strict)
+        run = replay(path, strict=args.strict, key=key)
     except Exception as exc:  # noqa: BLE001 - la CLI rapporte, elle ne plante pas
         print(f"Trace illisible : {exc}", file=sys.stderr)
         return 2
@@ -511,7 +527,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not args.diff.is_file():
             print(f"Trace introuvable : {args.diff}", file=sys.stderr)
             return 2
-        other = replay(args.diff, strict=args.strict)
+        other = replay(args.diff, strict=args.strict, key=key)
         differences = manifest_diff(run, other)
         print(f"A : {path.name} ({run.run_id or '?'})")
         print(f"B : {args.diff.name} ({other.run_id or '?'})")

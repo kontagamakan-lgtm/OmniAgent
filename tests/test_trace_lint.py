@@ -1,7 +1,7 @@
 """Vérificateur de format des traces : chaque invariant a son test.
 
 Le lecteur tolère ; le vérificateur juge. Ces tests fixent le contrat du format
-2 pour qu'une évolution de schéma casse ici plutôt qu'en production.
+3 pour qu'une évolution de schéma casse ici plutôt qu'en production.
 """
 
 from __future__ import annotations

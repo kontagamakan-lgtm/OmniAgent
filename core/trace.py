@@ -49,6 +49,13 @@ from config import (
 )
 from core.events import Event, EventType
 from core.run_index import FINISHED, INDEX_NAME, STARTED, RunIndex, scan_interrupted
+from core.trace_crypto import (
+    TraceKeyError,
+    decrypt_record,
+    encrypt_record,
+    is_encrypted,
+    load_key,
+)
 from security.redaction import redactor
 
 __all__ = [
@@ -57,6 +64,7 @@ __all__ = [
     "DEFAULT_MAX_RUNS",
     "RunTrace",
     "TraceFormatError",
+    "TraceKeyError",
     "TraceReadReport",
     "build_trace",
     "read_events",
@@ -114,6 +122,7 @@ def read_events(
     *,
     strict: bool = False,
     report: TraceReadReport | None = None,
+    key: bytes | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Événements d'une trace, en ignorant les lignes illisibles.
 
@@ -123,6 +132,9 @@ def read_events(
     `strict=True` lève `TraceFormatError` au premier défaut ; le mode par défaut
     reste tolérant mais remplit `report`, ce qui distingue « coupure finale
     attendue » de « trace corrompue au milieu ».
+
+    Une trace chiffrée exige `key` : sans elle, `TraceKeyError` plutôt qu'un
+    payload vide qui laisserait croire que le run n'a rien fait.
     """
     target = Path(path)
     counts = report if report is not None else TraceReadReport()
@@ -161,6 +173,12 @@ def read_events(
                     )
                 counts.ignored += 1
                 continue
+            if is_encrypted(record):
+                if key is None:
+                    raise TraceKeyError(
+                        f"trace chiffrée ({target.name}) : fournir la clé de déchiffrement"
+                    )
+                record = decrypt_record(record, key)
             counts.events += 1
             yield record
     # Une dernière ligne sans saut de ligne est le signe d'une coupure en pleine
@@ -169,11 +187,11 @@ def read_events(
 
 
 def read_trace(
-    path: Path | str, *, strict: bool = False
+    path: Path | str, *, strict: bool = False, key: bytes | None = None
 ) -> tuple[list[dict[str, Any]], TraceReadReport]:
     """Comme `read_events`, mais retourne tous les événements avec leur bilan."""
     report = TraceReadReport()
-    records = list(read_events(path, strict=strict, report=report))
+    records = list(read_events(path, strict=strict, report=report, key=key))
     return records, report
 
 
@@ -197,6 +215,14 @@ def build_trace(settings: Settings, directory: Path | str | None = None) -> "Run
     root = Path(directory) if directory else settings.paths.log_dir / "runs"
     if cfg.per_workspace:
         root = root / workspace_slug()
+    key: bytes | None = None
+    if cfg.encrypt:
+        try:
+            key = load_key(cfg.key_env)
+        except TraceKeyError as exc:
+            # Fail-closed : mieux vaut pas de trace qu'une trace en clair.
+            logger.warning("traces désactivées : %s", exc)
+            return None
     return RunTrace(
         root,
         content=cfg.content,
@@ -208,6 +234,7 @@ def build_trace(settings: Settings, directory: Path | str | None = None) -> "Run
         fsync_every=cfg.fsync_every,
         active_ttl_s=cfg.active_ttl_s,
         index=cfg.index,
+        encrypt_key=key,
     )
 
 
@@ -234,6 +261,7 @@ class RunTrace:
         fsync_every: int = 0,
         active_ttl_s: float = DEFAULT_ACTIVE_TTL_S,
         index: bool = True,
+        encrypt_key: bytes | None = None,
     ) -> None:
         self.directory = Path(directory)
         self._sanitize = sanitize or redactor.redact_data
@@ -252,6 +280,8 @@ class RunTrace:
         self.fsync_every = max(0, int(fsync_every))
         self.active_ttl_s = max(1.0, float(active_ttl_s))
         self.index = bool(index)
+        #: Clé AEAD des payloads ; `None` écrit en clair (choix explicite de l'appelant).
+        self.encrypt_key = bytes(encrypt_key) if encrypt_key else None
         self._handle: TextIO | None = None
         self._run_id = ""
         self._last_seq = 0
@@ -283,6 +313,8 @@ class RunTrace:
                     "seq": event.seq,
                     "payload": payload,
                 }
+                if self.encrypt_key is not None:
+                    record = encrypt_record(record, self.encrypt_key)
                 if not self._write(record):
                     self._truncate(event.run_id)
         except Exception:  # noqa: BLE001 - une trace ne casse pas une exécution
@@ -345,22 +377,24 @@ class RunTrace:
             self.max_bytes,
             run_id,
         )
-        self._write(
-            {
-                "run_id": run_id,
-                "timestamp": datetime.now(tz=timezone.utc).isoformat(),
-                "type": EventType.TRACE_TRUNCATED,
-                # Après le dernier événement : le vérificateur exige une
-                # séquence strictement croissante.
-                "seq": self._last_seq + 1,
-                "payload": {
-                    "max_bytes": self.max_bytes,
-                    "bytes": self._bytes_written,
-                    "trace_format": TRACE_FORMAT_VERSION,
-                },
+        record = {
+            "run_id": run_id,
+            "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+            "type": EventType.TRACE_TRUNCATED,
+            # Après le dernier événement : le vérificateur exige une
+            # séquence strictement croissante.
+            "seq": self._last_seq + 1,
+            "payload": {
+                "max_bytes": self.max_bytes,
+                "bytes": self._bytes_written,
+                "trace_format": TRACE_FORMAT_VERSION,
             },
-            control=True,
-        )
+        }
+        # Une trace chiffrée ne mélange pas lignes claires et chiffrées : un
+        # contrôle laissé en clair ouvrirait la porte à une ligne injectée.
+        if self.encrypt_key is not None:
+            record = encrypt_record(record, self.encrypt_key)
+        self._write(record, control=True)
 
     def _sync(self) -> None:
         """Force l'écriture disque (le `flush` seul ne survit pas à une coupure)."""
@@ -694,5 +728,6 @@ class RunTrace:
             "content": self.content,
             "bytes": self._bytes_written,
             "truncated": self.truncated,
+            "encrypted": self.encrypt_key is not None,
             "trace_format": TRACE_FORMAT_VERSION,
         }

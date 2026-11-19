@@ -1,4 +1,4 @@
-"""Vérificateur de format des traces JSONL (format 2).
+"""Vérificateur de format des traces JSONL (format 3).
 
 `read_events` est tolérant par choix : il rend ce qu'il peut et ignore le reste.
 Ce module est l'inverse — il juge. Une trace doit satisfaire un contrat :
@@ -30,10 +30,11 @@ from typing import Any, Sequence
 from config import TRACE_FORMAT_VERSION
 from core.events import EventType
 from core.trace import TraceReadReport, read_trace
+from core.trace_crypto import KEY_ENV, TraceKeyError, optional_key
 
 __all__ = ["LintIssue", "lint_events", "lint_file", "main"]
 
-#: Types connus du format 2 : tout le reste est une évolution non documentée.
+#: Types connus du format 3 : tout le reste est une évolution non documentée.
 KNOWN_TYPES = frozenset(
     {
         EventType.RUN_STARTED,
@@ -205,11 +206,14 @@ def lint_events(
 
 
 def lint_file(
-    path: Path | str, *, strict: bool = False
+    path: Path | str, *, strict: bool = False, key: bytes | None = None
 ) -> tuple[list[LintIssue], TraceReadReport]:
-    """Lit puis contrôle une trace ; `strict` fait échouer la lecture elle-même."""
+    """Lit puis contrôle une trace ; `strict` fait échouer la lecture elle-même.
+
+    Une trace chiffrée sans clé devient une erreur `unreadable_trace` explicite.
+    """
     try:
-        records, report = read_trace(path, strict=strict)
+        records, report = read_trace(path, strict=strict, key=key)
     except Exception as exc:  # noqa: BLE001 - un lecteur rapporte, il ne plante pas
         issue = LintIssue("error", "unreadable_trace", f"{type(exc).__name__}: {exc}")
         return [issue], TraceReadReport()
@@ -241,13 +245,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="traite une ligne vide ou illisible comme une erreur de lecture",
     )
+    parser.add_argument(
+        "--key-env",
+        default=KEY_ENV,
+        metavar="NOM",
+        help=f"variable contenant la cle des traces chiffrees (defaut : {KEY_ENV})",
+    )
     args = parser.parse_args(argv)
 
     if not args.trace.is_file():
         print(f"Trace introuvable : {args.trace}", file=sys.stderr)
         return 2
 
-    issues, report = lint_file(args.trace, strict=args.strict)
+    try:
+        key = optional_key(args.key_env)
+    except TraceKeyError as exc:
+        print(f"Cle de trace illisible : {exc}", file=sys.stderr)
+        return 2
+
+    issues, report = lint_file(args.trace, strict=args.strict, key=key)
     if args.json:
         print(
             json.dumps(

@@ -360,10 +360,15 @@ def _first_record(path: Path) -> dict[str, Any]:
 
 
 def _manifest_of(path: Path) -> dict[str, Any]:
+    """Manifeste d'une trace, sans la clé : `meta` en clair si chiffrée."""
     record = _first_record(path)
+    if record.get("type") != "run_started":
+        return {}
     payload = record.get("payload")
-    payload = payload if isinstance(payload, dict) else {}
-    return payload if record.get("type") == "run_started" else {}
+    if isinstance(payload, dict):
+        return payload
+    meta = record.get("meta")
+    return dict(meta) if isinstance(meta, dict) else {}
 
 
 def _tail_is_terminal(path: Path) -> bool:

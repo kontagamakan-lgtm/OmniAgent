@@ -47,7 +47,7 @@ APP_VERSION = "1.0.0"
 CONFIG_SCHEMA_VERSION = 1
 #: Version du format des fichiers de trace. À incrémenter quand la forme des
 #: enregistrements change : un lecteur peut alors refuser ou migrer.
-TRACE_FORMAT_VERSION = 2
+TRACE_FORMAT_VERSION = 3
 ENV_PREFIX = "OMNIAGENT_"
 
 DEFAULT_USER_AGENT = (
@@ -439,8 +439,13 @@ class TraceConfig:
     #: Compresser les vieilles traces (`.jsonl.gz`) au lieu de les supprimer.
     archive: bool = False
     #: Taille à partir de laquelle un run terminé est archivé immédiatement
-    #: (0 : attendre la purgation suivante).
+    #: (0 : attendre la purge suivante).
     archive_min_bytes: int = 64 * 1024
+    #: Chiffrer le contenu des traces au repos (AES-256-GCM, une enveloppe par
+    #: ligne). Sans clé valide, aucune trace n'est écrite : jamais de repli clair.
+    encrypt: bool = False
+    #: Variable d'environnement portant la clé (32 octets en base64url ou hex).
+    key_env: str = "OMNIAGENT_TRACE_KEY"
     #: Tracer chaque espace de travail dans son propre sous-dossier, donc avec
     #: son propre quota : un projet bavard ne purge pas l'historique d'un autre.
     per_workspace: bool = False
@@ -628,6 +633,7 @@ class Settings:
                 "max_age_days": self.trace.max_age_days,
                 "max_bytes": self.trace.max_bytes,
                 "archive": self.trace.archive,
+                "encrypt": self.trace.encrypt,
                 "per_workspace": self.trace.per_workspace,
                 "trace_format": TRACE_FORMAT_VERSION,
             },
@@ -829,6 +835,12 @@ class Settings:
             err("trace.archive_min_bytes", "doit être >= 0 (0 désactive l'archivage immédiat)")
         if not trace.enabled and trace.archive:
             warn("trace.archive", "sans effet : la trace est désactivée")
+        if trace.encrypt and not os.environ.get(trace.key_env, "").strip():
+            warn(
+                "trace.key_env",
+                f"variable {trace.key_env} absente : les traces seront désactivées "
+                "(aucun repli en clair)",
+            )
 
         return issues
 
