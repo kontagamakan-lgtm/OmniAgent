@@ -424,7 +424,7 @@ def test_resume_plan_never_replays_side_effect_tools(tmp_path: Path) -> None:
         SimpleNamespace(
             type="tool_started",
             run_id="coupe",
-            payload={"tool": "fs_read", "arguments": {"path": "a.txt"}, "step": 1},
+            payload={"tool": "fs_read_text", "arguments": {"path": "a.txt"}, "step": 1},
             seq=2,
             timestamp=0,
         )
@@ -433,7 +433,7 @@ def test_resume_plan_never_replays_side_effect_tools(tmp_path: Path) -> None:
         SimpleNamespace(
             type="tool_started",
             run_id="coupe",
-            payload={"tool": "fs_write", "arguments": {}, "step": 2},
+            payload={"tool": "fs_write_text", "arguments": {}, "step": 2},
             seq=3,
             timestamp=0,
         )
@@ -443,7 +443,7 @@ def test_resume_plan_never_replays_side_effect_tools(tmp_path: Path) -> None:
     plan = build_plan(trace.path)
 
     assert plan.task == "Ecrire un rapport"
-    assert len(plan.unsafe) == 1 and "fs_write" in plan.unsafe[0]
+    assert len(plan.unsafe) == 1 and "fs_write_text" in plan.unsafe[0]
     assert "ne pas les refaire" in resume_prompt(plan)
 
 

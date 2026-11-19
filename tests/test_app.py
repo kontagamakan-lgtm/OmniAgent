@@ -6,6 +6,7 @@ import argparse
 import io
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 from support import make_settings, tmpdir  # noqa: I001
 
@@ -257,6 +258,115 @@ def test_check_lists_the_tesseract_hint_when_the_binary_is_missing(monkeypatch) 
         assert 'C:\\Program Files\\Tesseract-OCR\\tesseract.exe' in text, text
         assert "--version" in text, text
         assert "python app.py --check" in text, text
+
+
+def test_resume_replays_reads_before_the_model_and_refuses_writes() -> None:
+    """La reprise relit les lectures, puis seulement rend la main au modele."""
+    from core.tool_registry import ToolRegistry, ToolSpec
+    from core.trace import RunTrace
+    from tools.base import object_schema, param
+
+    with tmpdir("app-reprise") as tmp:
+        settings = make_settings(tmp)
+        trace = RunTrace(tmp)
+        trace(
+            SimpleNamespace(
+                type="run_started",
+                run_id="reprise",
+                payload={"task": "Lire puis ecrire", "trace_format": 3},
+                seq=1,
+                timestamp=0,
+            )
+        )
+        trace(
+            SimpleNamespace(
+                type="tool_started",
+                run_id="reprise",
+                payload={
+                    "tool": "fs_read_text",
+                    "arguments": {"path": "a.txt"},
+                    "step": 1,
+                },
+                seq=2,
+                timestamp=0,
+            )
+        )
+        trace(
+            SimpleNamespace(
+                type="tool_started",
+                run_id="reprise",
+                payload={
+                    "tool": "fs_write_text",
+                    "arguments": {"path": "b.txt", "content": "ecrit"},
+                    "step": 2,
+                },
+                seq=3,
+                timestamp=0,
+            )
+        )
+        trace.close()
+
+        reads: list[str] = []
+        writes: list[str] = []
+
+        def read(path: str) -> str:
+            reads.append(path)
+            return f"contenu de {path}"
+
+        def write(path: str, content: str) -> str:
+            writes.append(path)
+            return content
+
+        registry = ToolRegistry(
+            [
+                ToolSpec(
+                    "fs_read_text",
+                    "Lit un fichier.",
+                    object_schema(
+                        {"path": param("string", "Chemin")}, required=["path"]
+                    ),
+                    read,
+                ),
+                ToolSpec(
+                    "fs_write_text",
+                    "Ecrit un fichier.",
+                    object_schema(
+                        {
+                            "path": param("string", "Chemin"),
+                            "content": param("string", "Contenu"),
+                        },
+                        required=["path", "content"],
+                    ),
+                    write,
+                    read_only=False,
+                ),
+            ]
+        )
+
+        class _Agent:
+            def __init__(self) -> None:
+                self.task = ""
+
+            def run(self, task: str):
+                # L'ordre est le point du test : la lecture est deja faite.
+                assert reads == ["a.txt"], f"lectures avant modele : {reads}"
+                self.task = task
+                return SimpleNamespace(text="fini", ok=True, stop_reason="final", error="")
+
+        agent = _Agent()
+        bundle = SimpleNamespace(agent=agent, registry=registry, close=lambda: None)
+        original = app.build_agent
+        app.build_agent = lambda *args, **kwargs: bundle
+        try:
+            code = app._resume(settings, str(trace.path), apply=True, no_trace=True)
+        finally:
+            app.build_agent = original
+
+        assert code == 0
+        assert writes == [], "un outil a effet de bord a ete rejoue"
+        assert "contenu de a.txt" in agent.task
+        assert "fs_write_text" in agent.task
+        assert "non rejoue" in agent.task
 
 
 def test_diagnostics_reports_the_ocr_state_without_blocking() -> None:

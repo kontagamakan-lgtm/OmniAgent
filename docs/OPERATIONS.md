@@ -84,9 +84,13 @@ python app.py --resume data\logs\runs\<run>.jsonl
 python app.py --resume ... --resume-apply
 ```
 
-L'aperçu classe les appels déjà faits. Aucun outil de la trace n'est rejoué :
-le contexte reconstruit est transmis au modèle, qui doit vérifier l'état avant
-d'agir. Une trace terminée normalement n'a pas besoin de reprise.
+L'aperçu classe les appels déjà faits. Avec `--resume-apply`, les appels de
+lecture seule (`fs_read_text`, `fs_list`, `web_search`, etc.) sont réellement
+rejoués avant le premier appel au modèle, et leurs observations fraîches sont
+ajoutées au contexte. Tout outil à effet de bord — écriture, shell, navigateur,
+coffre en modification — est refusé et jamais exécuté ; un outil inconnu l'est
+aussi, faute de preuve qu'il est sans effet. Une trace terminée normalement n'a
+pas besoin de reprise.
 
 ## Migration v2 vers v3 et export
 

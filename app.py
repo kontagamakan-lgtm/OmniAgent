@@ -193,7 +193,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--resume-apply",
         action="store_true",
-        help="avec --resume : lance l'agent avec le contexte reconstruit",
+        help="avec --resume : rejoue les lectures seules puis lance l'agent",
     )
     parser.add_argument(
         "--browser-smoke",
@@ -972,8 +972,8 @@ def _run_schedule(settings: Settings, args: argparse.Namespace) -> int:
 def _resume(
     settings: Settings, source: str, *, apply: bool, no_trace: bool = False
 ) -> int:
-    """Aperçu ou reprise : aucun outil de la trace n'est rejoué."""
-    from core.resume import build_plan, format_plan, resume_prompt
+    """Aperçu, ou reprise des lectures seules avant de rendre la main au modèle."""
+    from core.resume import build_plan, format_plan, replay_read_only, resume_prompt
     from core.trace_crypto import TraceKeyError, optional_key
 
     path = Path(source)
@@ -999,7 +999,18 @@ def _resume(
         bundle.agent.bus.subscribe(trace) if trace is not None else (lambda: None)
     )
     try:
-        reply = bundle.agent.run(resume_prompt(plan))
+        # Les lectures sont rejouees ici, avant le premier appel au modele ;
+        # les outils a effet sont refuses et jamais dispatches.
+        replayed = replay_read_only(plan, bundle.registry)
+        print(
+            f"Rejeu : {len(replayed.executed)} appel(s) de lecture seule, "
+            f"{len(replayed.refused)} refuse(s)."
+        )
+        for item in replayed.executed:
+            print(f"  {'ok' if item.ok else 'echec'} {item.tool} (etape {item.step})")
+        for item in replayed.refused:
+            print(f"  refuse {item.tool} : {item.refused}")
+        reply = bundle.agent.run(resume_prompt(plan, replay=replayed))
     finally:
         unsubscribe_trace()
         if trace is not None:
