@@ -477,6 +477,34 @@ class AutonomyConfig:
     journal_max_entries: int = 200
     #: Taille maximale du journal ; dépassée, les plus vieux cycles partent.
     journal_max_bytes: int = 256 * 1024
+    #: Plafond de la session, en tokens facturés (prompt + complétion). 0 = aucun.
+    max_total_tokens: int = 200_000
+    #: Plafond d'un cycle ; l'exécution est annulée au dépassement. 0 = aucun.
+    max_tokens_per_cycle: int = 60_000
+    #: Appels d'outils par cycle avant annulation. 0 = aucun plafond.
+    max_tool_calls_per_cycle: int = 40
+
+
+@dataclass(slots=True)
+class StorageConfig:
+    """Rétention des dossiers de travail (rapports, cache, téléchargements).
+
+    Les traces et le journal d'autonomie ont leurs propres bornes ; ces
+    dossiers-là n'en avaient aucune et grossissaient sans fin. Aucune purge
+    n'est automatique : `--clean` montre le plan, `--clean-apply` l'exécute.
+    Un âge ou une taille à 0 désactive la règle correspondante.
+    """
+
+    reports_max_age_days: int = 30
+    reports_max_bytes: int = 32 * 1024 * 1024
+    cache_max_age_days: int = 7
+    cache_max_bytes: int = 128 * 1024 * 1024
+    #: Téléchargements : fichiers de l'utilisateur, donc désactivé par défaut.
+    downloads_max_age_days: int = 0
+    downloads_max_bytes: int = 0
+    #: Profil navigateur : seuls les sous-dossiers de cache sont concernés.
+    browser_cache_max_age_days: int = 7
+    browser_cache_max_bytes: int = 256 * 1024 * 1024
 
 
 @dataclass(slots=True)
@@ -515,6 +543,7 @@ class Settings:
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     trace: TraceConfig = field(default_factory=TraceConfig)
     autonomy: AutonomyConfig = field(default_factory=AutonomyConfig)
+    storage: StorageConfig = field(default_factory=StorageConfig)
 
     # -- persistance --------------------------------------------------------
 
@@ -664,6 +693,19 @@ class Settings:
                 "goals_file": self.autonomy.goals_file,
                 "journal_max_entries": self.autonomy.journal_max_entries,
                 "journal_max_bytes": self.autonomy.journal_max_bytes,
+                "max_total_tokens": self.autonomy.max_total_tokens,
+                "max_tokens_per_cycle": self.autonomy.max_tokens_per_cycle,
+                "max_tool_calls_per_cycle": self.autonomy.max_tool_calls_per_cycle,
+            },
+            "storage": {
+                "reports_max_age_days": self.storage.reports_max_age_days,
+                "reports_max_bytes": self.storage.reports_max_bytes,
+                "cache_max_age_days": self.storage.cache_max_age_days,
+                "cache_max_bytes": self.storage.cache_max_bytes,
+                "downloads_max_age_days": self.storage.downloads_max_age_days,
+                "downloads_max_bytes": self.storage.downloads_max_bytes,
+                "browser_cache_max_age_days": self.storage.browser_cache_max_age_days,
+                "browser_cache_max_bytes": self.storage.browser_cache_max_bytes,
             },
             "agent": {
                 "action_first": self.agent.action_first,
@@ -883,6 +925,31 @@ class Settings:
             err("autonomy.journal_max_entries", "doit être comprise entre 1 et 10000")
         if autonomy.journal_max_bytes < 1024:
             err("autonomy.journal_max_bytes", "doit être >= 1024 octets")
+        for name in ("max_total_tokens", "max_tokens_per_cycle"):
+            if not (0 <= int(getattr(autonomy, name)) <= 10_000_000):
+                err(f"autonomy.{name}", "doit être comprise entre 0 et 10 000 000")
+        if not (0 <= int(autonomy.max_tool_calls_per_cycle) <= 1000):
+            err("autonomy.max_tool_calls_per_cycle", "doit être comprise entre 0 et 1000")
+
+        # --- Rétention des dossiers de travail
+        storage = self.storage
+        for name in (
+            "reports_max_age_days",
+            "cache_max_age_days",
+            "downloads_max_age_days",
+            "browser_cache_max_age_days",
+        ):
+            value = int(getattr(storage, name))
+            if not (0 <= value <= 3650):
+                err(f"storage.{name}", "doit être comprise entre 0 et 3650 jours")
+        for name in (
+            "reports_max_bytes",
+            "cache_max_bytes",
+            "downloads_max_bytes",
+            "browser_cache_max_bytes",
+        ):
+            if int(getattr(storage, name)) < 0:
+                err(f"storage.{name}", "doit être >= 0 (0 = pas de limite de taille)")
 
         return issues
 

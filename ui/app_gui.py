@@ -211,6 +211,10 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 actions, text="Journal", width=110, command=self._open_journal
             )
             self.journal_button.pack(fill="x", pady=(6, 0))
+            self.proposals_button = ctk.CTkButton(
+                actions, text="Propositions", width=110, command=self._open_proposals
+            )
+            self.proposals_button.pack(fill="x", pady=(6, 0))
             # Trace sur disque : l'utilisateur doit pouvoir refuser qu'une
             # session laisse la tâche et les réponses en clair sur la machine.
             self.trace_switch = ctk.CTkSwitch(
@@ -418,6 +422,57 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 wraplength=700,
                 font=(self.settings.ui.font_family, self.settings.ui.font_size - 1),
             ).pack(fill="x", padx=6, pady=6)
+
+        def _open_proposals(self) -> None:
+            """Propositions autonomes en attente : approuver ou rejeter, sans exécuter."""
+            from core.proposals import (
+                approve_proposal,
+                pending_proposals,
+                reject_proposal,
+            )
+
+            window = ctk.CTkToplevel(self)
+            window.title("Propositions autonomes")
+            window.geometry("780x460")
+            window.transient(self)
+            frame = ctk.CTkScrollableFrame(window, label_text="En attente d'approbation")
+            frame.pack(fill="both", expand=True, padx=10, pady=10)
+            pending = pending_proposals(self.settings)
+            if not pending:
+                ctk.CTkLabel(
+                    frame, text="Aucune proposition en attente (mode --autonomy-propose)."
+                ).pack(pady=20)
+                return
+            for record in pending:
+                row = ctk.CTkFrame(frame)
+                row.pack(fill="x", pady=4)
+                detail = f"[{record.get('risk', 'inconnu')}] {record.get('task', '')}"
+                if record.get("tools"):
+                    detail += f"\n    outils : {', '.join(record['tools'])}"
+                ctk.CTkLabel(
+                    row, text=detail, anchor="w", justify="left", wraplength=540
+                ).pack(side="left", padx=8, fill="x", expand=True)
+
+                def approve(proposal_id: str = str(record.get("id"))) -> None:
+                    approved = approve_proposal(self.settings, proposal_id)
+                    window.destroy()
+                    if approved is None:
+                        return
+                    self.prompt.delete("1.0", "end")
+                    self.prompt.insert("1.0", str(approved.get("task") or ""))
+                    self._send()
+
+                def reject(proposal_id: str = str(record.get("id"))) -> None:
+                    reject_proposal(self.settings, proposal_id)
+                    window.destroy()
+                    self._open_proposals()
+
+                ctk.CTkButton(row, text="Rejeter", width=70, command=reject).pack(
+                    side="right", padx=4, pady=4
+                )
+                ctk.CTkButton(row, text="Approuver", width=80, command=approve).pack(
+                    side="right", padx=4, pady=4
+                )
 
         def _open_traces(self) -> None:
             """Liste les exécutions enregistrées et en relit une à la demande."""

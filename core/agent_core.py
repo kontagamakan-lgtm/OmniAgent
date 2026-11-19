@@ -387,6 +387,7 @@ class AgentCore:
                 messages.append(self._tool_message(call, observation))
 
             steps.append(step)
+            usage = response.usage if isinstance(response.usage, dict) else {}
             self._emit(
                 EventType.LLM_RESPONSE,
                 {
@@ -395,6 +396,20 @@ class AgentCore:
                     "tool_calls": len(selected),
                     "deferred": len(requested) - len(selected),
                     "finish_reason": response.finish_reason,
+                    # Tokens facturés de la requête : le mode autonome peut
+                    # ainsi s'arrêter sur un budget, sans attendre la fin.
+                    "tokens": {
+                        "prompt": int(
+                            usage.get("prompt_tokens")
+                            or usage.get("prompt_eval_count")
+                            or 0
+                        ),
+                        "completion": int(
+                            usage.get("completion_tokens")
+                            or usage.get("eval_count")
+                            or 0
+                        ),
+                    },
                 },
             )
             if blocked:

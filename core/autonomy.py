@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from config import APP_ID, Settings
+from core.events import EventType
 
 __all__ = [
     "GOALS_NAME",
@@ -193,6 +194,70 @@ class AutonomyJournal:
         return records
 
 
+class _BudgetWatch:
+    """Compte tokens et outils d'un cycle, et annule dès le dépassement.
+
+    Les tokens viennent des réponses du fournisseur (`usage`), pas d'une
+    estimation : le plafond suit ce qui est réellement facturé. Sans bus ou sans
+    consommation, les compteurs restent à zéro et ne bloquent rien.
+    """
+
+    def __init__(self, cfg: Any, agent: Any) -> None:
+        self.tokens = 0
+        self.tools = 0
+        self.reason = ""
+        self._limit_tokens = int(getattr(cfg, "max_tokens_per_cycle", 0) or 0)
+        self._limit_tools = int(getattr(cfg, "max_tool_calls_per_cycle", 0) or 0)
+        self._agent = agent
+        self._unsubscribe: Callable[[], None] | None = None
+        bus = getattr(agent, "bus", None)
+        if bus is not None and (self._limit_tokens or self._limit_tools):
+            try:
+                self._unsubscribe = bus.subscribe(
+                    self._on_event,
+                    types=(EventType.LLM_RESPONSE, EventType.TOOL_STARTED),
+                )
+            except Exception:  # noqa: BLE001 - une surveillance ne bloque pas
+                logger.debug("surveillance du budget impossible", exc_info=True)
+
+    def __getitem__(self, name: str) -> Any:
+        return getattr(self, name)
+
+    def _on_event(self, event: Any) -> None:
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        if event.type == EventType.LLM_RESPONSE:
+            tokens = payload.get("tokens") or {}
+            self.tokens += int(tokens.get("prompt", 0) or 0) + int(
+                tokens.get("completion", 0) or 0
+            )
+        elif event.type == EventType.TOOL_STARTED:
+            self.tools += 1
+        if self.reason:
+            return
+        if self._limit_tokens and self.tokens > self._limit_tokens:
+            self.reason = "tokens"
+        elif self._limit_tools and self.tools > self._limit_tools:
+            self.reason = "tools"
+        if self.reason:
+            logger.warning(
+                "autonomie : budget du cycle dépassé (%s : %d tokens, %d outils)",
+                self.reason,
+                self.tokens,
+                self.tools,
+            )
+            cancel = getattr(self._agent, "cancel", None)
+            if callable(cancel):
+                cancel()
+
+    def stop(self) -> None:
+        if self._unsubscribe is not None:
+            try:
+                self._unsubscribe()
+            except Exception:  # noqa: BLE001 - désabonnement best-effort
+                pass
+            self._unsubscribe = None
+
+
 class AutonomySession:
     """Enchaîne les cycles autonomes sur un agent déjà construit."""
 
@@ -246,6 +311,8 @@ class AutonomySession:
         )
         records: list[dict[str, Any]] = []
         failures = 0
+        self.tokens_used = 0
+        total_limit = int(cfg.max_total_tokens)
         previous = None
         installed = False
         registry = getattr(self.agent, "registry", None)
@@ -256,8 +323,11 @@ class AutonomySession:
             for number in range(1, total + 1):
                 if self.stop.is_set():
                     break
+                if total_limit and self.tokens_used >= total_limit:
+                    break
                 record = self._cycle(number)
                 records.append(record)
+                self.tokens_used += int(record.get("tokens") or 0)
                 if on_cycle is not None:
                     try:
                         on_cycle(record)
@@ -271,6 +341,20 @@ class AutonomySession:
                         "autonomie : %d échecs consécutifs, session arrêtée", failures
                     )
                     break
+                if total_limit and self.tokens_used >= total_limit:
+                    exhausted = {
+                        "type": "budget_exhausted",
+                        "cycle": number,
+                        "tokens": self.tokens_used,
+                        "limit": total_limit,
+                    }
+                    self.journal.append(exhausted)
+                    records.append(exhausted)
+                    logger.warning(
+                        "autonomie : budget de %d tokens atteint, session arrêtée",
+                        total_limit,
+                    )
+                    break
                 if number < total and self.stop.wait(interval):
                     break
         finally:
@@ -282,6 +366,7 @@ class AutonomySession:
         return records
 
     def _cycle(self, number: int) -> dict[str, Any]:
+        cfg = self.settings.autonomy
         goals_file = goals_path(self.settings)
         goals = read_goals(goals_file)
         if not goals:
@@ -308,6 +393,7 @@ class AutonomySession:
         text = ""
         error = ""
         run_id = ""
+        spent = _BudgetWatch(cfg, self.agent)
         try:
             reply = self.agent.run(prompt)
             ok = bool(getattr(reply, "ok", False))
@@ -318,6 +404,9 @@ class AutonomySession:
         except Exception as exc:  # noqa: BLE001 - un cycle raté n'arrête pas tout
             logger.exception("autonomie : cycle %d en échec", number)
             error = f"{type(exc).__name__}: {exc}"
+        finally:
+            spent.stop()
+        tokens = spent["tokens"]
         record = {
             "type": "cycle_finished",
             "cycle": number,
@@ -327,6 +416,10 @@ class AutonomySession:
             "duration_s": round(time.monotonic() - started, 2),
             "excerpt": " ".join(text.split())[:MAX_EXCERPT],
             "error": error[:200],
+            "tokens": tokens,
+            "tool_calls": spent["tools"],
         }
+        if spent["reason"]:
+            record["budget"] = spent["reason"]
         self.journal.append(record)
         return record

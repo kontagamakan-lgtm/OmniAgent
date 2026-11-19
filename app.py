@@ -27,7 +27,7 @@ import sys
 import tempfile
 import threading
 from pathlib import Path
-from typing import Sequence, TextIO
+from typing import Any, Sequence, TextIO
 
 import config
 from config import APP_NAME, APP_VERSION, Settings
@@ -78,6 +78,31 @@ def build_parser() -> argparse.ArgumentParser:
         "--config",
         metavar="CHEMIN",
         help="fichier de configuration alternatif (JSON)",
+    )
+    parser.add_argument(
+        "--autonomy-propose",
+        action="store_true",
+        help="demande une proposition de tâche autonome, sans l'exécuter, puis quitte",
+    )
+    parser.add_argument(
+        "--autonomy-approve",
+        metavar="ID",
+        help="approuve une proposition et exécute sa tâche, puis quitte",
+    )
+    parser.add_argument(
+        "--autonomy-reject",
+        metavar="ID",
+        help="rejette une proposition sans l'exécuter, puis quitte",
+    )
+    parser.add_argument(
+        "--clean",
+        action="store_true",
+        help="affiche ce que la rétention purgerait (rapports, cache, profil) et quitte",
+    )
+    parser.add_argument(
+        "--clean-apply",
+        action="store_true",
+        help="purge réellement les fichiers annoncés par --clean",
     )
     parser.add_argument(
         "--check",
@@ -213,6 +238,49 @@ def diagnostics(settings: Settings) -> list[tuple[bool, str]]:
         for issue in issues[:8]:
             checks.append((not issue.error, f"index - {issue}"))
     return checks
+
+
+def _run_proposal(settings: Settings, args: Any) -> int:
+    """Demande une proposition à l'agent, sans exécuter le moindre outil."""
+    from core.proposals import propose
+
+    bundle = build_agent(settings, with_browser=False)
+    try:
+        record, error = propose(settings, bundle.agent)
+    finally:
+        bundle.close()
+    if record is None:
+        print(error, file=sys.stderr)
+        return 1
+    print(f"Proposition {record['id']} — risque {record['risk']}")
+    print(f"  tâche : {record['task']}")
+    if record["tools"]:
+        print(f"  outils : {', '.join(record['tools'])}")
+    if record["why"]:
+        print(f"  raison : {record['why']}")
+    print(f"Approuver : --autonomy-approve {record['id']}")
+    return 0
+
+
+def _clean(settings: Settings, *, apply: bool) -> int:
+    """Aperçu puis, sur demande explicite, purge des dossiers de travail."""
+    from core.retention import apply_cleanup, format_plans, plan_cleanup
+
+    plans = plan_cleanup(settings)
+    print(format_plans(plans))
+    if not plans:
+        return 0
+    if not apply:
+        print("Aperçu seulement : relancer avec --clean-apply pour purger.")
+        return 0
+    failures = 0
+    for item in apply_cleanup(plans):
+        print(
+            f"{item['label']} : {item['deleted']} supprimé(s), "
+            f"{item['bytes']} octet(s) libérés, {item['failed']} échec(s)"
+        )
+        failures += int(item["failed"])
+    return 1 if failures else 0
 
 
 def _report(settings: Settings) -> int:
@@ -729,6 +797,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.check:
         return _report(settings)
 
+    if args.clean or args.clean_apply:
+        return _clean(settings, apply=args.clean_apply)
+
     if args.browser_smoke:
         return browser_smoke(settings)
 
@@ -751,7 +822,30 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(format_run(replay(path)))
         return 0
 
+    if args.autonomy_reject:
+        from core.proposals import reject_proposal
+
+        record = reject_proposal(settings, args.autonomy_reject)
+        if record is None:
+            print(f"Proposition introuvable : {args.autonomy_reject}", file=sys.stderr)
+            return 2
+        print(f"Proposition {record['id']} rejetée : {record.get('task', '')}")
+        return 0
+
+    if args.autonomy_approve:
+        from core.proposals import approve_proposal
+
+        record = approve_proposal(settings, args.autonomy_approve)
+        if record is None:
+            print(f"Proposition introuvable : {args.autonomy_approve}", file=sys.stderr)
+            return 2
+        print(f"Proposition {record['id']} approuvée : {record.get('task', '')}")
+        args.task = str(record.get("task") or "")
+        return _run_task(settings, args)
+
     config.configure_logging(settings, redact, filters=(RunIdFilter(),))
+    if args.autonomy_propose:
+        return _run_proposal(settings, args)
     if args.autonomy:
         return _run_autonomy(settings, args)
     if args.task is not None:

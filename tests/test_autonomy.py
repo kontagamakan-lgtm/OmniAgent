@@ -15,6 +15,7 @@ from core.autonomy import (
     journal_path,
     read_goals,
 )
+from core.events import EventBus, EventType
 
 
 class _Reply:
@@ -152,6 +153,86 @@ def test_dangerous_tools_are_denied_then_the_confirm_handler_is_restored() -> No
 
         assert agent.denied is True, "un outil dangereux doit être refusé en autonomie"
         assert registry.confirm == "interface", "le confirmateur d'origine doit revenir"
+
+
+class _BudgetAgent(_Agent):
+    """Faux agent qui publie une consommation comme le vrai, sur son bus."""
+
+    def __init__(
+        self,
+        reply: _Reply,
+        *,
+        prompt_tokens: int = 0,
+        tool_started: int = 0,
+    ) -> None:
+        super().__init__([reply])
+        self.bus = EventBus()
+        self.prompt_tokens = prompt_tokens
+        self.tool_started = tool_started
+        self.cancelled = False
+
+    def run(self, task: str) -> _Reply:
+        self.bus.emit(
+            EventType.LLM_RESPONSE,
+            {"tokens": {"prompt": self.prompt_tokens, "completion": 0}},
+            run_id="budget",
+        )
+        for _ in range(self.tool_started):
+            self.bus.emit(EventType.TOOL_STARTED, {}, run_id="budget")
+        return super().run(task)
+
+    def cancel(self) -> None:
+        self.cancelled = True
+
+
+def test_a_token_budget_stops_the_session_between_cycles() -> None:
+    with tmpdir("autonomie-budget") as tmp:
+        settings = make_settings(tmp)
+        settings.autonomy.max_total_tokens = 100
+        settings.autonomy.max_tokens_per_cycle = 0
+        _write_goals(settings)
+        agent = _BudgetAgent(_Reply(), prompt_tokens=60)
+
+        records = AutonomySession(settings, agent).run(cycles=3, interval_s=0)
+
+        assert len(agent.tasks) == 2, "le troisième cycle dépasserait le plafond"
+        assert [record["type"] for record in records] == [
+            "cycle_finished",
+            "cycle_finished",
+            "budget_exhausted",
+        ]
+        assert records[-1]["tokens"] == 120 and records[-1]["limit"] == 100
+        assert _journal_records(settings)[-1]["type"] == "budget_exhausted"
+
+
+def test_a_cycle_token_budget_cancels_the_run() -> None:
+    with tmpdir("autonomie-budget-cycle") as tmp:
+        settings = make_settings(tmp)
+        settings.autonomy.max_total_tokens = 0
+        settings.autonomy.max_tokens_per_cycle = 50
+        _write_goals(settings)
+        agent = _BudgetAgent(_Reply(), prompt_tokens=60)
+
+        records = AutonomySession(settings, agent).run(cycles=1, interval_s=0)
+
+        assert agent.cancelled is True
+        assert records[0]["budget"] == "tokens"
+        assert records[0]["tokens"] == 60
+
+
+def test_a_tool_budget_cancels_the_run() -> None:
+    with tmpdir("autonomie-budget-outils") as tmp:
+        settings = make_settings(tmp)
+        settings.autonomy.max_total_tokens = 0
+        settings.autonomy.max_tool_calls_per_cycle = 2
+        _write_goals(settings)
+        agent = _BudgetAgent(_Reply(), tool_started=3)
+
+        records = AutonomySession(settings, agent).run(cycles=1, interval_s=0)
+
+        assert agent.cancelled is True
+        assert records[0]["budget"] == "tools"
+        assert records[0]["tool_calls"] == 3
 
 
 def test_the_confirm_handler_is_restored_to_none() -> None:
