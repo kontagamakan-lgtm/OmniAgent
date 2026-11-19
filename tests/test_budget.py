@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -11,8 +12,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from support import make_settings, tmpdir  # noqa: E402
 
-from core.budget import check, format_state, ledger_path, record_run, usage  # noqa: E402
+from core.agent_core import AgentCore  # noqa: E402
+from core.budget import (  # noqa: E402
+    check,
+    format_state,
+    ledger_path,
+    record_run,
+    release_run,
+    reserve_run,
+    usage,
+)
 from core.factory import build_agent  # noqa: E402
+from core.llm_client import LLMResponse  # noqa: E402
+from core.tool_registry import ToolRegistry  # noqa: E402
 
 
 class _ExplodingLLM:
@@ -122,6 +134,103 @@ def test_unlimited_budget_still_records_the_gauge() -> None:
         assert state.allowed
         assert state.usage.runs_today == 1
         assert "Aucun plafond" in format_state(state)
+
+
+def test_two_concurrent_reservations_cannot_both_pass_the_cap() -> None:
+    """Lecture + contrôle + écriture sous un seul verrou : un seul passe."""
+    with tmpdir("budget-reservations") as tmp:
+        settings = make_settings(tmp)
+        settings.budget.daily_cost = 1.0
+        barrier = threading.Barrier(2)
+        results: list[tuple[bool, str, str]] = []
+        lock = threading.Lock()
+
+        def attempt(run_id: str) -> None:
+            barrier.wait(timeout=5)
+            outcome = reserve_run(settings, run_id=run_id, cost=0.6, tokens=100)
+            with lock:
+                results.append(outcome)
+
+        threads = [
+            threading.Thread(target=attempt, args=(name,)) for name in ("a", "b")
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+
+        allowed = [item for item in results if item[0]]
+        refused = [item for item in results if not item[0]]
+        assert len(allowed) == 1, results
+        assert len(refused) == 1 and "budget jour" in refused[0][1], results
+        winner = allowed[0][2]
+        assert release_run(settings, winner)
+        # Après libération, le second run peut réserver à son tour.
+        retry = reserve_run(settings, run_id="c", cost=0.6, tokens=100)
+        assert retry[0] is True, retry
+        assert release_run(settings, retry[2])
+
+
+class _GatedLLM:
+    """Un seul appel part ; il attend que le second run ait tenté sa chance."""
+
+    supports_stream = False
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def complete(self, messages, tools=None, **kwargs) -> LLMResponse:
+        self.calls += 1
+        self.entered.set()
+        self.release.wait(timeout=5)
+        return LLMResponse(text="fini", finish_reason="stop")
+
+
+def test_two_concurrent_agent_runs_do_not_exceed_the_cap() -> None:
+    """Le second run est refusé avant l'appel modèle, pas après facturation."""
+    with tmpdir("budget-runs-concurrents") as tmp:
+        settings = make_settings(tmp)
+        # Estimation = 4096 tokens de sortie * 1000 USD / million = 4,096 USD.
+        settings.llm.price_completion_per_million = 1000.0
+        settings.llm.max_output_tokens = 4096
+        settings.budget.daily_cost = 5.0
+
+        llm = _GatedLLM()
+        first = AgentCore(settings, llm, ToolRegistry([]))
+        second = AgentCore(settings, llm, ToolRegistry([]))
+        replies: dict[str, object] = {}
+
+        def run(agent: AgentCore, label: str) -> None:
+            replies[label] = agent.run("bonjour")
+
+        first_thread = threading.Thread(target=run, args=(first, "first"))
+        first_thread.start()
+        assert llm.entered.wait(timeout=5), "le premier run doit réserver puis appeler"
+
+        second_thread = threading.Thread(target=run, args=(second, "second"))
+        second_thread.start()
+        second_thread.join(timeout=10)
+        assert not second_thread.is_alive()
+        assert replies["second"].stop_reason == "budget", replies["second"]
+        assert llm.calls == 1, "le run refusé ne doit jamais atteindre le modèle"
+
+        llm.release.set()
+        first_thread.join(timeout=10)
+        assert not first_thread.is_alive()
+        assert replies["first"].ok is True, replies["first"]
+
+        entries = [
+            __import__("json").loads(line)
+            for line in ledger_path(settings).read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        actual = [entry for entry in entries if entry.get("kind") != "reservation"]
+        assert len(actual) == 1, entries
+        assert not [entry for entry in entries if entry.get("kind") == "reservation"]
+        assert float(actual[0]["cost"]) <= 5.0, actual[0]
+        assert usage(entries).day_cost <= 5.0
 
 
 if __name__ == "__main__":

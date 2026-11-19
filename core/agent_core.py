@@ -182,6 +182,7 @@ class AgentCore:
         self._metrics: dict[str, int] = {}
         self._run_started_at = 0.0
         self._run_token: Any = None
+        self._reservation_id = ""
         self.run_count = 0
         self.run_id = ""
 
@@ -235,6 +236,9 @@ class AgentCore:
         try:
             return self._run_locked(task, max_steps=max_steps, context=context)
         finally:
+            # Filet de sécurité : un retour exceptionnel ne doit pas laisser
+            # une réservation orpheline bloquer les runs suivants.
+            self._settle_budget()
             self._run_guard.release()
             # Le contexte ne doit pas survivre au run : un journal d'interface
             # ne doit pas hériter de l'identifiant de la dernière exécution.
@@ -312,7 +316,11 @@ class AgentCore:
         recoveries = 0
 
         self._emit(EventType.RUN_STARTED, self._manifest(prompt, limit))
-        blocked = self._budget_block()
+        # Réservation atomique du coût estimé : deux runs simultanés ne peuvent
+        # plus lire le même reste de budget avant que l'un des deux n'écrive.
+        blocked = self._reserve_budget(prompt)
+        if not blocked:
+            blocked = self._budget_block()
         if blocked:
             self._emit(
                 EventType.ERROR,
@@ -808,6 +816,46 @@ class AgentCore:
             recoveries=recoveries,
         )
 
+    def _reserve_budget(self, prompt: str) -> str:
+        """Réserve le coût estimé du run ; vide si accepté."""
+        cfg = getattr(self.settings, "budget", None)
+        if cfg is None or not getattr(cfg, "enabled", True):
+            return ""
+        from core.budget import estimate_run, reserve_run
+
+        cost, tokens = estimate_run(
+            self.settings, prompt_tokens=count_tokens(prompt)
+        )
+        allowed, reason, reservation = reserve_run(
+            self.settings, run_id=self.run_id, cost=cost, tokens=tokens
+        )
+        if not allowed:
+            return reason or "budget epuise"
+        self._reservation_id = reservation
+        return ""
+
+    def _settle_budget(self) -> None:
+        """Libère ou consolide la réservation du run avec ses tokens réels."""
+        reservation = self._reservation_id
+        if not reservation:
+            return
+        prompt_tokens = max(0, int(self._metrics.get("prompt_tokens", 0) or 0))
+        completion_tokens = max(0, int(self._metrics.get("completion_tokens", 0) or 0))
+        from core.budget import record_run, release_run
+
+        if prompt_tokens + completion_tokens <= 0:
+            if release_run(self.settings, reservation):
+                self._reservation_id = ""
+            return
+        if record_run(
+            self.settings,
+            run_id=reservation,
+            model=str(self.settings.llm.model),
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        ) is not None:
+            self._reservation_id = ""
+
     def _budget_block(self) -> str:
         """Raison du refus si le budget global est déjà consommé, sinon vide."""
         cfg = getattr(self.settings, "budget", None)
@@ -822,6 +870,8 @@ class AgentCore:
             self.settings,
             pending_cost=cost,
             pending_tokens=prompt_tokens + completion_tokens,
+            # Sa propre estimation est déjà validée : ne pas la compter deux fois.
+            exclude_reservation=self._reservation_id,
         )
         return "" if state.allowed else state.reason
 
@@ -833,6 +883,9 @@ class AgentCore:
         qui permet de comparer deux exécutions et de mesurer l'effet d'un
         changement de budget.
         """
+        # Consolider avant l'événement : le compteur du bus ne doit pas
+        # enregistrer une seconde fois le même run.
+        self._settle_budget()
         self._emit(
             EventType.RUN_FINISHED,
             {

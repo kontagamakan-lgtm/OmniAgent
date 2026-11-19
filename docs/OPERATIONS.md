@@ -148,6 +148,16 @@ plafonds (0 = aucun). Le budget est vérifié avant le run et avant chaque appel
 au modèle ; un dépassement arrête avec `stop_reason = "budget"` sans envoyer la
 requête suivante. L'interface affiche la jauge du jour et la marge restante.
 
+Au démarrage, le coût estimé du run (prompt connu + une sortie maximale) est
+**réservé atomiquement** : lecture du registre, contrôle des plafonds et ajout
+de la réservation se font sous le même verrou de fichier. Deux runs simultanés
+ne peuvent donc pas passer sur le même reste de budget : le second est refusé
+avant tout appel au modèle. À la fin, la réservation est remplacée par le coût
+réel ; si le run s'arrête sans aucun échange, elle est simplement libérée. Une
+réservation orpheline (processus tué) expire au bout de six heures. Si le
+registre est inaccessible, la réservation refuse plutôt que de dépenser à
+l'aveugle.
+
 ```bat
 python app.py --budget
 ```
