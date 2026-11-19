@@ -591,6 +591,27 @@ def test_compaction_merges_repeated_states_of_a_present_run() -> None:
         assert index.compact() is False, "un index déjà dédupliqué ne se réécrit pas"
 
 
+def test_compaction_removes_unreadable_index_lines() -> None:
+    with tmpdir("index-corrompu") as tmp:
+        directory = Path(tmp) / "runs"
+        directory.mkdir()
+        index = RunIndex(directory)
+        index.mark("garde", "started", manifest={"model": "m"})
+        index.mark("garde", "finished", ok=True)
+        (directory / "garde.jsonl").write_text("", encoding="utf-8")
+        with index.path.open("a", encoding="utf-8") as handle:
+            handle.write('{"run_id": "coupé", "state": "sta' + "\n")
+        assert len(index.path.read_text(encoding="utf-8").splitlines()) == 3
+
+        assert index.compact() is True, "une ligne illisible doit déclencher la réécriture"
+
+        lines = index.path.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 1, f"ligne corrompue non supprimée : {lines}"
+        entry = index.entries()["garde"]
+        assert entry.state == "finished" and entry.model == "m"
+        assert index.compact() is False, "index propre : plus rien à réécrire"
+
+
 def test_retention_keeps_the_index_bounded_to_present_traces() -> None:
     with tmpdir("index-retention") as tmp:
         directory = Path(tmp) / "runs"

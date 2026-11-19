@@ -211,6 +211,14 @@ class RunIndex:
             )
         )
 
+    def _physical_lines(self) -> int:
+        """Lignes non vides du fichier, JSON valide ou non."""
+        try:
+            text = self.path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return 0
+        return sum(1 for line in text.splitlines() if line.strip())
+
     def _present_run_ids(self) -> set[str]:
         """Identifiants des traces encore sur disque (archives comprises)."""
         try:
@@ -247,8 +255,15 @@ class RunIndex:
         kept = {
             run_id: record for run_id, record in latest.items() if run_id in present
         }
-        if len(kept) == len(latest) and len(records) == len(kept):
-            return False  # déjà une ligne par run présent : ne rien réécrire
+        # Une ligne illisible n'apparaît pas dans `records` : sans compter les
+        # lignes physiques, un index déjà dédupliqué mais corrompu ne serait
+        # jamais nettoyé.
+        if (
+            len(kept) == len(latest)
+            and len(records) == len(kept)
+            and self._physical_lines() == len(records)
+        ):
+            return False  # déjà une ligne par run présent, et rien d'illisible
         tmp = self.path.with_name(self.path.name + ".tmp")
         try:
             with tmp.open("w", encoding="utf-8") as handle:
