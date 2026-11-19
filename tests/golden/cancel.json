@@ -1,0 +1,47 @@
+{
+  "effects": {
+    "dispatched": [
+      "fs_write_text"
+    ],
+    "error_code": "cancelled",
+    "first_file": true,
+    "ok": false,
+    "provider_requests": 1,
+    "second_file": false,
+    "stop_reason": "cancelled"
+  },
+  "events": [
+    {
+      "type": "run_started"
+    },
+    {
+      "type": "step_started"
+    },
+    {
+      "type": "llm_request"
+    },
+    {
+      "sensitive": false,
+      "step": 1,
+      "tool": "fs_write_text",
+      "type": "tool_started"
+    },
+    {
+      "error_code": "",
+      "ok": true,
+      "sensitive": false,
+      "step": 1,
+      "tool": "fs_write_text",
+      "type": "tool_finished"
+    },
+    {
+      "step": 1,
+      "type": "llm_response"
+    },
+    {
+      "ok": false,
+      "stop_reason": "cancelled",
+      "type": "run_finished"
+    }
+  ]
+}

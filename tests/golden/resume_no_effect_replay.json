@@ -1,0 +1,54 @@
+{
+  "effects": {
+    "backups_created": 0,
+    "content_after_replay": "v2",
+    "dispatched": [
+      "fs_read_text"
+    ],
+    "drift": [
+      "modified"
+    ],
+    "prompt_has_fresh_content": true,
+    "prompt_has_stale_content": false,
+    "refused": [
+      "fs_write_text"
+    ]
+  },
+  "events": [
+    {
+      "type": "run_started"
+    },
+    {
+      "type": "step_started"
+    },
+    {
+      "sensitive": false,
+      "step": 1,
+      "tool": "fs_write_text",
+      "type": "tool_started"
+    },
+    {
+      "error_code": "",
+      "ok": true,
+      "step": 1,
+      "tool": "fs_write_text",
+      "type": "tool_finished"
+    },
+    {
+      "type": "step_started"
+    },
+    {
+      "sensitive": false,
+      "step": 2,
+      "tool": "fs_read_text",
+      "type": "tool_started"
+    },
+    {
+      "error_code": "",
+      "ok": true,
+      "step": 2,
+      "tool": "fs_read_text",
+      "type": "tool_finished"
+    }
+  ]
+}

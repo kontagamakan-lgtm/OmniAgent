@@ -403,5 +403,6 @@ python tests/test_redaction.py     :: 12/12
 python tests/test_vault.py         :: 16/16
 python tests/test_file_manager.py  :: 28/28
 python tests/test_integration.py   :: 3/3
+python tests/golden_traces.py      :: 6 scénarios hors ligne (golden)
 python -m ruff check --select F,B,E9 security tools
 ```

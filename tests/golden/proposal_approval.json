@@ -1,0 +1,58 @@
+{
+  "effects": {
+    "approved_state": "approved",
+    "dispatched": [
+      "fs_write_text"
+    ],
+    "pending_after_proposal": "pending",
+    "pending_left": 0,
+    "proposer_requests": 1,
+    "report_written": "rapport",
+    "run_id_matches": true,
+    "stored_state": "executed"
+  },
+  "events": [
+    {
+      "type": "run_started"
+    },
+    {
+      "type": "step_started"
+    },
+    {
+      "type": "llm_request"
+    },
+    {
+      "sensitive": false,
+      "step": 1,
+      "tool": "fs_write_text",
+      "type": "tool_started"
+    },
+    {
+      "error_code": "",
+      "ok": true,
+      "sensitive": false,
+      "step": 1,
+      "tool": "fs_write_text",
+      "type": "tool_finished"
+    },
+    {
+      "step": 1,
+      "type": "llm_response"
+    },
+    {
+      "type": "step_started"
+    },
+    {
+      "type": "llm_request"
+    },
+    {
+      "step": 2,
+      "type": "final"
+    },
+    {
+      "ok": true,
+      "stop_reason": "final",
+      "type": "run_finished"
+    }
+  ]
+}

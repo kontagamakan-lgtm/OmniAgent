@@ -1,0 +1,82 @@
+{
+  "effects": {
+    "closing_without_tools": true,
+    "dispatched": [
+      "fs_write_text",
+      "fs_write_text"
+    ],
+    "error_code": "budget_exhausted",
+    "files": [
+      "a.txt",
+      "b.txt"
+    ],
+    "ok": true,
+    "provider_requests": 3,
+    "stop_reason": "budget"
+  },
+  "events": [
+    {
+      "type": "run_started"
+    },
+    {
+      "type": "step_started"
+    },
+    {
+      "type": "llm_request"
+    },
+    {
+      "sensitive": false,
+      "step": 1,
+      "tool": "fs_write_text",
+      "type": "tool_started"
+    },
+    {
+      "error_code": "",
+      "ok": true,
+      "sensitive": false,
+      "step": 1,
+      "tool": "fs_write_text",
+      "type": "tool_finished"
+    },
+    {
+      "step": 1,
+      "type": "llm_response"
+    },
+    {
+      "type": "step_started"
+    },
+    {
+      "type": "llm_request"
+    },
+    {
+      "sensitive": false,
+      "step": 2,
+      "tool": "fs_write_text",
+      "type": "tool_started"
+    },
+    {
+      "error_code": "",
+      "ok": true,
+      "sensitive": false,
+      "step": 2,
+      "tool": "fs_write_text",
+      "type": "tool_finished"
+    },
+    {
+      "step": 2,
+      "type": "llm_response"
+    },
+    {
+      "type": "llm_request"
+    },
+    {
+      "step": 3,
+      "type": "final"
+    },
+    {
+      "ok": true,
+      "stop_reason": "budget",
+      "type": "run_finished"
+    }
+  ]
+}

@@ -65,6 +65,13 @@ jobs:
           OMNIAGENT_SLOW_TESTS: "1"
         run: python -m pytest -q
 
+      # Golden traces : invariants critiques (reprise sans rejeu d'un effet,
+      # approbation, annulation, budget, fenêtre déjà honorée, secret absent
+      # du prompt), hors ligne. Lancé aussi par pytest, mais la sortie par
+      # scénario reste lisible dans le journal CI et sert de garde explicite.
+      - name: Golden traces (hors ligne)
+        run: python tests/golden_traces.py
+
       # Mesure reproductible, seulement la nuit : un index de 100 000 lignes,
       # 2 000 traces, puis compaction/reconstruction/diagnostic. Le facteur
       # laisse de la marge aux runners lents sans masquer une vraie regression.

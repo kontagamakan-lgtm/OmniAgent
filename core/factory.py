@@ -152,15 +152,29 @@ def build_agent(
         browser = BrowserAgent(settings, vault, file_manager=files)
         tools.extend(build_browser_tools(browser))
 
+    # Contrat des capacités : un outil non classé, ou dont les drapeaux ne
+    # correspondent plus à `tools/capabilities.py`, bloque le démarrage plutôt
+    # que d'hériter silencieusement des valeurs par défaut. Les ressources déjà
+    # ouvertes (index SQLite, navigateur) sont refermées avant de lever : sinon
+    # un échec de contrat laisse des fichiers verrouillés derrière lui.
+    try:
+        assert_capabilities(tools)
+    except Exception:
+        for resource in (browser, searcher, index, vault):
+            closer = getattr(resource, "close", None)
+            if not callable(closer):
+                continue
+            try:
+                closer()
+            except Exception:  # noqa: BLE001 - fermeture best effort
+                logger.debug("fermeture après contrat invalide impossible", exc_info=True)
+        raise
+
     registry = ToolRegistry(
         tools,
         max_output_chars=settings.agent.tool_output_max_chars,
         confirm=confirm,
     )
-    # Contrat des capacités : un outil non classé, ou dont les drapeaux ne
-    # correspondent plus à `tools/capabilities.py`, bloque le démarrage plutôt
-    # que d'hériter silencieusement des valeurs par défaut.
-    assert_capabilities(registry.toolset.tools())
     owns_llm = llm is None
     client = llm or LLMClient(settings.llm)
     agent = AgentCore(settings, client, registry, bus=bus)
