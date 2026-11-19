@@ -137,7 +137,9 @@ class AgentController:
         sur une machine lente.
         """
         if self._finished.wait(timeout) and self._thread is not None:
-            self._thread.join(1.0)
+            # Le drapeau est posé avant le scellement d'audit : laisser au
+            # thread le temps de finir même sur une machine chargée.
+            self._thread.join(5.0)
         return self.reply
 
     def drain(self, max_items: int | None = None) -> list[Event]:
