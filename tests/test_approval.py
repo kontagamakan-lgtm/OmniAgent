@@ -137,32 +137,32 @@ def test_missing_or_broken_decider_denies() -> None:
 
 
 def test_legacy_confirm_is_adapted_once_at_construction() -> None:
-    calls: list[dict] = []
-    seen: list[tuple[str, dict]] = []
-    tool = _tool("fs_delete", calls, dangerous=True)
+    with tmpdir("approbation-legacy") as tmp:
+        settings = make_settings(tmp)
+        calls: list[dict] = []
+        seen: list[tuple[str, dict]] = []
+        tool = _tool("fs_delete", calls, dangerous=True)
 
-    def confirm(received, arguments) -> bool:
-        seen.append((received.name, dict(arguments)))
-        return True
+        def confirm(received, arguments) -> bool:
+            seen.append((received.name, dict(arguments)))
+            return True
 
-    gate = build_approval_gate(
-        make_settings(Path(".")), decision_from_confirm(confirm)
-    )
-    registry = ToolRegistry([tool], approval=gate)
-    assert registry.dispatch("fs_delete", {"path": "x"}).ok
-    assert calls == [{"path": "x"}]
-    # Le pont reçoit l'objet outil et les arguments, comme avant.
-    assert seen == [("fs_delete", {"path": "x"})]
+        gate = build_approval_gate(settings, decision_from_confirm(confirm))
+        registry = ToolRegistry([tool], approval=gate)
+        assert registry.dispatch("fs_delete", {"path": "x"}).ok
+        assert calls == [{"path": "x"}]
+        # Le pont reçoit l'objet outil et les arguments, comme avant.
+        assert seen == [("fs_delete", {"path": "x"})]
 
-    refused = ToolRegistry(
-        [_tool("fs_delete", [], dangerous=True)],
-        approval=build_approval_gate(
-            make_settings(Path(".")), decision_from_confirm(lambda _t, _a: False)
-        ),
-    )
-    assert refused.dispatch("fs_delete", {"path": "y"}).error_code == (
-        "confirmation_required"
-    )
+        refused = ToolRegistry(
+            [_tool("fs_delete", [], dangerous=True)],
+            approval=build_approval_gate(
+                settings, decision_from_confirm(lambda _t, _a: False)
+            ),
+        )
+        assert refused.dispatch("fs_delete", {"path": "y"}).error_code == (
+            "confirmation_required"
+        )
 
 
 if __name__ == "__main__":
