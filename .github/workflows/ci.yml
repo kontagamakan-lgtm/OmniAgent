@@ -22,15 +22,21 @@ concurrency:
 
 jobs:
   tests:
-    name: Ruff et pytest
+    # Deux versions : le code promet 3.11+, la CI n'en éprouvait qu'une. Une
+    # régression propre à une version (tri, encodage, asyncio) passerait sinon.
+    name: Ruff et pytest (Python ${{ matrix.python-version }})
     runs-on: windows-latest
     timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.14"]
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.14"
+          python-version: ${{ matrix.python-version }}
           cache: pip
           cache-dependency-path: |
             requirements.txt
@@ -47,7 +53,11 @@ jobs:
           python -m ruff check --select F,B,E9 security tools config.py core
           tests ui app.py smoke_exe.py pyinstaller_recipe.py build_smoke
 
+      # OMNIAGENT_SLOW_TESTS : les tests de concurrence (vrais sous-processus)
+      # sont lents et lancés ici plutôt qu'à chaque exécution locale.
       - name: Pytest
+        env:
+          OMNIAGENT_SLOW_TESTS: "1"
         run: python -m pytest -q
 
   build:

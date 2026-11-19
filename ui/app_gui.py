@@ -275,11 +275,33 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             window.transient(self)
             frame = ctk.CTkScrollableFrame(window, label_text=str(directory))
             frame.pack(fill="both", expand=True, padx=10, pady=10)
+            # L'index est un cache : absent ou illisible, la liste reste possible.
+            states: dict[str, str] = {}
+            if directory.is_dir():
+                try:
+                    from core.run_index import RunIndex
+
+                    states = {
+                        run_id: record.state
+                        for run_id, record in RunIndex(directory).entries().items()
+                    }
+                except Exception:  # noqa: BLE001 - un cache ne bloque pas l'interface
+                    logger.debug("index des runs illisible", exc_info=True)
             files: list[Any] = []
             if directory.is_dir():
                 try:
+                    # Sous-dossiers (rétention par espace de travail) et archives
+                    # compris : une trace comprimée reste lisible par le rejeu.
                     files = sorted(
-                        directory.glob("*.jsonl"),
+                        (
+                            item
+                            for item in directory.rglob("*")
+                            if item.is_file()
+                            and (
+                                item.name.endswith(".jsonl")
+                                or item.name.endswith(".jsonl.gz")
+                            )
+                        ),
                         key=lambda item: item.stat().st_mtime,
                         reverse=True,
                     )[:50]
@@ -296,11 +318,15 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 row = ctk.CTkFrame(frame)
                 row.pack(fill="x", pady=2)
                 stamp = time.strftime("%d/%m %H:%M", time.localtime(stat.st_mtime))
-                ctk.CTkLabel(
-                    row,
-                    text=f"{path.stem}   {stamp}   {max(1, stat.st_size // 1024)} Kio",
-                    anchor="w",
-                ).pack(side="left", padx=8, fill="x", expand=True)
+                stem = path.name[:-3] if path.name.endswith(".gz") else path.name
+                stem = stem[:-6] if stem.endswith(".jsonl") else stem
+                state = states.get(stem, "")
+                label = f"{stem}   {stamp}   {max(1, stat.st_size // 1024)} Kio"
+                if state:
+                    label += f"   [{state}]"
+                ctk.CTkLabel(row, text=label, anchor="w").pack(
+                    side="left", padx=8, fill="x", expand=True
+                )
                 ctk.CTkButton(
                     row, text="Lire", width=70, command=lambda p=path: self._show_trace(p)
                 ).pack(side="right", padx=6, pady=4)

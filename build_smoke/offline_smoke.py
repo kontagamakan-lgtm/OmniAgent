@@ -121,11 +121,13 @@ def _trace_dirs() -> list[Path]:
 
 
 def _traces() -> set[Path]:
+    """Traces produites, y compris archivées ou rangées par espace de travail."""
     return {
         path
         for directory in _trace_dirs()
         if directory.is_dir()
-        for path in directory.glob("*.jsonl")
+        for path in directory.rglob("*.jsonl*")
+        if path.is_file()
     }
 
 
@@ -195,15 +197,55 @@ def _check_budget(exe: Path, config: Path) -> tuple[list[str], list[int], str]:
         failures.append("le résumé de repli ne porte pas les appels d'outils tentés")
     if "contexte replié" not in proc.stdout:
         failures.append("le rapport CONTEXT_TRIMMED n'est pas affiché par la console")
-    if not new_traces:
+    plain = [path for path in new_traces if path.name.endswith(".jsonl")]
+    candidate = (plain or new_traces or [None])[-1]
+    if candidate is None:
         failures.append("--task n'a écrit aucune trace JSONL")
-    elif '"type": "run_finished"' not in new_traces[-1].read_text(encoding="utf-8"):
-        failures.append(f"trace incomplète : {new_traces[-1]}")
+    elif candidate.name.endswith(".jsonl") and '"type": "run_finished"' not in candidate.read_text(
+        encoding="utf-8"
+    ):
+        failures.append(f"trace incomplète : {candidate}")
 
     details = [f"durée      : {elapsed:.1f} s", f"requêtes   : {len(requests)}"]
+    # Trace puis rejeu puis export : la boucle complète, sur la trace réelle que
+    # l'exécutable vient d'écrire. Le manifeste et le bilan doivent y être.
+    if candidate is not None:
+        try:
+            failures.extend(_check_trace_roundtrip(candidate))
+            details.append(f"trace      : {candidate.name}")
+        except Exception as exc:  # noqa: BLE001 - le harnais rapporte l'échec
+            failures.append(f"rejeu de trace impossible : {type(exc).__name__}: {exc}")
     if proc.stderr.strip():
         details.append(f"stderr     : {proc.stderr.strip()[:300]!r}")
     return failures, counts, "\n".join(details)
+
+
+def _check_trace_roundtrip(path: Path) -> list[str]:
+    """Vérifie, rejoue et exporte une trace produite par l'exécutable."""
+    from core.replay import export_bundle, replay
+    from core.trace_lint import lint_file
+
+    failures: list[str] = []
+    issues, _report = lint_file(path)
+    failures.extend(f"format : {issue}" for issue in issues if issue.error)
+
+    run = replay(path)
+    if not run.app_version:
+        failures.append("manifeste sans version d'application")
+    if not run.settings_digest:
+        failures.append("manifeste sans condensat des réglages")
+    if not run.summary:
+        failures.append("run_finished sans bilan (durée, tokens, replis)")
+    if run.interrupted:
+        failures.append("trace lue comme interrompue alors qu'elle devrait être terminée")
+
+    bundle = export_bundle(run)
+    leaked = {"task", "final", "text"} & set(bundle)
+    if leaked:
+        failures.append(f"l'export partageable contient du contenu : {sorted(leaked)}")
+    if any("arguments" in call for step in bundle["steps"] for call in step["calls"]):
+        failures.append("l'export partageable contient des arguments d'outils")
+    return failures
 
 
 def _check_compat(exe: Path, config: Path) -> tuple[list[str], str]:
