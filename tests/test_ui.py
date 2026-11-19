@@ -591,5 +591,110 @@ def test_turn_that_calls_a_tool_keeps_its_text_hidden() -> None:
     assert window._pending == {}, "le tampon doit être vidé après la réponse"
 
 
+def _approved_window(settings, reply, *, run_id: str = "run-42"):
+    """Fenêtre minimale (sans Tk) avec une proposition approuvée en attente."""
+    from ui.app_gui import OmniAgentWindow, TranscriptBuffer
+
+    class _Button:
+        def configure(self, **kwargs) -> None:
+            pass
+
+    class _Agent:
+        pass
+
+    class _Controller:
+        def __init__(self) -> None:
+            self.reply = reply
+            self.busy = False
+            self.current = SimpleNamespace(finished=True, error="panne")
+            self.agent = _Agent()
+            self.agent.run_id = run_id
+
+        def drain(self) -> list[Event]:
+            return []
+
+    widget = _FakeText()
+    window = object.__new__(OmniAgentWindow)
+    window._buffer = TranscriptBuffer(widget)
+    window._step = 0
+    window._streaming = False
+    window._reported = False
+    window._pending = {}
+    window._approved_proposal = "prop-1"
+    window._set_status = lambda text: None
+    window.after = lambda _ms, _callback: "tick"
+    window.send_button = _Button()
+    window.cancel_button = _Button()
+    window.settings = settings
+    window.controller = _Controller()
+    return window, widget
+
+
+def test_approved_proposal_is_marked_executed_with_its_run_id() -> None:
+    from core.proposals import ProposalStore, proposals_path
+
+    with tmpdir("ui-approbation") as tmp:
+        settings = make_settings(tmp)
+        store = ProposalStore(proposals_path(settings))
+        store.append(
+            {
+                "type": "proposal",
+                "id": "prop-1",
+                "state": "approved",
+                "task": "Ranger les rapports",
+            }
+        )
+        window, widget = _approved_window(
+            settings,
+            AgentReply(text="rangé", steps=[], stop_reason="final", ok=True),
+        )
+
+        window._pump()
+
+        record = store.find("prop-1")
+        assert record["state"] == "executed"
+        assert record["run_id"] == "run-42"
+        assert record["ok"] is True
+        assert "interface" in record["detail"]
+        assert window._approved_proposal is None, "la clôture ne doit pas se répéter"
+        assert "proposition prop-1 : executed" in widget.get("1.0", "end")
+
+
+def test_approved_proposal_is_marked_failed_when_the_run_fails() -> None:
+    from core.proposals import ProposalStore, proposals_path
+
+    with tmpdir("ui-approbation-echec") as tmp:
+        settings = make_settings(tmp)
+        store = ProposalStore(proposals_path(settings))
+        store.append(
+            {
+                "type": "proposal",
+                "id": "prop-1",
+                "state": "approved",
+                "task": "Ranger les rapports",
+            }
+        )
+        window, _widget = _approved_window(
+            settings,
+            AgentReply(
+                text="annulé",
+                steps=[],
+                stop_reason="cancelled",
+                ok=False,
+                error="arrêt demandé",
+            ),
+            run_id="run-7",
+        )
+
+        window._pump()
+
+        record = store.find("prop-1")
+        assert record["state"] == "failed"
+        assert record["run_id"] == "run-7"
+        assert record["ok"] is False
+        assert "cancelled" in record["detail"]
+        assert window._approved_proposal is None
+
+
 if __name__ == "__main__":
     sys.exit(run(globals()))

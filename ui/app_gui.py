@@ -122,6 +122,9 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
         #: (`object.__new__`) n'ont pas cette file, et `getattr` sur un objet Tk
         #: sans attribut déclenche sa recherche dynamique récursive.
         _autonomy_messages: queue.Queue[str] | None = None
+        #: Défaut de classe pour les fenêtres de test construites sans Tk :
+        #: `getattr` sur un objet Tk non initialisé récurserait.
+        _approved_proposal: str | None = None
 
         def __init__(self, settings: Settings, bundle: AgentBundle) -> None:
             ctk.set_appearance_mode(settings.ui.appearance)
@@ -140,6 +143,10 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             self._autonomy_thread: threading.Thread | None = None
             self._autonomy_session: Any = None
             self._autonomy_messages: queue.Queue[str] = queue.Queue()
+            #: Proposition dont l'exécution a été lancée par le bouton
+            #: Approuver : sa clôture (`executed`/`failed`, run_id) attend la
+            #: réponse asynchrone de l'agent.
+            self._approved_proposal: str | None = None
             # Fragments en attente, par étape : un tour qui appelle un outil ne
             # s'affiche pas, seul le tour qui conclut est libéré (règle identique
             # à `_ConsoleStream` en mode `--task`).
@@ -315,16 +322,16 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             else:
                 self._set_status("assistant fermé sans modification")
 
-        def _send(self) -> None:
+        def _send(self) -> bool:
             if self._autonomy_thread is not None and self._autonomy_thread.is_alive():
                 self._set_status("session autonome en cours : arrêtez-la d'abord")
-                return
+                return False
             task = self.prompt.get("1.0", "end").strip()
             if not task:
-                return
+                return False
             if not self.controller.start(task):
                 self._set_status("une tâche est déjà en cours")
-                return
+                return False
             self.prompt.delete("1.0", "end")
             self._step = 0
             self._reported = False
@@ -334,6 +341,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             self._set_status("en cours…")
             self.send_button.configure(state="disabled")
             self.cancel_button.configure(state="normal")
+            return True
 
         def _cancel(self) -> None:
             self.controller.cancel()
@@ -493,7 +501,11 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                         return
                     self.prompt.delete("1.0", "end")
                     self.prompt.insert("1.0", str(approved.get("task") or ""))
-                    self._send()
+                    self._approved_proposal = proposal_id
+                    if not self._send():
+                        # Rien n'a été lancé : ne pas laisser la proposition
+                        # approuvée sans exécution ni clôture.
+                        self._approved_proposal = None
 
                 def reject(proposal_id: str = str(record.get("id"))) -> None:
                     reject_proposal(self.settings, proposal_id)
@@ -816,6 +828,32 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 self._streaming = False
                 self._pending.clear()
 
+                # Clôture d'une proposition approuvée depuis l'interface : le
+                # run est terminé, on rattache son identifiant et son résultat.
+                proposal_id = getattr(self, "_approved_proposal", None)
+                if proposal_id:
+                    from core.proposals import finish_proposal
+
+                    run_id = str(getattr(self.controller.agent, "run_id", "") or "")
+                    record = finish_proposal(
+                        self.settings,
+                        proposal_id,
+                        ok=bool(reply.ok),
+                        run_id=run_id,
+                        detail=(
+                            f"interface : {reply.stop_reason}"
+                            if reply.ok
+                            else f"interface : {reply.stop_reason} {reply.error}".strip()
+                        ),
+                    )
+                    self._approved_proposal = None
+                    if record is not None:
+                        self._append(
+                            "système",
+                            f"proposition {proposal_id} : {record.get('state')}"
+                            + (f" (run {run_id})" if run_id else ""),
+                        )
+
                 status = "prêt" if reply.ok else f"arrêté ({reply.stop_reason})"
                 if reply.tool_calls:
                     status += f" · {reply.tool_calls} outil(s)"
@@ -835,6 +873,28 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 self._set_status(status)
                 self.send_button.configure(state="normal")
                 self.cancel_button.configure(state="disabled")
+
+            elif (
+                getattr(self, "_approved_proposal", None)
+                and not self.controller.busy
+                and self.controller.current is not None
+                and getattr(self.controller.current, "finished", False)
+            ):
+                # Exception avant toute réponse : la proposition a bien été
+                # exécutée, mais elle a échoué.
+                from core.proposals import finish_proposal
+
+                proposal_id = self._approved_proposal
+                self._approved_proposal = None
+                record = finish_proposal(
+                    self.settings,
+                    proposal_id,
+                    ok=False,
+                    run_id=str(getattr(self.controller.agent, "run_id", "") or ""),
+                    detail=f"interface : {self.controller.current.error}"[:300],
+                )
+                if record is not None:
+                    self._append("système", f"proposition {proposal_id} : failed")
 
             interval = max(30, int(self.settings.ui.stream_refresh_ms))
             self._pump_id = self.after(interval, self._pump)
