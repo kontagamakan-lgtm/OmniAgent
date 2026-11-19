@@ -186,6 +186,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="scelle les traces qui ne sont pas encore dans le journal d'audit",
     )
     parser.add_argument(
+        "--budget",
+        action="store_true",
+        help="affiche le budget consommé (jour, semaine, mois) et la projection",
+    )
+    parser.add_argument(
         "--metrics",
         action="store_true",
         help="affiche l'agrégat des métriques par run, puis quitte",
@@ -1213,6 +1218,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         from core.audit import seal_all
 
         print(f"{seal_all(settings)} trace(s) scellee(s)")
+        return 0
+
+    if args.budget:
+        from core.budget import check, format_state
+
+        print(format_state(check(settings)))
         return 0
 
     if args.metrics:

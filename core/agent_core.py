@@ -285,6 +285,16 @@ class AgentCore:
                 f"{prompt}\n\nContexte de reprise (deja effectue, ne pas rejouer) :\n"
                 f"{str(context).strip()}"
             )
+        try:
+            from core.memory import memory_prompt
+
+            memory_text = memory_prompt(self.settings)
+        except Exception:  # noqa: BLE001 - une mémoire illisible ne bloque pas le run
+            logger.debug("mémoire projet illisible", exc_info=True)
+            memory_text = ""
+        if memory_text:
+            user_content = f"{user_content}\n\n{memory_text}"
+
         messages: list[dict[str, Any]] = [
             {
                 "role": "system",
@@ -302,12 +312,44 @@ class AgentCore:
         recoveries = 0
 
         self._emit(EventType.RUN_STARTED, self._manifest(prompt, limit))
+        blocked = self._budget_block()
+        if blocked:
+            self._emit(
+                EventType.ERROR,
+                {"step": 0, "code": "budget_exceeded", "message": blocked},
+            )
+            return self._finish(
+                AgentReply(
+                    text=blocked,
+                    stop_reason="budget",
+                    ok=False,
+                    error=blocked,
+                    error_code="budget_exceeded",
+                )
+            )
 
         for index in range(1, limit + 1):
             if self.cancelled:
                 return self._finish(self._cancelled(steps, recoveries))
 
             self._emit(EventType.STEP_STARTED, {"index": index, "max_steps": limit})
+            blocked = self._budget_block()
+            if blocked:
+                self._emit(
+                    EventType.ERROR,
+                    {"step": index, "code": "budget_exceeded", "message": blocked},
+                )
+                return self._finish(
+                    AgentReply(
+                        text=blocked,
+                        steps=steps,
+                        stop_reason="budget",
+                        ok=False,
+                        error=blocked,
+                        error_code="budget_exceeded",
+                        recoveries=recoveries,
+                    )
+                )
             try:
                 response = self._ask(messages, recoveries, step=index)
             except Cancelled:
@@ -765,6 +807,23 @@ class AgentCore:
             error_code=getattr(exc, "code", "agent_error"),
             recoveries=recoveries,
         )
+
+    def _budget_block(self) -> str:
+        """Raison du refus si le budget global est déjà consommé, sinon vide."""
+        cfg = getattr(self.settings, "budget", None)
+        if cfg is None or not getattr(cfg, "enabled", True):
+            return ""
+        from core.budget import check, run_cost
+
+        prompt_tokens = int(self._metrics.get("prompt_tokens", 0) or 0)
+        completion_tokens = int(self._metrics.get("completion_tokens", 0) or 0)
+        cost = run_cost(self.settings, prompt_tokens, completion_tokens)
+        state = check(
+            self.settings,
+            pending_cost=cost,
+            pending_tokens=prompt_tokens + completion_tokens,
+        )
+        return "" if state.allowed else state.reason
 
     def _finish(self, reply: AgentReply) -> AgentReply:
         """Publie la fin du run avec son bilan chiffré.

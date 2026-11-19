@@ -26,6 +26,7 @@ from config import APP_ID, Settings
 from core.agent_core import AgentCore
 from core.events import EventBus
 from core.llm_client import LLMClient
+from core.budget import build_budget_recorder
 from core.metrics import build_metrics
 from core.tool_registry import ConfirmHandler, ToolRegistry
 from tools.base import Tool
@@ -60,6 +61,7 @@ class AgentBundle:
     owns_llm: bool = False
     metrics: Any = None
     _unsubscribe_metrics: Any = field(default=None, repr=False)
+    _unsubscribe_budget: Any = field(default=None, repr=False)
     _unsubscribe_file_tx: Any = field(default=None, repr=False)
     _closed: bool = field(default=False, repr=False)
 
@@ -77,6 +79,12 @@ class AgentBundle:
             except Exception:  # noqa: BLE001 - désabonnement best effort
                 logger.debug("désabonnement de la transaction fichiers impossible", exc_info=True)
             self._unsubscribe_file_tx = None
+        if self._unsubscribe_budget is not None:
+            try:
+                self._unsubscribe_budget()
+            except Exception:  # noqa: BLE001 - désabonnement best effort
+                logger.debug("désabonnement du budget impossible", exc_info=True)
+            self._unsubscribe_budget = None
         if self._unsubscribe_metrics is not None:
             try:
                 self._unsubscribe_metrics()
@@ -196,6 +204,10 @@ def build_agent(
     # référence au fichier.
     metrics = build_metrics(settings)
     unsubscribe_metrics = agent.bus.subscribe(metrics) if metrics is not None else None
+    # Registre persistant : le coût survit aux redémarrages et alimente le
+    # plafond global vérifié avant chaque appel au modèle.
+    budget = build_budget_recorder(settings)
+    unsubscribe_budget = agent.bus.subscribe(budget) if budget is not None else None
     # Transaction par run : journal et instantanés des seuls fichiers touchés,
     # ouverts au début de l'exécution et refermés à la fin.
     unsubscribe_file_tx = files.attach_transactions(agent.bus)
@@ -204,6 +216,7 @@ def build_agent(
         registry=registry,
         metrics=metrics,
         _unsubscribe_metrics=unsubscribe_metrics,
+        _unsubscribe_budget=unsubscribe_budget,
         _unsubscribe_file_tx=unsubscribe_file_tx,
         settings=settings,
         vault=vault,

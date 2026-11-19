@@ -632,6 +632,27 @@ class MetricsConfig:
 
 
 @dataclass(slots=True)
+class BudgetConfig:
+    """Plafonds persistants en devise et en tokens (0 = pas de plafond)."""
+
+    enabled: bool = True
+    daily_cost: float = 0.0
+    weekly_cost: float = 0.0
+    monthly_cost: float = 0.0
+    daily_tokens: int = 0
+    monthly_tokens: int = 0
+
+
+@dataclass(slots=True)
+class MemoryConfig:
+    """Mémoire projet : notes datées, bornées et injectées dans le prompt."""
+
+    enabled: bool = True
+    max_notes: int = 200
+    max_chars: int = 1500
+
+
+@dataclass(slots=True)
 class LoggingConfig:
     """Journalisation et masquage des secrets."""
 
@@ -669,6 +690,8 @@ class Settings:
     autonomy: AutonomyConfig = field(default_factory=AutonomyConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
     metrics: MetricsConfig = field(default_factory=MetricsConfig)
+    budget: BudgetConfig = field(default_factory=BudgetConfig)
+    memory: MemoryConfig = field(default_factory=MemoryConfig)
 
     # -- persistance --------------------------------------------------------
 
@@ -839,6 +862,19 @@ class Settings:
                 "enabled": self.metrics.enabled,
                 "max_entries": self.metrics.max_entries,
                 "max_bytes": self.metrics.max_bytes,
+            },
+            "memory": {
+                "enabled": self.memory.enabled,
+                "max_notes": self.memory.max_notes,
+                "max_chars": self.memory.max_chars,
+            },
+            "budget": {
+                "enabled": self.budget.enabled,
+                "daily_cost": self.budget.daily_cost,
+                "weekly_cost": self.budget.weekly_cost,
+                "monthly_cost": self.budget.monthly_cost,
+                "daily_tokens": self.budget.daily_tokens,
+                "monthly_tokens": self.budget.monthly_tokens,
             },
             "ui": {
                 "appearance": self.ui.appearance,
@@ -1103,6 +1139,23 @@ class Settings:
             err("metrics.max_entries", "doit être comprise entre 1 et 100000")
         if self.metrics.max_bytes < 1024:
             err("metrics.max_bytes", "doit être >= 1024 octets")
+
+        # --- Mémoire projet
+        if not (1 <= self.memory.max_notes <= 10000):
+            err("memory.max_notes", "doit etre comprise entre 1 et 10000")
+        if not (100 <= self.memory.max_chars <= 20000):
+            err("memory.max_chars", "doit etre comprise entre 100 et 20000")
+
+        # --- Budget global
+        budget = self.budget
+        for name in ("daily_cost", "weekly_cost", "monthly_cost"):
+            value = float(getattr(budget, name))
+            if not (0.0 <= value <= 1_000_000.0):
+                err(f"budget.{name}", "doit etre comprise entre 0 et 1 000 000 USD")
+        for name in ("daily_tokens", "monthly_tokens"):
+            value = int(getattr(budget, name))
+            if not (0 <= value <= 1_000_000_000):
+                err(f"budget.{name}", "doit etre comprise entre 0 et 1 000 000 000")
 
         return issues
 

@@ -141,6 +141,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             self._step = 0
             #: Dernier run tracé : support du bouton « Annuler ce run ».
             self._last_run_id = ""
+            self._budget_at = 0.0
             self._reported = False
             self._streaming = False
             # Session autonome : le thread de travail n'écrit jamais dans Tk, il
@@ -201,6 +202,13 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 header, text="prêt", anchor="w", text_color="#9CA3AF"
             )
             self.status.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 8))
+            # Jauge du budget persistant (jour/semaine/mois), rafraîchie lentement.
+            self.budget_label = ctk.CTkLabel(
+                header, text="budget : …", anchor="w", text_color="#9CA3AF"
+            )
+            self.budget_label.grid(
+                row=2, column=0, columnspan=2, sticky="ew", padx=10, pady=(0, 8)
+            )
             ctk.CTkButton(
                 header, text="Assistant", width=110, command=self._open_assistant
             ).grid(row=0, column=1, rowspan=2, padx=10, pady=8)
@@ -1053,8 +1061,32 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 if record is not None:
                     self._append("système", f"proposition {proposal_id} : failed")
 
+            self._refresh_budget()
             interval = max(30, int(self.settings.ui.stream_refresh_ms))
             self._pump_id = self.after(interval, self._pump)
+
+        def _refresh_budget(self) -> None:
+            """Met à jour la jauge au plus toutes les trente secondes."""
+            now = time.monotonic()
+            if now - float(getattr(self, "_budget_at", 0.0)) < 30.0:
+                return
+            self._budget_at = now
+            try:
+                from core.budget import check
+
+                state = check(self.settings)
+            except Exception:  # noqa: BLE001 - une jauge ne casse pas l'interface
+                logger.debug("budget illisible", exc_info=True)
+                return
+            text = f"budget : {state.usage.day_cost:.2f} USD aujourd'hui"
+            remaining = state.remaining
+            if remaining != float("inf"):
+                text += f" · reste {remaining:.2f} USD"
+            if not state.allowed:
+                text += " · plafond atteint"
+            label = getattr(self, "budget_label", None)
+            if label is not None:
+                label.configure(text=text)
 
         def _render(self, event: Event) -> None:
             payload: dict[str, Any] = event.payload if isinstance(event.payload, dict) else {}
