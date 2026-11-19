@@ -20,11 +20,13 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from typing import Any
 
 from config import APP_ID, Settings
 from core.agent_core import AgentCore
 from core.events import EventBus
 from core.llm_client import LLMClient
+from core.metrics import build_metrics
 from core.tool_registry import ConfirmHandler, ToolRegistry
 from tools.base import Tool
 from tools.browser_agent import BrowserAgent, build_browser_tools
@@ -55,6 +57,8 @@ class AgentBundle:
     ocr: Ocr | None = None
     shell: ShellRunner | None = None
     owns_llm: bool = False
+    metrics: Any = None
+    _unsubscribe_metrics: Any = field(default=None, repr=False)
     _closed: bool = field(default=False, repr=False)
 
     def tool_names(self) -> list[str]:
@@ -65,6 +69,12 @@ class AgentBundle:
         if self._closed:
             return
         self._closed = True
+        if self._unsubscribe_metrics is not None:
+            try:
+                self._unsubscribe_metrics()
+            except Exception:  # noqa: BLE001 - désabonnement best effort
+                logger.debug("désabonnement des métriques impossible", exc_info=True)
+            self._unsubscribe_metrics = None
         if self.browser is not None:
             try:
                 self.browser.stop()
@@ -155,9 +165,16 @@ def build_agent(
         len(registry),
         ", ".join(registry.names()),
     )
+    # Métriques par run : un enregistrement à `run_finished`, borné. Le
+    # désabonnement est porté par le bundle, sinon un bus refermé garderait la
+    # référence au fichier.
+    metrics = build_metrics(settings)
+    unsubscribe_metrics = agent.bus.subscribe(metrics) if metrics is not None else None
     return AgentBundle(
         agent=agent,
         registry=registry,
+        metrics=metrics,
+        _unsubscribe_metrics=unsubscribe_metrics,
         settings=settings,
         vault=vault,
         files=files,

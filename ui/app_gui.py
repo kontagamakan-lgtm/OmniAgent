@@ -215,6 +215,10 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 actions, text="Propositions", width=110, command=self._open_proposals
             )
             self.proposals_button.pack(fill="x", pady=(6, 0))
+            self.support_button = ctk.CTkButton(
+                actions, text="Support", width=110, command=self._support_bundle
+            )
+            self.support_button.pack(fill="x", pady=(6, 0))
             # Trace sur disque : l'utilisateur doit pouvoir refuser qu'une
             # session laisse la tâche et les réponses en clair sur la machine.
             self.trace_switch = ctk.CTkSwitch(
@@ -474,6 +478,17 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                     side="right", padx=4, pady=4
                 )
 
+        def _support_bundle(self) -> None:
+            """Écrit un paquet de diagnostic rouge dans reports/."""
+            from core.support_bundle import build_support_bundle
+
+            try:
+                path = build_support_bundle(self.settings)
+            except OSError as exc:
+                self._append("erreur", f"paquet de support impossible : {exc}")
+                return
+            self._append("système", f"paquet de support écrit : {path}")
+
         def _open_traces(self) -> None:
             """Liste les exécutions enregistrées et en relit une à la demande."""
             directory = self.settings.paths.log_dir / "runs"
@@ -528,19 +543,49 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             ctk.CTkButton(
                 toolbar, text="Diagnostic", width=110, command=run_doctor
             ).pack(side="left", padx=(0, 6), pady=4)
+
+            def show_metrics() -> None:
+                from core.metrics import MetricsRecorder, format_summary, metrics_path
+
+                records = MetricsRecorder(metrics_path(self.settings)).all()
+                report_label.configure(text=format_summary(records))
+
+            ctk.CTkButton(
+                toolbar, text="Métriques", width=100, command=show_metrics
+            ).pack(side="left", padx=(0, 6), pady=4)
             report_label.pack(fill="x", pady=(2, 4))
+            filters = ctk.CTkFrame(window)
+            filters.pack(fill="x", padx=10, pady=(2, 0))
+            state_var = ctk.StringVar(value="tous")
+            ctk.CTkLabel(filters, text="État").pack(side="left")
+            ctk.CTkOptionMenu(
+                filters,
+                values=["tous", "finished", "started", "interrupted", "archived"],
+                variable=state_var,
+                width=120,
+                command=lambda _value: refresh(),
+            ).pack(side="left", padx=(4, 10))
+            model_var = ctk.StringVar()
+            workspace_var = ctk.StringVar()
+            days_var = ctk.StringVar()
+            for label, variable, width in (
+                ("Modèle", model_var, 110),
+                ("Atelier", workspace_var, 100),
+                ("Depuis (j)", days_var, 70),
+            ):
+                ctk.CTkLabel(filters, text=label).pack(side="left", padx=(0, 3))
+                entry = ctk.CTkEntry(filters, textvariable=variable, width=width)
+                entry.pack(side="left", padx=(0, 8))
+                entry.bind("<KeyRelease>", lambda _event: refresh())
             frame = ctk.CTkScrollableFrame(window, label_text=str(directory))
             frame.pack(fill="both", expand=True, padx=10, pady=(4, 10))
             # L'index est un cache : absent ou illisible, la liste reste possible.
-            states: dict[str, str] = {}
+            entries: dict[str, Any] = {}
             if directory.is_dir():
                 try:
                     from core.run_index import RunIndex
 
-                    states = {
-                        run_id: record.state
-                        for run_id, record in RunIndex(directory).entries().items()
-                    }
+                    entries = RunIndex(directory).entries()
                 except Exception:  # noqa: BLE001 - un cache ne bloque pas l'interface
                     logger.debug("index des runs illisible", exc_info=True)
             files: list[Any] = []
@@ -563,29 +608,111 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                     )[:50]
                 except OSError as exc:
                     self._append("erreur", f"dossier de traces illisible : {exc}")
-            if not files:
-                ctk.CTkLabel(frame, text="Aucune trace enregistrée.").pack(pady=20)
-                return
-            for path in files:
+            selected: dict[str, Any] = {}
+
+            def trace_key() -> tuple[Any, str]:
+                trace_cfg = self.controller.agent.settings.trace
+                if not trace_cfg.encrypt:
+                    return None, ""
+                from core.trace_crypto import TraceKeyError, load_key
+
                 try:
-                    stat = path.stat()
-                except OSError:
-                    continue
-                row = ctk.CTkFrame(frame)
-                row.pack(fill="x", pady=2)
-                stamp = time.strftime("%d/%m %H:%M", time.localtime(stat.st_mtime))
-                stem = path.name[:-3] if path.name.endswith(".gz") else path.name
-                stem = stem[:-6] if stem.endswith(".jsonl") else stem
-                state = states.get(stem, "")
-                label = f"{stem}   {stamp}   {max(1, stat.st_size // 1024)} Kio"
-                if state:
-                    label += f"   [{state}]"
-                ctk.CTkLabel(row, text=label, anchor="w").pack(
-                    side="left", padx=8, fill="x", expand=True
+                    return load_key(trace_cfg.key_env), ""
+                except TraceKeyError as exc:
+                    return None, str(exc)
+
+            def compare() -> None:
+                """Compare deux runs sélectionnés, comme `--diff`."""
+                from core.replay import manifest_diff, replay
+
+                if len(selected) != 2:
+                    report_label.configure(text="Sélectionnez exactement deux runs.")
+                    return
+                key, error = trace_key()
+                if error:
+                    report_label.configure(text=f"trace chiffrée : {error}")
+                    return
+                paths = list(selected.values())
+                try:
+                    left, right = replay(paths[0], key=key), replay(paths[1], key=key)
+                except Exception as exc:  # noqa: BLE001 - l'interface rapporte
+                    report_label.configure(text=f"comparaison impossible : {exc}")
+                    return
+                differences = manifest_diff(left, right)
+                report_label.configure(
+                    text=(
+                        f"{paths[0].name} vs {paths[1].name}\n"
+                        + ("\n".join(differences) or "aucune différence de manifeste ou de bilan")
+                    )[:1200]
                 )
-                ctk.CTkButton(
-                    row, text="Lire", width=70, command=lambda p=path: self._show_trace(p)
-                ).pack(side="right", padx=6, pady=4)
+
+            def refresh() -> None:
+                for child in frame.winfo_children():
+                    child.destroy()
+                try:
+                    max_days = float(days_var.get().strip() or 0)
+                except ValueError:
+                    max_days = 0.0
+                shown = 0
+                for path in files:
+                    try:
+                        stat = path.stat()
+                    except OSError:
+                        continue
+                    stem = path.name[:-3] if path.name.endswith(".gz") else path.name
+                    stem = stem[:-6] if stem.endswith(".jsonl") else stem
+                    entry = entries.get(stem)
+                    state = entry.state if entry is not None else ""
+                    if state_var.get() != "tous" and state != state_var.get():
+                        continue
+                    if model_var.get().strip() and model_var.get().strip().lower() not in (
+                        entry.model if entry is not None else ""
+                    ).lower():
+                        continue
+                    if workspace_var.get().strip() and workspace_var.get().strip().lower() not in (
+                        entry.workspace if entry is not None else ""
+                    ).lower():
+                        continue
+                    if max_days and time.time() - stat.st_mtime > max_days * 86_400:
+                        continue
+                    shown += 1
+                    row = ctk.CTkFrame(frame)
+                    row.pack(fill="x", pady=2)
+                    stamp = time.strftime("%d/%m %H:%M", time.localtime(stat.st_mtime))
+                    label = f"{stem}   {stamp}   {max(1, stat.st_size // 1024)} Kio"
+                    if state:
+                        label += f"   [{state}]"
+                    if entry is not None and entry.model:
+                        label += f"   {entry.model}"
+                    variable = ctk.BooleanVar(value=stem in selected)
+
+                    def toggle(checked: bool, run_id: str = stem, path: Any = path) -> None:
+                        if checked:
+                            selected[run_id] = path
+                        else:
+                            selected.pop(run_id, None)
+
+                    ctk.CTkCheckBox(
+                        row,
+                        text="",
+                        width=24,
+                        variable=variable,
+                        command=lambda v=variable, t=toggle: t(bool(v.get())),
+                    ).pack(side="left", padx=(4, 0), pady=4)
+                    ctk.CTkLabel(row, text=label, anchor="w").pack(
+                        side="left", padx=8, fill="x", expand=True
+                    )
+                    ctk.CTkButton(
+                        row, text="Lire", width=70, command=lambda p=path: self._show_trace(p)
+                    ).pack(side="right", padx=6, pady=4)
+                if not shown:
+                    text = "Aucune trace enregistrée." if not files else "Aucun run ne correspond au filtre."
+                    ctk.CTkLabel(frame, text=text).pack(pady=20)
+
+            ctk.CTkButton(filters, text="Comparer", width=90, command=compare).pack(
+                side="right"
+            )
+            refresh()
 
         def _show_trace(self, path: Any) -> None:
             """Rejoue une trace dans la conversation, sans relancer l'agent."""

@@ -508,6 +508,15 @@ class StorageConfig:
 
 
 @dataclass(slots=True)
+class MetricsConfig:
+    """Journal de métriques par run (une ligne par exécution terminée)."""
+
+    enabled: bool = True
+    max_entries: int = 1000
+    max_bytes: int = 2 * 1024 * 1024
+
+
+@dataclass(slots=True)
 class LoggingConfig:
     """Journalisation et masquage des secrets."""
 
@@ -544,6 +553,7 @@ class Settings:
     trace: TraceConfig = field(default_factory=TraceConfig)
     autonomy: AutonomyConfig = field(default_factory=AutonomyConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
+    metrics: MetricsConfig = field(default_factory=MetricsConfig)
 
     # -- persistance --------------------------------------------------------
 
@@ -706,6 +716,11 @@ class Settings:
                 "downloads_max_bytes": self.storage.downloads_max_bytes,
                 "browser_cache_max_age_days": self.storage.browser_cache_max_age_days,
                 "browser_cache_max_bytes": self.storage.browser_cache_max_bytes,
+            },
+            "metrics": {
+                "enabled": self.metrics.enabled,
+                "max_entries": self.metrics.max_entries,
+                "max_bytes": self.metrics.max_bytes,
             },
             "agent": {
                 "action_first": self.agent.action_first,
@@ -950,6 +965,11 @@ class Settings:
         ):
             if int(getattr(storage, name)) < 0:
                 err(f"storage.{name}", "doit être >= 0 (0 = pas de limite de taille)")
+
+        if not (1 <= self.metrics.max_entries <= 100000):
+            err("metrics.max_entries", "doit être comprise entre 1 et 100000")
+        if self.metrics.max_bytes < 1024:
+            err("metrics.max_bytes", "doit être >= 1024 octets")
 
         return issues
 

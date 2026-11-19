@@ -95,6 +95,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="rejette une proposition sans l'exécuter, puis quitte",
     )
     parser.add_argument(
+        "--support-bundle",
+        nargs="?",
+        const="",
+        metavar="FICHIER",
+        help="écrit un paquet de support rouge (par défaut dans reports/) et quitte",
+    )
+    parser.add_argument(
+        "--metrics",
+        action="store_true",
+        help="affiche l'agrégat des métriques par run, puis quitte",
+    )
+    parser.add_argument(
         "--clean",
         action="store_true",
         help="affiche ce que la rétention purgerait (rapports, cache, profil) et quitte",
@@ -259,6 +271,19 @@ def _run_proposal(settings: Settings, args: Any) -> int:
     if record["why"]:
         print(f"  raison : {record['why']}")
     print(f"Approuver : --autonomy-approve {record['id']}")
+    return 0
+
+
+def _support_bundle(settings: Settings, target: str) -> int:
+    """Paquet de support rouge ; aucun contenu de session."""
+    from core.support_bundle import build_support_bundle
+
+    try:
+        path = build_support_bundle(settings, Path(target) if target else None)
+    except OSError as exc:
+        print(f"Paquet de support impossible : {exc}", file=sys.stderr)
+        return 1
+    print(f"Paquet de support : {path}")
     return 0
 
 
@@ -799,6 +824,15 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.clean or args.clean_apply:
         return _clean(settings, apply=args.clean_apply)
+
+    if args.support_bundle is not None:
+        return _support_bundle(settings, args.support_bundle)
+
+    if args.metrics:
+        from core.metrics import MetricsRecorder, format_summary, metrics_path
+
+        print(format_summary(MetricsRecorder(metrics_path(settings)).all()))
+        return 0
 
     if args.browser_smoke:
         return browser_smoke(settings)
