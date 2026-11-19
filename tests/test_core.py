@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sys
 import threading
 import time
@@ -1601,6 +1602,44 @@ def test_trim_reuses_an_identical_history_for_a_stable_prefix() -> None:
         messages.append({"role": "assistant", "content": "suite"})
         core._trim(messages)
         assert core._trim_cache_hits == 1, "un historique différent ne doit pas taper le cache"
+
+
+def test_run_finished_publishes_a_summary() -> None:
+    """Le bilan de run rend deux exécutions comparables (durée, tokens, replis)."""
+    with tmpdir("bilan") as tmp:
+        settings = _settings(tmp, history_max=6)
+        bus = EventBus()
+        llm = FakeLLM([_call("echo", text="a"), _text("fini")])
+        core = AgentCore(settings, llm, ToolRegistry([_echo_tool([])]), bus=bus)
+
+        assert core.run("mesure").ok
+
+        finished = [event for event in bus.history() if event.type == EventType.RUN_FINISHED]
+        summary = finished[-1].payload["summary"]
+        assert summary["requests"] == 2
+        assert summary["tool_calls"] == 1
+        assert summary["steps"] == 2
+        assert summary["duration_s"] >= 0
+        assert summary["prompt_tokens"] > 0
+        assert summary["trim_cache_hits"] == 0
+        assert summary["trims"] == 0
+
+
+def test_run_id_context_reaches_log_records() -> None:
+    """Une ligne de journal doit pouvoir être rattachée à sa trace."""
+    from core.observability import RunIdFilter, reset_run_id, set_run_id
+
+    token = set_run_id("abc123")
+    try:
+        record = logging.LogRecord("x", logging.INFO, __file__, 1, "message", None, None)
+        RunIdFilter().filter(record)
+        assert record.run_id == "abc123"
+    finally:
+        reset_run_id(token)
+
+    record = logging.LogRecord("x", logging.INFO, __file__, 1, "message", None, None)
+    RunIdFilter().filter(record)
+    assert record.run_id == "-", "hors exécution, le champ reste présent et vide"
 
 
 if __name__ == "__main__":

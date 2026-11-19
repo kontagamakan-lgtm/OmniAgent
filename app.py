@@ -32,6 +32,7 @@ import config
 from config import APP_NAME, APP_VERSION, Settings
 from core.events import Event, EventType
 from core.factory import build_agent
+from core.observability import RunIdFilter
 from core.trace import build_trace
 from security.redaction import redact
 
@@ -654,7 +655,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(format_run(replay(path)))
         return 0
 
-    config.configure_logging(settings, redact)
+    config.configure_logging(settings, redact, filters=(RunIdFilter(),))
     if args.task is not None:
         return _run_task(settings, args)
     return _run_gui(settings)

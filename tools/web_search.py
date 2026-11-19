@@ -1381,6 +1381,16 @@ def render_report(dossier: dict[str, Any], pages: Sequence[PageContent] | None =
     lines.append(f"Généré le {dossier.get('generated_at', '')} — "
                  f"{stats.get('queries', 0)} requête(s), {stats.get('hits', 0)} résultat(s), "
                  f"{stats.get('pages', 0)} page(s) analysée(s).")
+    # Import tardif : `core` dépend des outils, l'inverse ne doit pas créer de
+    # cycle au chargement du module.
+    try:
+        from core.observability import current_run_id
+
+        run_id = current_run_id()
+    except Exception:  # noqa: BLE001 - un rapport ne dépend pas de ce champ
+        run_id = "-"
+    if run_id and run_id != "-":
+        lines.append(f"Exécution : `{run_id}` — trace correspondante dans `logs/runs`.")
     lines.append("")
 
     lines.append("## Requêtes")

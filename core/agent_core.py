@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Sequence
 
 from config import APP_ID, APP_VERSION, TRACE_FORMAT_VERSION, Settings
-from core.context_manager import TrimResult, count_tokens, plan_trim
+from core.context_manager import TrimResult, count_tokens, messages_tokens, plan_trim
 from core.errors import (
     AgentError,
     BudgetExhausted,
@@ -44,9 +44,11 @@ from core.errors import (
 )
 from core.events import EventBus, EventType
 from core.llm_client import LLMClient, LLMResponse
+from core.observability import reset_run_id, set_run_id
 from core.prompts import budget_notice, finalization_prompt, recovery_notice, system_prompt
 from core.react_parser import ParsedToolCall, final_text
 from core.tool_registry import ToolRegistry
+from core.trace import workspace_slug
 from tools.base import ToolResult
 
 __all__ = ["AgentCore", "AgentReply", "AgentStep", "StepCall"]
@@ -171,7 +173,14 @@ class AgentCore:
         #: d'un cache de prompt côté fournisseur, et évite un nouveau résumé.
         self._trim_cache: dict[str, TrimResult] = {}
         self._trim_cache_hits = 0
+        self._trim_hits_baseline = 0
         self._manifest_digest = ""
+        #: Compteurs d'un run, remis à zéro à chaque exécution et publiés dans
+        #: `run_finished.summary` : c'est ce qui rend deux runs comparables et le
+        #: travail sur le cache de prompt mesurable.
+        self._metrics: dict[str, int] = {}
+        self._run_started_at = 0.0
+        self._run_token: Any = None
         self.run_count = 0
         self.run_id = ""
 
@@ -224,6 +233,14 @@ class AgentCore:
             return self._run_locked(task, max_steps=max_steps)
         finally:
             self._run_guard.release()
+            # Le contexte ne doit pas survivre au run : un journal d'interface
+            # ne doit pas hériter de l'identifiant de la dernière exécution.
+            self._clear_run_context()
+
+    def _clear_run_context(self) -> None:
+        token, self._run_token = self._run_token, None
+        if token is not None:
+            reset_run_id(token)
 
     def _run_locked(self, task: str, *, max_steps: int | None = None) -> AgentReply:
         """Corps de `run`, exécuté sous le verrou d'exécution."""
@@ -241,6 +258,17 @@ class AgentCore:
         limit = max(1, int(max_steps or cfg.max_steps))
         self.run_count += 1
         self.run_id = uuid.uuid4().hex[:12]
+        # Le journal et les rapports d'outils peuvent alors se rattacher au run.
+        self._run_token = set_run_id(self.run_id)
+        self._metrics = {
+            "trims": 0,
+            "trimmed_tokens": 0,
+            "requests": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+        }
+        self._trim_hits_baseline = self._trim_cache_hits
+        self._run_started_at = time.monotonic()
         with self._lock:
             self.reset_cancel()
 
@@ -495,6 +523,10 @@ class AgentCore:
             raise Cancelled("exécution annulée")
         trimmed = self._trim(messages)
         chosen = self.tool_schemas if tools is _UNSET else tools
+        self._metrics["requests"] = self._metrics.get("requests", 0) + 1
+        self._metrics["prompt_tokens"] = self._metrics.get(
+            "prompt_tokens", 0
+        ) + messages_tokens(trimmed)
         self._emit(EventType.LLM_REQUEST, {"messages": len(trimmed), "recoveries": recoveries})
         if self.settings.llm.stream and getattr(self.llm, "supports_stream", False):
             def _forward(chunk: str) -> None:
@@ -514,10 +546,12 @@ class AgentCore:
                 raise
             if self.cancelled:
                 raise Cancelled("exécution annulée")
+            self._count_response(response)
             return response
         response = self.llm.complete(trimmed, tools=chosen)
         if self.cancelled:
             raise Cancelled("exécution annulée")
+        self._count_response(response)
         return response
 
     def _execute(self, call: ParsedToolCall, step_index: int) -> tuple[StepCall, str]:
@@ -583,6 +617,7 @@ class AgentCore:
             "backend": self.settings.llm.backend,
             "budget_tokens": int(self.settings.agent.max_context_tokens),
             "settings_digest": self._settings_digest(),
+            "workspace": workspace_slug(),
             "python": platform.python_version(),
         }
 
@@ -599,6 +634,13 @@ class AgentCore:
             return ""
         self._manifest_digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
         return self._manifest_digest
+
+    def _count_response(self, response: LLMResponse) -> None:
+        """Comptabilise la sortie du modèle pour le bilan de run."""
+        text = str(getattr(response, "text", "") or "")
+        self._metrics["completion_tokens"] = self._metrics.get(
+            "completion_tokens", 0
+        ) + count_tokens(text)
 
     def _trim(self, messages: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
         """Borne l'historique en repartant d'un tour utilisateur complet.
@@ -629,6 +671,10 @@ class AgentCore:
             self._trim_cache.clear()
         self._trim_cache[key] = plan
         if plan.trimmed:
+            self._metrics["trims"] = self._metrics.get("trims", 0) + 1
+            self._metrics["trimmed_tokens"] = self._metrics.get("trimmed_tokens", 0) + max(
+                0, plan.before_tokens - plan.after_tokens
+            )
             # Sans cet événement, l'utilisateur voit l'agent « oublier » sans
             # savoir que c'est le budget qui l'a demandé.
             self._emit(
@@ -689,6 +735,13 @@ class AgentCore:
         )
 
     def _finish(self, reply: AgentReply) -> AgentReply:
+        """Publie la fin du run avec son bilan chiffré.
+
+        Le manifeste dit dans quelles conditions le run a commencé ; ce résumé
+        dit comment il s'est terminé (durée, tokens, replis, reprises). C'est ce
+        qui permet de comparer deux exécutions et de mesurer l'effet d'un
+        changement de budget.
+        """
         self._emit(
             EventType.RUN_FINISHED,
             {
@@ -696,9 +749,30 @@ class AgentCore:
                 "ok": reply.ok,
                 "tool_calls": reply.tool_calls,
                 "recoveries": reply.recoveries,
+                "summary": self._run_summary(reply),
             },
         )
         return reply
+
+    def _run_summary(self, reply: AgentReply) -> dict[str, Any]:
+        """Compteurs du run courant, sans contenu de conversation."""
+        duration = (
+            round(time.monotonic() - self._run_started_at, 3)
+            if self._run_started_at
+            else 0.0
+        )
+        return {
+            "duration_s": duration,
+            "steps": len(reply.steps),
+            "tool_calls": reply.tool_calls,
+            "recoveries": reply.recoveries,
+            "requests": self._metrics.get("requests", 0),
+            "prompt_tokens": self._metrics.get("prompt_tokens", 0),
+            "completion_tokens": self._metrics.get("completion_tokens", 0),
+            "trims": self._metrics.get("trims", 0),
+            "trimmed_tokens": self._metrics.get("trimmed_tokens", 0),
+            "trim_cache_hits": max(0, self._trim_cache_hits - self._trim_hits_baseline),
+        }
 
     def _emit(self, event_type: str, payload: dict[str, Any] | None = None) -> None:
         self.bus.emit(event_type, payload, run_id=self.run_id)
