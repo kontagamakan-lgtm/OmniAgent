@@ -81,6 +81,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="vérifie que l'OCR lit une image (binaire ou moteur embarqué), puis quitte",
     )
     parser.add_argument(
+        "--compat-smoke",
+        action="store_true",
+        help="vérifie AgentRunner, run_task et history(run_id) hors réseau, puis quitte",
+    )
+    parser.add_argument(
         "--unlock-keyring",
         action="store_true",
         help="ouvre le coffre avec la phrase secrète du trousseau système",
@@ -344,6 +349,100 @@ def ocr_smoke(settings: Settings) -> int:
         shutil.rmtree(workdir, ignore_errors=True)
 
 
+def compat_smoke(settings: Settings) -> int:
+    """Exerce la façade d'exécution et le filtrage par run, sans réseau.
+
+    Ni `AgentRunner` ni `run_task` ne sont utilisés par l'application : ce
+    contrôle existe pour prouver, depuis l'exécutable figé, que ce chemin
+    fonctionne encore une fois empaqueté. Le fournisseur est local et
+    scripté, donc aucun appel sortant.
+    """
+    from core import AgentResult, AgentRunner, run_task
+    from core.events import EventBus, EventType
+    from core.llm_client import LLMResponse
+    from core.tool_registry import ToolRegistry, ToolSpec
+    from tools.base import object_schema, param
+
+    class _FixedLLM:
+        """Fournisseur minimal : répond sans réseau, en une étape."""
+
+        def complete(self, messages, tools=None, **kwargs):
+            return LLMResponse(text="compat ok", finish_reason="stop")
+
+    llm = _FixedLLM()
+    marker = "COMPAT_SMOKE_OK"
+    wanted = {EventType.RUN_STARTED, EventType.FINAL, EventType.RUN_FINISHED}
+    problems: list[str] = []
+
+    # Chemin 1 : façade AgentRunner, avec un bus fourni par l'appelant.
+    bus = EventBus()
+    with AgentRunner(
+        settings,
+        llm=llm,
+        bus=bus,
+        with_web=False,
+        with_browser=False,
+    ) as runner:
+        reply = runner.run("contrôle de compatibilité")
+        run_id = runner.bundle.agent.run_id
+    if not isinstance(reply, AgentResult) or not reply.ok:
+        problems.append("AgentRunner n'a pas produit de résultat exploitable")
+    events = bus.history(run_id)
+    if not events or not wanted.issubset({event.type for event in events}):
+        problems.append(f"history(run_id) incomplet : {[e.type for e in events]}")
+    if any(event.run_id != run_id for event in events):
+        problems.append("history(run_id) mélange plusieurs exécutions")
+
+    # Chemin 2 : run_task, avec un second bus pour vérifier l'isolement.
+    other = EventBus()
+    second = run_task(
+        "second contrôle",
+        settings=settings,
+        llm=llm,
+        bus=other,
+        with_web=False,
+        with_browser=False,
+    )
+    second_events = other.history()
+    if not isinstance(second, AgentResult) or not second.ok:
+        problems.append("run_task n'a pas produit de résultat exploitable")
+    if not second_events or EventType.RUN_STARTED not in {
+        event.type for event in second_events
+    }:
+        problems.append("run_task n'a publié aucun événement")
+    if len({event.run_id for event in second_events}) != 1:
+        problems.append("run_task a publié plusieurs identifiants d'exécution")
+
+    # Chemin 3 : un outil déclaré en données, converti et exécuté.
+    def _echo(text: str) -> str:
+        return text
+
+    spec = ToolSpec(
+        name="compat_echo",
+        description="Répète le texte reçu.",
+        parameters=object_schema({"text": param("string", "Texte")}, required=["text"]),
+        func=_echo,
+    )
+    registry = ToolRegistry([spec], max_output_chars=3)
+    shaped = registry.dispatch("compat_echo", {"text": "salut"})
+    if not shaped.ok or shaped.data != "salut":
+        problems.append("ToolSpec n'a pas produit de résultat exploitable")
+    if registry.schemas()[0]["function"]["name"] != "compat_echo":
+        problems.append("ToolSpec n'a pas produit de schéma exploitable")
+    if "tronqué" not in registry.observation(shaped):
+        problems.append("l'observation d'un ToolSpec n'est pas bornée par le registre")
+
+    print(f"  AgentRunner : run_id={run_id or '(vide)'}, {len(events)} événement(s)")
+    print(f"  run_task    : {len(second_events)} événement(s)")
+    print(f"  ToolSpec    : {len(registry.names())} outil(s) converti(s)")
+    if problems:
+        for problem in problems:
+            print(f"  !!   {problem}", file=sys.stderr)
+        return 1
+    print(f"Contrôle compatibilité réussi ({marker}).")
+    return 0
+
+
 def browser_smoke(settings: Settings) -> int:
     """Vérifie que ce processus sait piloter le navigateur du système.
 
@@ -485,6 +584,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.ocr_smoke:
         return ocr_smoke(settings)
+
+    if args.compat_smoke:
+        return compat_smoke(settings)
 
     config.configure_logging(settings, redact)
     if args.task is not None:

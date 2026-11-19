@@ -99,6 +99,17 @@ def test_tool_spec_is_accepted_by_the_registry() -> None:
     assert registry.dispatch("absent", {}).ok is False
 
 
+def test_compat_smoke_runs_offline() -> None:
+    """Le contrôle `--compat-smoke` doit passer sans réseau ni clé d'API."""
+    with tmpdir("compat") as tmp:
+        settings = make_settings(tmp)
+        settings.agent.max_steps = 3
+
+        import app
+
+        assert app.compat_smoke(settings) == 0
+
+
 def test_runner_and_run_task_return_a_result() -> None:
     with tmpdir("compat") as tmp:
         settings = make_settings(tmp)
