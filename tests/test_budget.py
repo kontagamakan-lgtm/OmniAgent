@@ -15,11 +15,13 @@ from support import make_settings, tmpdir  # noqa: E402
 from core.agent_core import AgentCore  # noqa: E402
 from core.budget import (  # noqa: E402
     check,
+    estimate_run,
     format_state,
     ledger_path,
     record_run,
     release_run,
     reserve_run,
+    run_cost,
     usage,
 )
 from core.factory import build_agent  # noqa: E402
@@ -169,6 +171,108 @@ def test_two_concurrent_reservations_cannot_both_pass_the_cap() -> None:
         retry = reserve_run(settings, run_id="c", cost=0.6, tokens=100)
         assert retry[0] is True, retry
         assert release_run(settings, retry[2])
+
+
+def test_average_past_run_blocks_the_second_underestimated_reservation() -> None:
+    """Une moyenne multi-étapes réserve assez pour que le second run soit refusé."""
+    with tmpdir("budget-estimation-moyenne") as tmp:
+        settings = make_settings(tmp)
+        settings.llm.price_completion_per_million = 1000.0
+        settings.llm.max_output_tokens = 512
+        settings.budget.daily_cost = 6.0
+        # Run multi-étapes passé : 3000 tokens de sortie = 3 USD.
+        record_run(
+            settings,
+            run_id="run-multi-etapes",
+            model=settings.llm.model,
+            prompt_tokens=0,
+            completion_tokens=3000,
+        )
+
+        cost, tokens = estimate_run(settings, prompt_tokens=0)
+        assert cost >= 3.0, cost
+        assert tokens >= 3000, tokens
+
+        settings.budget.estimate_multiplier = 2.0
+        doubled_cost, doubled_tokens = estimate_run(settings, prompt_tokens=0)
+        assert doubled_cost >= cost * 2, doubled_cost
+        assert doubled_tokens >= tokens * 2, doubled_tokens
+        settings.budget.estimate_multiplier = 1.0
+
+        barrier = threading.Barrier(2)
+        results: list[tuple[bool, str, str]] = []
+        lock = threading.Lock()
+
+        def attempt(run_id: str) -> None:
+            barrier.wait(timeout=5)
+            outcome = reserve_run(settings, run_id=run_id, cost=cost, tokens=tokens)
+            with lock:
+                results.append(outcome)
+
+        threads = [
+            threading.Thread(target=attempt, args=(name,)) for name in ("a", "b")
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+
+        allowed = [item for item in results if item[0]]
+        refused = [item for item in results if not item[0]]
+        assert len(allowed) == 1, results
+        assert len(refused) == 1 and "budget jour" in refused[0][1], results
+        assert release_run(settings, allowed[0][2])
+
+
+def test_legacy_underestimate_would_allow_both_runs_to_overrun() -> None:
+    """Sans moyenne, deux réservations passent, puis le coût réel dépasse le cap."""
+    with tmpdir("budget-ancienne-estimation") as tmp:
+        settings = make_settings(tmp)
+        settings.llm.price_completion_per_million = 1000.0
+        settings.llm.max_output_tokens = 512
+        settings.budget.daily_cost = 6.0
+        # Run multi-étapes passé : 3000 tokens de sortie = 3 USD.
+        assert record_run(
+            settings,
+            run_id="run-multi-etapes",
+            model=settings.llm.model,
+            prompt_tokens=0,
+            completion_tokens=3000,
+        ) is not None
+
+        # Ancien calcul : un seul appel maximal (0,512 USD), qui ignore le coût
+        # réel du run multi-étapes. La moyenne historique vaut 3 USD.
+        legacy_cost = run_cost(settings, 0, settings.llm.max_output_tokens)
+        average_cost, average_tokens = estimate_run(settings, prompt_tokens=0)
+        assert legacy_cost < average_cost, (legacy_cost, average_cost)
+        assert average_cost >= 3.0 and average_tokens >= 3000
+
+        old_runs = ("old-a", "old-b")
+        reservations = [
+            reserve_run(
+                settings,
+                run_id=run_id,
+                cost=legacy_cost,
+                tokens=settings.llm.max_output_tokens,
+            )
+            for run_id in old_runs
+        ]
+        assert all(allowed for allowed, _reason, _reservation in reservations), reservations
+
+        # Les deux runs terminent au coût réel multi-étapes (3 USD chacun),
+        # sans que l'ancienne estimation ne les ait empêchés de démarrer.
+        for run_id in old_runs:
+            assert record_run(
+                settings,
+                run_id=run_id,
+                model=settings.llm.model,
+                prompt_tokens=0,
+                completion_tokens=3000,
+            ) is not None
+
+        state = check(settings)
+        assert state.usage.day_cost > settings.budget.daily_cost, state.usage
+        assert not state.allowed and "jour" in state.reason, state.reason
 
 
 class _GatedLLM:

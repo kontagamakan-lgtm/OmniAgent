@@ -641,6 +641,9 @@ class BudgetConfig:
     monthly_cost: float = 0.0
     daily_tokens: int = 0
     monthly_tokens: int = 0
+    #: Marge appliquée à la moyenne des runs terminés du mois pour estimer
+    #: la réservation d'un run multi-étapes. 1 = moyenne brute.
+    estimate_multiplier: float = 1.0
 
 
 @dataclass(slots=True)
@@ -905,6 +908,7 @@ class Settings:
                 "monthly_cost": self.budget.monthly_cost,
                 "daily_tokens": self.budget.daily_tokens,
                 "monthly_tokens": self.budget.monthly_tokens,
+                "estimate_multiplier": self.budget.estimate_multiplier,
             },
             "ui": {
                 "appearance": self.ui.appearance,
@@ -1203,6 +1207,12 @@ class Settings:
             value = int(getattr(budget, name))
             if not (0 <= value <= 1_000_000_000):
                 err(f"budget.{name}", "doit etre comprise entre 0 et 1 000 000 000")
+        multiplier = float(budget.estimate_multiplier)
+        if not (1.0 <= multiplier <= 100.0):
+            err(
+                "budget.estimate_multiplier",
+                "doit etre comprise entre 1 et 100",
+            )
 
         return issues
 

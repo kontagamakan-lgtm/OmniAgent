@@ -68,6 +68,7 @@ class Usage:
     runs_today: int = 0
     runs_month: int = 0
     month_average_run_cost: float = 0.0
+    month_average_run_tokens: int = 0
     #: Coût des runs en cours, réservé mais pas encore consolidé.
     reserved_cost: float = 0.0
     reserved_tokens: int = 0
@@ -255,6 +256,7 @@ def usage(
     month = (moment.year, moment.month)
     result = Usage()
     month_costs: list[float] = []
+    month_tokens: list[int] = []
     for entry in entries:
         # Une réservation n'est pas une dépense : elle est comptée à part
         # (`BudgetState.usage.reserved_cost`) jusqu'à consolidation.
@@ -271,6 +273,7 @@ def usage(
             result.month_tokens += tokens
             result.runs_month += 1
             month_costs.append(cost)
+            month_tokens.append(tokens)
         if local.isocalendar()[:2] == week:
             result.week_cost += cost
         if local.date() == day:
@@ -282,6 +285,9 @@ def usage(
     result.day_cost = round(result.day_cost, 4)
     if month_costs:
         result.month_average_run_cost = round(sum(month_costs) / len(month_costs), 4)
+        result.month_average_run_tokens = round(
+            sum(month_tokens) / len(month_tokens)
+        )
     return result
 
 
@@ -382,16 +388,32 @@ def check(
 def estimate_run(
     settings: Settings, *, prompt_tokens: int = 0
 ) -> tuple[float, int]:
-    """Estimation d'un run : prompt connu + une sortie maximale.
+    """Estimation d'un run, tenant compte des runs multi-étapes passés.
 
-    C'est un plancher, pas une prédiction : la réservation garantit qu'un run
-    concurrent ne peut pas s'engouffrer dans le même reste de budget. Le coût
-    réel est consolidé à la fin et remplace l'estimation.
+    La base reste le prompt connu plus une sortie maximale, mais un run
+    multi-étapes peut appeler le modèle plusieurs fois. La moyenne des runs
+    terminés du mois sert donc de plancher, renforcée par
+    `budget.estimate_multiplier`. Le coût réel remplace l'estimation à la fin.
     """
     prompt = max(0, int(prompt_tokens))
     completion = max(0, int(settings.llm.max_output_tokens))
     tokens = prompt + completion
-    return run_cost(settings, prompt, completion), tokens
+    cost = run_cost(settings, prompt, completion)
+
+    cfg = getattr(settings, "budget", None)
+    multiplier = max(1.0, float(getattr(cfg, "estimate_multiplier", 1.0) or 1.0))
+    # Le facteur explicite s'applique aussi au plancher sans historique :
+    # l'utilisateur peut renforcer la marge avant le premier run multi-étapes.
+    cost *= multiplier
+    tokens = int(round(tokens * multiplier))
+    history = usage(_read(settings))
+    if history.runs_month:
+        tokens = max(
+            tokens,
+            int(round(history.month_average_run_tokens * multiplier)),
+        )
+        cost = max(cost, round(history.month_average_run_cost * multiplier, 6))
+    return cost, tokens
 
 
 def reserve_run(
