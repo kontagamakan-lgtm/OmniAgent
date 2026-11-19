@@ -207,9 +207,11 @@ def run_scheduled(
     idle: Callable[[], float] = system_idle_seconds,
     on_battery: Callable[[], bool] = system_on_battery,
     on_event: Callable[[str], None] | None = None,
+    notify: Callable[[str, str], bool] | None = None,
 ) -> list[dict[str, Any]]:
     """Attend la fenêtre puis exécute au plus une session par fenêtre."""
     from core.autonomy import AutonomySession
+    from core.notify import notify_windows
 
     schedule = load_schedule(settings)
     results: list[dict[str, Any]] = []
@@ -242,6 +244,21 @@ def run_scheduled(
             }
             _append_session(settings, summary)
             results.append(summary)
+            if getattr(settings.autonomy, "notify_on_session", True):
+                notifier = notify or notify_windows
+                message = (
+                    f"Session {'terminee' if summary['ok'] else 'en echec'} : "
+                    f"{summary['cycles']} cycle(s), {summary['cost']:.4f} USD, "
+                    f"{summary['duration_s']} s"
+                )
+                try:
+                    if not notifier("OmniAgent - session planifiee", message):
+                        logger.info(
+                            "notification de fin de session non affichee "
+                            "(toast indisponible)"
+                        )
+                except Exception:  # noqa: BLE001 - une notification ne bloque pas
+                    logger.debug("notification de fin de session impossible", exc_info=True)
             if max_checks is not None:
                 break
         if max_checks is not None and checks >= max_checks:

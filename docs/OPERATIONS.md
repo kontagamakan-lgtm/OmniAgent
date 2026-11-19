@@ -44,8 +44,11 @@ python app.py --autonomy-schedule --schedule-checks 1
 ```
 
 Une session au plus par fenêtre (l'historique est `autonomy/sessions.jsonl`).
-`--schedule-checks` borne l'attente et sert aux essais. Aucune notification
-système n'est envoyée : la sortie console et l'historique en tiennent lieu.
+`--schedule-checks` borne l'attente et sert aux essais. À la fin de chaque
+session, une toast Windows native est affichée (« OmniAgent — session
+planifiée ») via PowerShell/WinRT, sans paquet supplémentaire ;
+`autonomy.notify_on_session = false` la désactive. La sortie console et
+l'historique restent la trace durable.
 
 ## Politique d'outils
 
@@ -66,10 +69,13 @@ chercher une règle plus permissive.
 
 ## Arrêt d'urgence
 
-Le fichier `data/autonomy/STOP` arrête toute session au prochain événement ; le
-bouton **Arrêt d'urgence** (Ctrl+Alt+S) l'écrit et annule immédiatement un run
-en cours. Il n'est jamais supprimé automatiquement : retirez-le avant de
-relancer une session.
+Le fichier `data/autonomy/STOP` arrête toute session au prochain événement.
+Le bouton **Arrêt d'urgence** l'écrit et annule immédiatement un run en cours.
+**Ctrl+Alt+S est enregistré globalement** (`RegisterHotKey`) tant que
+l'application tourne : il fonctionne même quand une autre fenêtre a le focus.
+Si une autre application possède déjà la combinaison, l'application le signale
+au démarrage et le raccourci de fenêtre reste disponible. Le fichier n'est
+jamais supprimé automatiquement : retirez-le avant de relancer une session.
 
 ## Reprise d'une trace interrompue
 

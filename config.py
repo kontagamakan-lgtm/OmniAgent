@@ -491,6 +491,8 @@ class AutonomyConfig:
     proposal_max_age_days: int = 14
     #: Plafond de la session en devise (USD estimee). 0 = aucun.
     max_total_cost: float = 0.0
+    #: Afficher une notification Windows a la fin d'une session planifiee.
+    notify_on_session: bool = True
 
 
 @dataclass(slots=True)
@@ -716,6 +718,7 @@ class Settings:
                 "max_tool_calls_per_cycle": self.autonomy.max_tool_calls_per_cycle,
                 "proposal_max_age_days": self.autonomy.proposal_max_age_days,
                 "max_total_cost": self.autonomy.max_total_cost,
+                "notify_on_session": self.autonomy.notify_on_session,
             },
             "storage": {
                 "reports_max_age_days": self.storage.reports_max_age_days,

@@ -18,6 +18,7 @@ from config import APP_ID, APP_NAME, APP_VERSION, Settings
 from core.events import Event, EventType
 from core.factory import AgentBundle
 from ui.controller import AgentController
+from ui.hotkey import HotkeyListener
 
 try:  # pragma: no cover - dépend de l'environnement
     import customtkinter as ctk
@@ -125,6 +126,8 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
         #: Défaut de classe pour les fenêtres de test construites sans Tk :
         #: `getattr` sur un objet Tk non initialisé récurserait.
         _approved_proposal: str | None = None
+        #: Signal du raccourci global, consomme par `_pump` sur le fil Tk.
+        _hotkey_messages: queue.Queue[str] | None = None
 
         def __init__(self, settings: Settings, bundle: AgentBundle) -> None:
             ctk.set_appearance_mode(settings.ui.appearance)
@@ -143,6 +146,8 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             self._autonomy_thread: threading.Thread | None = None
             self._autonomy_session: Any = None
             self._autonomy_messages: queue.Queue[str] = queue.Queue()
+            self._hotkey_messages = queue.Queue()
+            self._hotkey = HotkeyListener()
             #: Proposition dont l'exécution a été lancée par le bouton
             #: Approuver : sa clôture (`executed`/`failed`, run_id) attend la
             #: réponse asynchrone de l'agent.
@@ -158,6 +163,15 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             self.protocol("WM_DELETE_WINDOW", self._on_close)
 
             self._build_widgets()
+            if self._hotkey.start(self._global_stop_signal):
+                self._append(
+                    "système", "raccourci global Ctrl+Alt+S actif (arrêt d'urgence)"
+                )
+            else:
+                self._append(
+                    "système",
+                    f"raccourci global indisponible : {self._hotkey.error}",
+                )
             self._append("système", "Prêt. Décrivez une tâche, Ctrl+Entrée pour envoyer.")
             self._pump()
             # Après la boucle : l'assistant s'ouvre au-dessus de la fenêtre déjà
@@ -362,6 +376,29 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 f"arrêt d'urgence : {stop_path(self.settings)} "
                 "(supprimez ce fichier avant une nouvelle session)",
             )
+
+        def _global_stop_signal(self) -> None:
+            """Callback du raccourci global : thread du raccourci, jamais Tk.
+
+            Le fichier STOP et l'annulation sont sûrs depuis n'importe quel
+            thread ; l'affichage est confié à `_pump` via une file.
+            """
+            from core.stopfile import request_stop
+
+            request_stop(self.settings, "raccourci global")
+            try:
+                self.controller.cancel()
+            except Exception:  # noqa: BLE001 - l'arrêt continue
+                logger.debug("annulation du run depuis le raccourci impossible", exc_info=True)
+            session = self._autonomy_session
+            if session is not None:
+                try:
+                    session.request_stop()
+                except Exception:  # noqa: BLE001
+                    logger.debug("arrêt de la session autonome impossible", exc_info=True)
+            messages = self._hotkey_messages
+            if messages is not None:
+                messages.put("stop")
 
         def _toggle_trace(self) -> None:
             enabled = bool(self.trace_switch.get())
@@ -811,6 +848,15 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 else:
                     self._append("système", message)
 
+            hotkey_messages = getattr(self, "_hotkey_messages", None)
+            while hotkey_messages is not None:
+                try:
+                    signal = hotkey_messages.get_nowait()
+                except queue.Empty:
+                    break
+                if signal == "stop":
+                    self._emergency_stop()
+
             reply = self.controller.reply
             if reply is not None and not self.controller.busy and not self._reported:
                 self._reported = True
@@ -959,6 +1005,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
 
         def _on_close(self) -> None:
             try:
+                self._hotkey.stop()
                 if self._autonomy_session is not None:
                     self._autonomy_session.request_stop()
                 if self.controller.busy:
