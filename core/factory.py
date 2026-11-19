@@ -30,6 +30,7 @@ from core.metrics import build_metrics
 from core.tool_registry import ConfirmHandler, ToolRegistry
 from tools.base import Tool
 from tools.browser_agent import BrowserAgent, build_browser_tools
+from tools.capabilities import assert_capabilities
 from tools.doc_index import DocIndex, build_doc_tools
 from tools.file_manager import FileManager, build_file_tools
 from tools.ocr import Ocr, build_ocr_tools
@@ -156,6 +157,10 @@ def build_agent(
         max_output_chars=settings.agent.tool_output_max_chars,
         confirm=confirm,
     )
+    # Contrat des capacités : un outil non classé, ou dont les drapeaux ne
+    # correspondent plus à `tools/capabilities.py`, bloque le démarrage plutôt
+    # que d'hériter silencieusement des valeurs par défaut.
+    assert_capabilities(registry.toolset.tools())
     owns_llm = llm is None
     client = llm or LLMClient(settings.llm)
     agent = AgentCore(settings, client, registry, bus=bus)

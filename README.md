@@ -390,6 +390,11 @@ Chaque outil déclare un JSON Schema strict (`additionalProperties: false`) ;
 structuré — jamais une exception non gérée — pour que la boucle ReAct puisse
 analyser l'échec et changer de stratégie.
 
+Les capacités de chaque outil — lecture ou écriture, danger, secret — sont
+déclarées une seule fois dans `tools/capabilities.py`. `build_agent` compare
+cette table aux outils construits et refuse de démarrer si un outil n'y figure
+pas ou si ses drapeaux divergent du contrat.
+
 ### Vérification
 
 ```bat

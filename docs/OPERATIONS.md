@@ -67,6 +67,20 @@ Chaque décision est journalisée dans `autonomy/journal.jsonl`.
 `max_calls` est un plafond par outil pour la session ; atteint, il refuse sans
 chercher une règle plus permissive.
 
+## Contrat des capacités des outils
+
+`tools/capabilities.py` est l'unique table de classification : pour chaque
+outil, elle dit s'il **écrit** (sinon il lit), s'il est **dangereux** (donc
+confirmé, et refusé en autonomie sans règle de politique) et s'il manipule des
+**secrets** (résultat et arguments retenus hors du prompt et de la trace).
+
+`build_agent` valide cette table contre les outils réellement construits et
+lève `ToolContractError` au démarrage si un outil n'est pas classé ou si ses
+drapeaux ne correspondent plus à sa déclaration : un oubli ne peut donc pas
+hériter silencieusement du défaut `read_only=True`. Ajouter une famille
+d'outils implique d'ajouter ses entrées dans cette table ; le test
+`tests/test_capabilities.py` vérifie aussi qu'aucune entrée n'est orpheline.
+
 ## Arrêt d'urgence
 
 Le fichier `data/autonomy/STOP` arrête toute session au prochain événement.

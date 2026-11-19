@@ -25,6 +25,7 @@ class ToolSpec:
     func: Callable[..., Any]
     dangerous: bool = False
     read_only: bool = True
+    sensitive: bool = False
 
     def as_tool(self) -> Tool:
         """Convertit la spécification en outil exécutable par le registre."""
@@ -35,4 +36,5 @@ class ToolSpec:
             self.func,
             read_only=self.read_only,
             dangerous=self.dangerous,
+            sensitive=self.sensitive,
         )
