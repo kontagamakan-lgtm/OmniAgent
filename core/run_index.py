@@ -37,6 +37,7 @@ __all__ = [
     "INDEX_NAME",
     "RunIndex",
     "RunRecord",
+    "maintain",
     "scan_interrupted",
 ]
 
@@ -274,9 +275,23 @@ class RunIndex:
             return False
         return True
 
-    def rebuild(self, *, max_files: int = 200) -> dict[str, RunRecord]:
-        """Reconstruit l'état de chaque trace présente, si l'index manque."""
-        latest = self.entries()
+    def rebuild(
+        self, *, max_files: int = 200, reset: bool = False
+    ) -> dict[str, RunRecord]:
+        """Reconstruit l'état de chaque trace présente, si l'index manque.
+
+        `reset=True` repart de zéro : l'index est un cache, le supprimer puis
+        le regarnir depuis les fichiers est la maintenance demandée.
+        """
+        latest: dict[str, RunRecord] = {}
+        if reset:
+            try:
+                self.path.unlink(missing_ok=True)
+            except OSError:
+                logger.debug("index non supprimé pour reconstruction", exc_info=True)
+                return self.entries()
+        else:
+            latest = self.entries()
         try:
             files = sorted(
                 (
@@ -392,6 +407,41 @@ def _tail_is_terminal(path: Path) -> bool:
     except OSError:
         return True  # illisible : ne pas inventer un run interrompu
     return '"run_finished"' in tail or '"trace_truncated"' in tail
+
+
+def maintain(
+    directory: Path | str, *, rebuild: bool = False, max_files: int = 200
+) -> list[dict[str, Any]]:
+    """Compacte ou reconstruit les index d'un dossier et de ses sous-dossiers.
+
+    Chaque espace de travail (`trace.per_workspace`) possède son propre index :
+    les deux niveaux sont traités, sinon une maintenance manuelle laisserait
+    les sous-dossiers intacts.
+    """
+    root = Path(directory)
+    targets = [root]
+    try:
+        targets += sorted({path.parent for path in root.glob(f"*/{INDEX_NAME}")})
+    except OSError:
+        pass
+    report: list[dict[str, Any]] = []
+    for target in targets:
+        index = RunIndex(target)
+        if rebuild:
+            entries = index.rebuild(max_files=max_files, reset=True)
+            action = "rebuild"
+        else:
+            changed = index.compact()
+            entries = index.entries()
+            action = "compact" if changed else "unchanged"
+        report.append(
+            {
+                "directory": str(target),
+                "action": action,
+                "runs": len(entries),
+            }
+        )
+    return report
 
 
 def scan_interrupted(

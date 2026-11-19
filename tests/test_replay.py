@@ -14,9 +14,11 @@ from core.replay import (
     TraceReplayLLM,
     export_bundle,
     format_run,
+    main,
     manifest_diff,
     replay,
 )
+from core.run_index import RunIndex
 from core.tool_registry import ToolRegistry
 from core.trace import RunTrace, TraceFormatError, read_events, read_trace
 from tools.base import FunctionTool, object_schema, param
@@ -69,6 +71,67 @@ def _record_a_run(tmp: Path) -> tuple[str, Path]:
         trace.close()
     assert trace.path is not None
     return core.run_id, trace.path
+
+
+def _manifest_line(run_id: str, model: str = "m") -> str:
+    return json.dumps(
+        {
+            "run_id": run_id,
+            "type": "run_started",
+            "seq": 1,
+            "payload": {
+                "model": model,
+                "app_version": "1.0.0",
+                "workspace": "",
+                "trace_format": 3,
+            },
+        },
+        ensure_ascii=False,
+    ) + "\n"
+
+
+def test_index_maintenance_compacts_and_rebuilds_on_demand() -> None:
+    with tmpdir("maintenance-index") as tmp:
+        directory = Path(tmp) / "runs"
+        directory.mkdir()
+        (directory / "garde.jsonl").write_text(
+            _manifest_line("garde"), encoding="utf-8"
+        )
+        index = RunIndex(directory)
+        index.mark("garde", "started", manifest={"model": "m", "app_version": "1.0"})
+        index.mark("garde", "finished", ok=True)
+        index.mark("garde", "started")
+        index.mark("garde", "finished", ok=True)
+        index.mark("disparu", "started")
+        assert len(index.path.read_text(encoding="utf-8").splitlines()) == 5
+
+        # Un sous-dossier (trace.per_workspace) a son propre index.
+        sub = directory / "espace-abc"
+        sub.mkdir()
+        sub_index = RunIndex(sub)
+        sub_index.mark("orphelin", "started")
+
+        assert main(["--index-compact", str(directory)]) == 0
+
+        lines = index.path.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 1, f"index non compacté : {len(lines)} lignes"
+        entries = index.entries()
+        assert set(entries) == {"garde"}
+        assert entries["garde"].state == "finished"
+        assert entries["garde"].model == "m"
+        assert sub_index.path.exists() and sub_index.entries() == {}, (
+            "le sous-dossier doit être traité aussi"
+        )
+
+        # Reconstruction : l'index est un cache, on repart des fichiers.
+        index.path.write_text("bruit illisible\n", encoding="utf-8")
+        assert main(["--index-rebuild", str(directory)]) == 0
+
+        rebuilt = index.entries()
+        assert set(rebuilt) == {"garde"}
+        assert rebuilt["garde"].model == "m"
+        assert rebuilt["garde"].detail == "reconstruit depuis le fichier"
+        assert rebuilt["garde"].path == str(directory / "garde.jsonl")
 
 
 def test_replay_rebuilds_a_run_from_its_trace() -> None:

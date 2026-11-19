@@ -10,6 +10,8 @@ si le rejeu ne retrouve pas les faits, la trace a un problème.
     python -m core.replay <trace> --check          # vérifie le format
     python -m core.replay <trace> --diff autre.jsonl
     python -m core.replay <trace> --export rapport.json
+    python -m core.replay --index-compact [dossier]
+    python -m core.replay --index-rebuild [dossier]
 
 `TraceReplayLLM` réinjecte les réponses du modèle lues dans une trace : la
 boucle ReAct peut alors être exercée hors-ligne, sur un scénario réel, sans
@@ -31,6 +33,7 @@ from config import TRACE_FORMAT_VERSION
 from core.events import EventType
 from core.llm_client import LLMResponse
 from core.react_parser import ParsedToolCall
+from core.run_index import maintain
 from core.trace import TraceReadReport, read_trace
 from core.trace_crypto import KEY_ENV, TraceKeyError, optional_key
 
@@ -448,12 +451,24 @@ def _llm_script(path: Path, *, key: bytes | None = None) -> list[dict[str, Any]]
     return [steps[index] for index in sorted(steps)]
 
 
+def _default_runs_dir() -> Path:
+    """Dossier de traces de la configuration courante."""
+    from config import Settings
+
+    return Settings.load(strict=False).paths.log_dir / "runs"
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m core.replay",
         description="Rejoue une trace d'execution sans agent ni reseau.",
     )
-    parser.add_argument("trace", type=Path, help="fichier .jsonl ou .jsonl.gz")
+    parser.add_argument(
+        "trace",
+        type=Path,
+        nargs="?",
+        help="fichier .jsonl ou .jsonl.gz",
+    )
     parser.add_argument("--json", action="store_true", help="sortie JSON")
     parser.add_argument(
         "--strict",
@@ -483,9 +498,43 @@ def main(argv: Sequence[str] | None = None) -> int:
         metavar="NOM",
         help=f"variable contenant la cle des traces chiffrees (defaut : {KEY_ENV})",
     )
+    maintenance = parser.add_mutually_exclusive_group()
+    maintenance.add_argument(
+        "--index-compact",
+        nargs="?",
+        const="",
+        metavar="DOSSIER",
+        help="compacte runs.index (dossier par defaut : celui des traces)",
+    )
+    maintenance.add_argument(
+        "--index-rebuild",
+        nargs="?",
+        const="",
+        metavar="DOSSIER",
+        help="reconstruit runs.index depuis les traces presentes",
+    )
     args = parser.parse_args(argv)
 
+    if args.index_compact is not None or args.index_rebuild is not None:
+        rebuild = args.index_rebuild is not None
+        chosen = args.index_rebuild if rebuild else args.index_compact
+        directory = Path(chosen) if chosen else _default_runs_dir()
+        if not directory.is_dir():
+            print(f"Dossier de traces introuvable : {directory}", file=sys.stderr)
+            return 2
+        for item in maintain(directory, rebuild=rebuild):
+            print(
+                f"{str(item['action']).ljust(9)} {item['runs']} run(s)  {item['directory']}"
+            )
+        return 0
+
     path = args.trace
+    if path is None:
+        print(
+            "Trace manquante : indiquez un fichier, ou --index-compact/--index-rebuild",
+            file=sys.stderr,
+        )
+        return 2
     if not path.is_file():
         print(f"Trace introuvable : {path}", file=sys.stderr)
         return 2
