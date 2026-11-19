@@ -129,15 +129,35 @@ def _traces() -> set[Path]:
     }
 
 
+def _decode(data: bytes) -> str:
+    """Décode la sortie de l'exe sans dépendre de la locale du parent.
+
+    L'exe écrit dans l'encodage de la console Windows (cp1252 : `•` en 0x95),
+    tandis que la CI force `PYTHONUTF8=1` côté harnais : décoder en UTF-8 tue
+    le thread de lecture et rend `stdout` à `None`.
+    """
+    for encoding in ("utf-8", "cp1252"):
+        try:
+            return data.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return data.decode("utf-8", errors="replace")
+
+
 def _run_exe(exe: Path, config: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
     env = {**os.environ, "OMNI_SMOKE_KEY": "smoke"}
-    return subprocess.run(
+    proc = subprocess.run(
         [str(exe), "--config", str(config), *arguments],
         cwd=str(ROOT),
         env=env,
         capture_output=True,
-        text=True,
         timeout=240,
+    )
+    return subprocess.CompletedProcess(
+        proc.args,
+        proc.returncode,
+        stdout=_decode(proc.stdout or b""),
+        stderr=_decode(proc.stderr or b""),
     )
 
 
