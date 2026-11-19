@@ -133,10 +133,12 @@ class ToolRegistry:
         restaure le confirmateur de l'interface : l'utilisateur ne doit pas
         hériter d'un refus silencieux après l'arrêt.
         """
+        from core.approval import decision_from_confirm
+
         previous = self._confirm
         self._confirm = confirm
         if self._approval is not None:
-            self._approval.decide = confirm
+            self._approval.decide = decision_from_confirm(confirm)
         return previous
 
     def set_approval(self, approval: "ApprovalGate | None") -> "ApprovalGate | None":

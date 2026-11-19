@@ -134,7 +134,9 @@ contenu de fichier ni secret.
 Mode dans `config.json` : `approvals.mode` = `dangerous` (défaut, seuls les
 outils destructeurs), `write` (toute écriture), `all` ou `none` ;
 `approvals.session_grants` désactive l'autorisation de session. En CLI, un
-confirmateur booléen vaut « une fois » ; le mode autonome continue de refuser
+confirmateur booléen est adapté une fois à la construction (`decision_from_confirm`)
+puis vaut « une fois » ; la porte n'appelle plus que `decide(request)`. Le mode
+autonome continue de refuser
 les outils dangereux sans règle de politique.
 
 ## Budget global

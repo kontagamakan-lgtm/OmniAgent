@@ -39,6 +39,7 @@ __all__ = [
     "approval_log_path",
     "build_approval_gate",
     "build_preview",
+    "decision_from_confirm",
     "preview_for",
 ]
 
@@ -184,7 +185,11 @@ def _compact(arguments: Mapping[str, Any]) -> str:
 
 @dataclass(slots=True)
 class ApprovalRequest:
-    """Ce que l'utilisateur doit voir et décider."""
+    """Ce que l'utilisateur doit voir et décider.
+
+    `tool_object` et `arguments` servent uniquement à l'adaptateur du
+    confirmateur historique ; ils ne sont jamais journalisés ni affichés.
+    """
 
     tool: str
     scope: str
@@ -192,6 +197,10 @@ class ApprovalRequest:
     preview: str
     arguments_digest: str = ""
     dangerous: bool = False
+    tool_object: Tool | None = field(default=None, repr=False, compare=False)
+    arguments: Mapping[str, Any] = field(
+        default_factory=dict, repr=False, compare=False
+    )
 
     def format(self) -> str:
         return f"{self.tool} ({self.scope}, {self.effect})\n\n{self.preview}"
@@ -234,6 +243,8 @@ class ApprovalGate:
             preview=preview_for(name, arguments)[:_PREVIEW_MAX],
             arguments_digest=_digest(arguments),
             dangerous=bool(getattr(tool, "dangerous", False)),
+            tool_object=tool,
+            arguments=dict(arguments),
         )
 
     def authorize(self, tool: Tool, arguments: Mapping[str, Any]) -> tuple[bool, str]:
@@ -246,14 +257,7 @@ class ApprovalGate:
             self._journal(request, DENY, "aucun decideur")
             return False, "confirmation requise : aucun decideur disponible"
         try:
-            # Deux signatures vivent encore : `(request)` pour l'interface et
-            # `(tool, arguments)` pour le confirmateur historique et l'autonomie.
-            arity = _positional_arity(self.decide)
-            answer = (
-                self.decide(request)
-                if arity <= 1
-                else self.decide(tool, arguments)
-            )
+            answer = self.decide(request)
         except Exception:  # noqa: BLE001 - un decideur defaillant refuse
             logger.exception("approbation impossible pour %s", name)
             self._journal(request, DENY, "decideur en echec")
@@ -309,20 +313,22 @@ def build_approval_gate(
     )
 
 
-def _positional_arity(callback: Callable[..., Any]) -> int:
-    """Nombre de paramètres positionnels, pour choisir la signature d'appel."""
-    import inspect
+def decision_from_confirm(
+    confirm: Callable[[Tool, Mapping[str, Any]], bool] | None,
+) -> Callable[[ApprovalRequest], bool] | None:
+    """Adapte une fois le confirmateur historique `(tool, arguments) -> bool`.
 
-    try:
-        parameters = inspect.signature(callback).parameters
-    except (TypeError, ValueError):  # pragma: no cover - callable exotique
-        return 1
-    return sum(
-        1
-        for parameter in parameters.values()
-        if parameter.kind
-        in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
-    )
+    La porte n'appelle plus que `decide(request)` ; ce pont est posé à la
+    construction (ou lors d'un `set_confirm`), jamais choisi par introspection
+    au moment de l'appel.
+    """
+    if confirm is None:
+        return None
+
+    def decide(request: ApprovalRequest) -> bool:
+        return bool(confirm(request.tool_object, request.arguments))
+
+    return decide
 
 
 def _normalize(answer: str | bool) -> str:

@@ -26,7 +26,7 @@ from config import APP_ID, Settings
 from core.agent_core import AgentCore
 from core.events import EventBus
 from core.llm_client import LLMClient
-from core.approval import build_approval_gate
+from core.approval import build_approval_gate, decision_from_confirm
 from core.budget import build_budget_recorder
 from core.metrics import build_metrics
 from core.profile import apply_profile, build_network_guard, resolve_profile
@@ -193,8 +193,9 @@ def build_agent(
     # Profil de capacités : les outils hors profil ne sont ni proposés au
     # modèle ni exécutables.
     tools = apply_profile(tools, run_profile)
-    # Confirmateur historique (booléen) : une approbation vaut « une fois ».
-    approval = build_approval_gate(settings, confirm)
+    # Confirmateur historique adapté ici, une fois : la porte ne connaît plus
+    # que `decide(request)`, et une approbation booléenne vaut « une fois ».
+    approval = build_approval_gate(settings, decision_from_confirm(confirm))
     registry = ToolRegistry(
         tools,
         max_output_chars=settings.agent.tool_output_max_chars,
