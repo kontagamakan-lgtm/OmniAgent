@@ -38,6 +38,7 @@ from config import APP_ID
 from core.fingerprint import MISSING, MODIFIED, compare_fingerprint, drift_label
 from core.replay import ReplayRun, replay
 from core.tool_registry import ToolRegistry
+from tools.capabilities import CAPABILITIES
 
 __all__ = [
     "READ_ONLY_TOOLS",
@@ -53,34 +54,13 @@ __all__ = [
 
 logger = logging.getLogger(f"{APP_ID}.resume")
 
-#: Liste blanche du rejeu. Un outil doit y figurer **et** être déclaré
-#: `read_only` dans le registre : un outil ajouté plus tard est donc refusé par
-#: défaut, jamais exécuté parce que son drapeau par défaut est permissif.
+#: Liste blanche du rejeu, **dérivée** du manifeste `tools.capabilities`.
+#: Elle n'est plus recopiée à la main : c'est cette duplication qui avait laissé
+#: `fs_read` (nom disparu) dans l'ancienne liste. Un outil nouveau n'y entre que
+#: si sa classification déclare explicitement `replay=True`, en lecture, sans
+#: danger ni secret ; sinon il est refusé, jamais exécuté par défaut.
 READ_ONLY_TOOLS = frozenset(
-    {
-        "fs_read_text",
-        "fs_list",
-        "fs_search",
-        "fs_info",
-        "fs_hash",
-        "fs_disk_usage",
-        "fs_find_duplicates",
-        "web_search",
-        "web_fetch",
-        "web_deep_research",
-        "web_search_and_fetch",
-        "doc_index_search",
-        "doc_index_stats",
-        "ocr_image",
-        "ocr_status",
-        "shell_status",
-        "vault_get_entry",
-        "vault_list_entries",
-        "vault_services",
-        "vault_status",
-        "vault_totp",
-        "vault_generate_password",
-    }
+    name for name, capabilities in CAPABILITIES.items() if capabilities.replayable
 )
 
 
@@ -203,8 +183,22 @@ def replay_read_only(plan: ResumePlan, registry: ToolRegistry) -> ResumeReplay:
                 )
             )
             continue
+        try:
+            declared = CAPABILITIES[call.tool]
+        except KeyError:
+            # Le registre peut contenir un outil de test non classé : le rejeu
+            # ne s'appuie pas sur son drapeau, mais sur le manifeste.
+            outcome.observations.append(
+                ReplayObservation(
+                    step=call.step,
+                    tool=call.tool,
+                    refused="outil non classe : rejeu non autorise",
+                )
+            )
+            continue
         if (
-            call.tool not in READ_ONLY_TOOLS
+            not declared.replayable
+            or call.tool not in READ_ONLY_TOOLS
             or not bool(getattr(tool, "read_only", False))
             or bool(getattr(tool, "dangerous", False))
         ):

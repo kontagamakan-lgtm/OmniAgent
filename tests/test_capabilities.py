@@ -17,9 +17,13 @@ from tools.base import FunctionTool  # noqa: E402
 from tools.browser_agent import BrowserAgent, build_browser_tools  # noqa: E402
 from tools.capabilities import (  # noqa: E402
     CAPABILITIES,
+    SCOPES,
     ToolContractError,
     assert_capabilities,
     capabilities_for,
+    dangerous_tools,
+    describe_table,
+    replayable_tools,
     validate_capabilities,
 )
 from tools.doc_index import DocIndex, build_doc_tools  # noqa: E402
@@ -138,3 +142,35 @@ def test_resume_whitelist_matches_the_contract() -> None:
         capabilities = capabilities_for(name)
         assert capabilities.read_only, name
         assert not capabilities.dangerous, name
+
+
+def test_replay_whitelist_is_derived_and_has_no_stale_name() -> None:
+    assert replayable_tools() == READ_ONLY_TOOLS
+    # Le nom disparu qui motivait ce contrat ne doit jamais revenir.
+    assert "fs_read" not in READ_ONLY_TOOLS
+    assert "fs_read" not in CAPABILITIES
+    for name in READ_ONLY_TOOLS:
+        assert CAPABILITIES[name].replayable, name
+        assert not CAPABILITIES[name].sensitive, name
+    # Un outil d'écriture ne peut pas être rejoué, même s'il se dit sans danger.
+    assert not replayable_tools() & {n for n, c in CAPABILITIES.items() if c.writes}
+    assert dangerous_tools() == {"fs_delete", "vault_delete_entry", "shell_run"}
+
+
+def test_scopes_and_network_are_declared_for_every_tool() -> None:
+    assert {caps.scope for caps in CAPABILITIES.values()} <= SCOPES
+    assert {caps.scope for caps in CAPABILITIES.values()} == SCOPES
+    network = {name for name, caps in CAPABILITIES.items() if caps.network}
+    assert "web_search" in network and "browser_open" in network
+    assert not any(name.startswith("fs_") for name in network)
+    # La portée distingue ce que l'interface doit montrer avant confirmation.
+    assert CAPABILITIES["shell_run"].scope == "shell"
+    assert CAPABILITIES["vault_add_entry"].scope == "vault"
+
+
+def test_documentation_table_covers_every_classified_tool() -> None:
+    table = describe_table()
+    assert table.startswith("| Outil |")
+    for name in CAPABILITIES:
+        assert f"`{name}`" in table
+    assert "fs_delete" in table and "oui" in table
