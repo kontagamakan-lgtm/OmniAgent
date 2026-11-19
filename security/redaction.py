@@ -40,7 +40,8 @@ SECRET_KEY_NAMES: frozenset[str] = frozenset(
         "cookie", "cookies", "set-cookie", "session", "sessionid",
         "csrf", "csrf_token", "xsrf", "xsrf_token",
         "totp_secret", "otp_secret", "mfa_secret", "recovery_code",
-        "connection_string", "dsn", "passphrase", "master_key",
+        "connection_string", "dsn", "passphrase", "credential", "credentials",
+        "master_key",
         "access_key", "secret_access_key", "sas_token",
     }
 )
