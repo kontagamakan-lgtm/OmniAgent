@@ -139,6 +139,8 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             self.controller = AgentController(bundle.agent)
             self._pump_id: str | None = None
             self._step = 0
+            #: Dernier run tracé : support du bouton « Annuler ce run ».
+            self._last_run_id = ""
             self._reported = False
             self._streaming = False
             # Session autonome : le thread de travail n'écrit jamais dans Tk, il
@@ -222,6 +224,11 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 actions, text="Annuler", command=self._cancel, state="disabled"
             )
             self.cancel_button.pack(fill="x")
+            # Retour arrière d'un run : aperçu du journal puis application.
+            self.undo_button = ctk.CTkButton(
+                actions, text="Annuler ce run", width=110, command=self._undo_last_run
+            )
+            self.undo_button.pack(fill="x", pady=(6, 0))
             ctk.CTkButton(
                 actions, text="Traces", width=110, command=self._open_traces
             ).pack(fill="x", pady=(6, 0))
@@ -367,6 +374,37 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
         def _cancel(self) -> None:
             self.controller.cancel()
             self._set_status("arrêt demandé…")
+
+        def _undo_last_run(self) -> None:
+            """Aperçu du journal, puis annulation du dernier run après accord."""
+            from tkinter import messagebox
+
+            from core.file_tx import undo_run
+
+            run_id = str(getattr(self, "_last_run_id", "") or "")
+            if not run_id:
+                self._set_status("aucun run à annuler dans cette session")
+                return
+            preview = undo_run(self.settings, run_id, apply=False)
+            if preview is None:
+                self._set_status(f"transaction introuvable : {run_id}")
+                return
+            if not preview.steps:
+                self._set_status(f"run {run_id} : aucune écriture à annuler")
+                return
+            if not messagebox.askyesno(
+                "Annuler ce run",
+                preview.format()[:1800] + "\n\nAppliquer cette annulation ?",
+            ):
+                self._set_status("annulation abandonnée (aperçu seulement)")
+                return
+            report = undo_run(self.settings, run_id, apply=True)
+            if report is None:
+                self._set_status(f"transaction introuvable : {run_id}")
+                return
+            kind = "système" if report.ok else "erreur"
+            self._append(kind, report.format())
+            self._set_status("annulation appliquée" if report.ok else "annulation incomplète")
 
         def _emergency_stop(self) -> None:
             """Écrit STOP et annule tout run, sans dépendre de la session."""
@@ -1020,6 +1058,8 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
 
         def _render(self, event: Event) -> None:
             payload: dict[str, Any] = event.payload if isinstance(event.payload, dict) else {}
+            if event.type == EventType.RUN_STARTED and event.run_id:
+                self._last_run_id = event.run_id
             if event.type == EventType.STEP_STARTED:
                 self._step = int(payload.get("index", self._step + 1) or 1)
                 self._set_status(

@@ -151,6 +151,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="exécute réellement --restore après vérification",
     )
     parser.add_argument(
+        "--restore-drill",
+        metavar="FICHIER",
+        help="restaure une sauvegarde dans un dossier jetable, vérifie, puis supprime",
+    )
+    parser.add_argument(
+        "--undo-run",
+        metavar="RUN",
+        help="annule les fichiers écrits par un run (aperçu sans --undo-apply)",
+    )
+    parser.add_argument(
+        "--undo-apply",
+        action="store_true",
+        help="avec --undo-run : applique réellement l'annulation",
+    )
+    parser.add_argument(
         "--metrics",
         action="store_true",
         help="affiche l'agrégat des métriques par run, puis quitte",
@@ -1080,6 +1095,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _restore(settings, args.restore, apply=args.apply_restore)
     if args.apply_restore:
         print("--apply-restore exige --restore FICHIER", file=sys.stderr)
+        return 2
+
+    if args.restore_drill:
+        from core.restore_drill import drill_archive
+
+        report = drill_archive(settings, args.restore_drill)
+        print(report.format())
+        return 0 if report.ok else 1
+
+    if args.undo_run:
+        from core.file_tx import undo_run
+
+        report = undo_run(settings, args.undo_run, apply=args.undo_apply)
+        if report is None:
+            print(f"Transaction introuvable : {args.undo_run}", file=sys.stderr)
+            return 2
+        print(report.format())
+        return 0 if report.ok else 1
+    if args.undo_apply:
+        print("--undo-apply exige --undo-run RUN", file=sys.stderr)
         return 2
 
     if args.metrics:
