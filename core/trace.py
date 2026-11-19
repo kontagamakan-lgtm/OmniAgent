@@ -325,6 +325,11 @@ class RunTrace:
         if event.type == EventType.RUN_FINISHED:
             self._index_finish(event.payload)
             self.close(finished=True)
+            if self.index:
+                # Après une exécution terminée, l'index ne doit pas garder
+                # `started` + `finished` : une installation inactive n'ouvrira
+                # peut-être plus de run pour le compacter.
+                RunIndex(self.directory).compact()
 
     # -- contenu ------------------------------------------------------------
 

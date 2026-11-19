@@ -504,6 +504,12 @@ def test_a_finished_run_is_archived_at_close() -> None:
         records = list(read_events(trace.path))
         assert records[-1]["type"] == EventType.RUN_FINISHED
 
+        index = RunIndex(directory)
+        assert len(index.path.read_text(encoding="utf-8").splitlines()) == 1, (
+            "l'archivage à la fermeture ne doit pas laisser deux lignes"
+        )
+        assert index.entries()["fin"].path == str(trace.path)
+
 
 def test_run_index_records_started_and_finished_states() -> None:
     with tmpdir("index") as tmp:
@@ -615,7 +621,37 @@ def test_retention_keeps_the_index_bounded_to_present_traces() -> None:
 
         assert present == {"r4"}, "la rétention ne garde qu'une trace"
         assert set(entries) == present, "l'index ne garde pas les runs purgés"
-        assert len(index.path.read_text(encoding="utf-8").splitlines()) == 2
+        assert len(index.path.read_text(encoding="utf-8").splitlines()) == 1
+
+
+def test_a_finished_run_leaves_a_single_line_in_the_index() -> None:
+    with tmpdir("index-fin") as tmp:
+        directory = Path(tmp) / "runs"
+        trace = RunTrace(directory)
+        trace(
+            Event(
+                type=EventType.RUN_STARTED,
+                run_id="seul",
+                payload={"model": "m", "trace_format": 3},
+                seq=1,
+            )
+        )
+        trace(
+            Event(
+                type=EventType.RUN_FINISHED,
+                run_id="seul",
+                payload={"ok": True, "stop_reason": "final"},
+                seq=2,
+            )
+        )
+
+        index = RunIndex(directory)
+        lines = index.path.read_text(encoding="utf-8").splitlines()
+
+        assert len(lines) == 1, f"index non compacté après la fin : {len(lines)} lignes"
+        entry = index.entries()["seul"]
+        assert entry.state == "finished" and entry.model == "m"
+        assert trace.path is not None and entry.bytes == trace.path.stat().st_size
 
 
 def test_a_killed_run_is_marked_interrupted_by_the_next_one() -> None:
