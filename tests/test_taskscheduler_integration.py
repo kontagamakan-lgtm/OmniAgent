@@ -1,9 +1,31 @@
 """Test d'intégration Windows du Planificateur : opt-in, réel, nettoyant.
 
 Rien n'est enregistré par la suite normale : ce module est entièrement ignoré
-tant que `OMNIAGENT_TASK_INTEGRATION` ne vaut pas exactement `1` sous Windows.
-Quand il est autorisé, il enregistre une tâche au nom unique, vérifie la
-définition relue par `schtasks`, puis la désinscrit et contrôle sa disparition.
+tant que `FREEBUFF_SCHTASKS_INTEGRATION` ne vaut pas exactement `1` sous
+Windows. Pour l'activer sur Windows :
+
+    PowerShell
+    $env:FREEBUFF_SCHTASKS_INTEGRATION = "1"
+    python -m pytest tests/test_taskscheduler_integration.py -q
+
+    Invite de commandes
+    set FREEBUFF_SCHTASKS_INTEGRATION=1
+    python -m pytest tests/test_taskscheduler_integration.py -q
+
+Quand il est autorisé, il appelle le vrai `install_task()` (sans runner
+injecté), laisse `install_task()` écrire le XML puis exécuter le binaire
+`schtasks.exe`, relit la définition avec `schtasks /Query /XML`, et appelle
+`uninstall_task()` dans un `try/finally` avant de vérifier que la tâche a
+disparu. Cela prouve le chemin réel : création par le Planificateur Windows,
+contenu enregistré et suppression. Les tests de
+`tests/test_taskscheduler_subprocess.py` prouvent seulement que le code appelle
+un exécutable `schtasks` (factice, via `PATH`) avec les bons arguments et
+propage son code retour ; ils ne prouvent pas qu'une tâche Windows est
+réellement enregistrée.
+
+Après le test, vérifier qu'aucune tâche jetable ne reste :
+
+    schtasks /Query /FO TABLE | findstr /I "OmniAgent - Test integration"
 """
 
 from __future__ import annotations
@@ -25,8 +47,8 @@ import core.taskscheduler as tasks  # noqa: E402
 pytestmark = pytest.mark.skipif(
     not tasks.integration_enabled(),
     reason=(
-        "integration Windows opt-in : definir "
-        f"{tasks.INTEGRATION_ENV}=1 pour enregistrer une vraie tache"
+        "test d'integration schtasks opt-in : definir "
+        f"{tasks.INTEGRATION_ENV}=1 sous Windows pour enregistrer une vraie tache"
     ),
 )
 
@@ -53,13 +75,17 @@ def test_real_registration_definition_then_removal() -> None:
     name = f"OmniAgent - Test integration {uuid.uuid4().hex[:8]}"
     with tmpdir("tache-integration") as tmp:
         settings = make_settings(tmp)
-        ok, message = tasks.install_task(
-            settings, user=os.environ.get("USERNAME", ""), name=name
-        )
-        if not ok:
-            pytest.fail(f"enregistrement refuse par le Planificateur : {message}")
-
+        attempted = False
+        installed = False
         try:
+            attempted = True
+            ok, message = tasks.install_task(
+                settings, user=os.environ.get("USERNAME", ""), name=name
+            )
+            if not ok:
+                pytest.fail(f"enregistrement refuse par le Planificateur : {message}")
+            installed = True
+
             query = _schtasks("/Query", "/TN", name, "/XML")
             assert query.returncode == 0, _text(query.stderr)
             definition = _text(query.stdout)
@@ -74,8 +100,12 @@ def test_real_registration_definition_then_removal() -> None:
             assert "--autonomy-schedule --schedule-checks 1" in definition
             assert Path(sys.executable).name in definition
         finally:
-            removed, removal_message = tasks.uninstall_task(name=name)
+            # Nettoyage garanti dès que l'enregistrement a été accepté ; le
+            # finally couvre aussi une erreur de relecture ou d'assertion.
+            if attempted:
+                removed, removal_message = tasks.uninstall_task(name=name)
+                if installed:
+                    assert removed is True, removal_message
 
-        assert removed is True, removal_message
         gone = _schtasks("/Query", "/TN", name)
         assert gone.returncode != 0, "la tache de test doit avoir disparu"

@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timedelta
@@ -57,7 +58,7 @@ TASK_DESCRIPTION = (
 )
 # Le test d'intégration n'enregistre une vraie tâche que si cette variable vaut
 # exactement "1" ; la suite normale ne touche jamais au Planificateur.
-INTEGRATION_ENV = "OMNIAGENT_TASK_INTEGRATION"
+INTEGRATION_ENV = "FREEBUFF_SCHTASKS_INTEGRATION"
 
 Runner = Callable[[list[str]], Any]
 _XML_HEADER = '<?xml version="1.0" encoding="UTF-16"?>'
@@ -187,8 +188,15 @@ def build_task_xml(
 
 
 def _run(args: list[str]) -> Any:
+    # Résoudre explicitement via PATH : c'est ce qui rend le chemin testable
+    # avec un faux `schtasks` en tête de PATH, sous Windows comme ailleurs.
+    executable = shutil.which(args[0]) or args[0]
     return subprocess.run(
-        args, capture_output=True, text=True, timeout=30, check=False
+        [executable, *args[1:]],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
     )
 
 

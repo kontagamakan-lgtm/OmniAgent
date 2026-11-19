@@ -70,11 +70,27 @@ explicite, et sous un autre système que Windows les deux commandes refusent
 sans rien exécuter.
 
 Le test d'intégration réel est lui aussi opt-in : sous Windows, avec
-`OMNIAGENT_TASK_INTEGRATION=1`, `tests/test_taskscheduler_integration.py`
-enregistre une tâche à nom unique, relit sa définition via
-`schtasks /Query /XML`, puis la désinscrit et vérifie qu'elle a disparu. Sans
-cette variable (ou hors Windows), le test est ignoré et la suite ne touche
-jamais au Planificateur.
+`FREEBUFF_SCHTASKS_INTEGRATION=1`, `tests/test_taskscheduler_integration.py`
+enregistre une tâche à nom unique via le vrai `install_task()`, relit sa
+définition via `schtasks /Query /XML`, puis la désinscrit et vérifie qu'elle a
+disparu. Sans cette variable (ou hors Windows), le test est ignoré avec la
+raison explicite et la suite ne touche jamais au Planificateur. Le nettoyage
+est dans un `try/finally` : même si la vérification échoue, la tâche est
+désinscrite. Ce test a été exécuté explicitement sur cette machine le
+2026-11-19 avec `FREEBUFF_SCHTASKS_INTEGRATION=1` : **1 passed**, et la requête
+de contrôle n'a trouvé aucune tâche résiduelle. Il reste ignoré par défaut.
+
+```powershell
+$env:FREEBUFF_SCHTASKS_INTEGRATION = "1"
+python -m pytest tests/test_taskscheduler_integration.py -q
+# Vérifier ensuite qu'aucune tâche de test ne reste :
+schtasks /Query /FO TABLE | Select-String "OmniAgent - Test integration"
+```
+
+Le test factice `tests/test_taskscheduler_subprocess.py` s'exécute dans la
+suite normale, sans Windows : il place un faux `schtasks` en tête de `PATH`,
+vérifie les arguments exacts de création/suppression, le code retour et le
+message d'échec.
 `--schedule-checks` borne l'attente et sert aux essais. À la fin de chaque
 session, une toast Windows native est affichée (« OmniAgent — session
 planifiée ») via PowerShell/WinRT, sans paquet supplémentaire ;
