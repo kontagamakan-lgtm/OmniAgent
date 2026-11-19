@@ -50,6 +50,10 @@ class ToolRegistry:
         self._confirm = confirm
         self._network_guard = network_guard
         self._approval = approval
+        # Décideur propre à la porte (souvent la boîte de dialogue de
+        # l'interface), distinct du confirmateur historique que le mode
+        # autonome remplace puis restaure.
+        self._approval_decide = approval.decide if approval is not None else None
         self._calls: dict[str, int] = {}
         self._failures: dict[str, int] = {}
         self._total_ms: dict[str, float] = {}
@@ -131,20 +135,26 @@ class ToolRegistry:
 
         Le mode autonome refuse les outils dangereux pendant sa session, puis
         restaure le confirmateur de l'interface : l'utilisateur ne doit pas
-        hériter d'un refus silencieux après l'arrêt.
+        hériter d'un refus silencieux après l'arrêt. Restaurer `None` ne doit
+        pas non plus effacer le décideur propre à la porte d'approbation.
         """
         from core.approval import decision_from_confirm
 
         previous = self._confirm
         self._confirm = confirm
         if self._approval is not None:
-            self._approval.decide = decision_from_confirm(confirm)
+            self._approval.decide = (
+                decision_from_confirm(confirm)
+                if confirm is not None
+                else self._approval_decide
+            )
         return previous
 
     def set_approval(self, approval: "ApprovalGate | None") -> "ApprovalGate | None":
         """Installe la porte d'approbation (interface) et retourne la précédente."""
         previous = self._approval
         self._approval = approval
+        self._approval_decide = approval.decide if approval is not None else None
         return previous
 
     def _authorize(self, tool: Tool, arguments: Mapping[str, Any]) -> bool:

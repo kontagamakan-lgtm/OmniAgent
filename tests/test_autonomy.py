@@ -15,7 +15,10 @@ from core.autonomy import (
     journal_path,
     read_goals,
 )
+from core.approval import ApprovalGate
 from core.events import EventBus, EventType
+from core.tool_registry import ToolRegistry
+from tools.base import FunctionTool
 
 
 class _Reply:
@@ -36,6 +39,28 @@ class _Registry:
         previous = self.confirm
         self.confirm = confirm
         return previous
+
+
+class _ApprovalAgent:
+    """Agent réel minimal : dispatche un outil dangereux pendant chaque cycle."""
+
+    def __init__(self, registry: ToolRegistry) -> None:
+        self.registry = registry
+        self.tasks: list[str] = []
+        self.run_id = ""
+        self.result = None
+
+    def run(self, task: str) -> _Reply:
+        self.tasks.append(task)
+        self.run_id = f"run{len(self.tasks)}"
+        self.result = self.registry.dispatch("fs_delete", {"path": "test.txt"})
+        return _Reply()
+
+    def cancel(self) -> None:
+        return
+
+    def reset_cancel(self) -> None:
+        return
 
 
 class _Agent:
@@ -233,6 +258,49 @@ def test_a_tool_budget_cancels_the_run() -> None:
         assert agent.cancelled is True
         assert records[0]["budget"] == "tools"
         assert records[0]["tool_calls"] == 3
+
+
+def test_autonomy_restores_the_interface_approval_decider() -> None:
+    with tmpdir("autonomie-approbation-interface") as tmp:
+        settings = make_settings(tmp)
+        _write_goals(settings)
+        calls: list[str] = []
+        seen: list[str] = []
+
+        def ui_decider(request) -> str:
+            seen.append(request.tool)
+            return "once"
+
+        def delete(path: str = "") -> str:
+            calls.append(path)
+            return "supprime"
+
+        tool = FunctionTool(
+            "fs_delete",
+            "Supprime un fichier.",
+            {"type": "object", "properties": {"path": {"type": "string"}}},
+            delete,
+            dangerous=True,
+            read_only=False,
+        )
+        gate = ApprovalGate(decide=ui_decider, mode="dangerous", settings=settings)
+        # Même branchement que l'interface : la porte est installée après coup.
+        registry = ToolRegistry([tool])
+        registry.set_approval(gate)
+        agent = _ApprovalAgent(registry)
+
+        AutonomySession(settings, agent).run(cycles=1, interval_s=0)
+
+        assert agent.result is not None and agent.result.ok is False
+        assert agent.result.error_code == "confirmation_required"
+        assert calls == [], "l'outil dangereux reste refusé pendant la session"
+        assert gate.decide is ui_decider, (
+            "la restauration ne doit pas remettre gate.decide à None"
+        )
+
+        after = registry.dispatch("fs_delete", {"path": "test.txt"})
+        assert after.ok is True and calls == ["test.txt"]
+        assert seen == ["fs_delete"], "l'interface doit redemander après la session"
 
 
 def test_the_confirm_handler_is_restored_to_none() -> None:
