@@ -8,9 +8,11 @@ Le thread dédié possède sa propre boucle de messages Windows. Le callback est
 appelé **depuis ce thread** : il ne doit pas toucher Tk. L'interface y dépose
 seulement un signal dans une file, vidée par `_pump`.
 
-La combinaison est Ctrl+Alt+S. Si une autre application l'a déjà prise,
-`start()` retourne faux avec une raison ; l'application doit alors se rabattre
-sur le bouton et le raccourci de fenêtre, pas échouer au démarrage.
+La combinaison vient de `ui.emergency_hotkey` (`Ctrl+Alt+S` par défaut). Si une
+autre application l'a déjà prise, `start()` retourne faux avec une raison ;
+l'application doit alors se rabattre sur le bouton et le raccourci de fenêtre,
+pas échouer au démarrage. Une combinaison illisible ne lève pas non plus :
+`start()` échoue avec `error`.
 """
 
 from __future__ import annotations
@@ -21,18 +23,16 @@ import os
 import threading
 from collections.abc import Callable
 
-from config import APP_ID
+from config import APP_ID, DEFAULT_HOTKEY, HotkeySpec, parse_hotkey
 
-__all__ = ["HOTKEY_LABEL", "HotkeyListener"]
+__all__ = ["DEFAULT_HOTKEY", "HOTKEY_LABEL", "HotkeyListener"]
 
 logger = logging.getLogger(f"{APP_ID}.hotkey")
 
-HOTKEY_LABEL = "Ctrl+Alt+S"
+#: Libellé du raccourci par défaut, pour les messages qui n'ont pas d'instance.
+HOTKEY_LABEL = DEFAULT_HOTKEY
 _HOTKEY_ID = 0xB17
-_MOD_ALT = 0x0001
-_MOD_CONTROL = 0x0002
 _MOD_NOREPEAT = 0x4000
-_VK_S = 0x53
 _WM_HOTKEY = 0x0312
 _WM_QUIT = 0x0012
 
@@ -56,9 +56,9 @@ class _MSG(ctypes.Structure):
 
 
 class HotkeyListener:
-    """Enregistre Ctrl+Alt+S globalement et appelle `callback` à la pression."""
+    """Enregistre `hotkey` globalement et appelle `callback` à la pression."""
 
-    def __init__(self) -> None:
+    def __init__(self, hotkey: str = DEFAULT_HOTKEY) -> None:
         self._callback: Callable[[], None] | None = None
         self._thread: threading.Thread | None = None
         self._thread_id = 0
@@ -66,6 +66,17 @@ class HotkeyListener:
         self._lock = threading.Lock()
         self.error = ""
         self._registered = False
+        self._spec: HotkeySpec | None = None
+        try:
+            self._spec = parse_hotkey(hotkey)
+        except ValueError as exc:
+            self.error = f"raccourci invalide : {exc}"
+
+    @property
+    def label(self) -> str:
+        """Libellé canonique de la combinaison, vide si elle est illisible."""
+        spec = self._spec
+        return spec.label if spec is not None else ""
 
     @property
     def running(self) -> bool:
@@ -74,13 +85,16 @@ class HotkeyListener:
 
     def _register_native(self) -> bool:
         """Réserve la combinaison ; séparé pour être simulable en test."""
+        spec = self._spec
+        if spec is None:
+            return False
         user32 = ctypes.windll.user32
         return bool(
             user32.RegisterHotKey(
                 None,
                 _HOTKEY_ID,
-                _MOD_CONTROL | _MOD_ALT | _MOD_NOREPEAT,
-                _VK_S,
+                spec.modifiers | _MOD_NOREPEAT,
+                spec.key,
             )
         )
 
@@ -101,7 +115,11 @@ class HotkeyListener:
             logger.exception("raccourci global : callback en échec")
 
     def start(self, callback: Callable[[], None]) -> bool:
-        """Démarre l'écoute ; faux si la plateforme ou une autre app refuse."""
+        """Démarre l'écoute ; faux si la combinaison ou la plateforme refuse."""
+        if self._spec is None:
+            if not self.error:
+                self.error = "raccourci global invalide"
+            return False
         if os.name != "nt":
             self.error = "raccourci global : Windows uniquement"
             return False
@@ -127,9 +145,7 @@ class HotkeyListener:
     def _loop(self) -> None:
         try:
             if not self._register_native():
-                self.error = (
-                    f"{HOTKEY_LABEL} déjà utilisé par une autre application"
-                )
+                self.error = f"{self.label} déjà utilisé par une autre application"
                 return
             self._registered = True
             self._thread_id = int(ctypes.windll.kernel32.GetCurrentThreadId())

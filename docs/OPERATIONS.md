@@ -73,9 +73,25 @@ Le fichier `data/autonomy/STOP` arrête toute session au prochain événement.
 Le bouton **Arrêt d'urgence** l'écrit et annule immédiatement un run en cours.
 **Ctrl+Alt+S est enregistré globalement** (`RegisterHotKey`) tant que
 l'application tourne : il fonctionne même quand une autre fenêtre a le focus.
+
+La combinaison se règle dans `ui.emergency_hotkey` (ou
+`OMNIAGENT_UI_EMERGENCY_HOTKEY`) ; `Ctrl+Alt+S` reste le défaut :
+
+```json
+{"ui": {"emergency_hotkey": "Ctrl+Shift+F9"}}
+```
+
+Un modificateur au moins est exigé (`Ctrl`, `Alt`, `Shift`, `Win`, alias
+`Control`/`Windows`), suivi d'une lettre, d'un chiffre ou d'une touche nommée
+(`F1`-`F24`, `Space`, `Tab`, `Enter`, `Esc`, `Delete`, `Insert`, `Home`,
+`End`, `PageUp`, `PageDown`, `Pause`, `PrintScreen`). Les alias et la casse
+sont normalisés : `alt+control+f9` devient `Ctrl+Alt+F9`. Une valeur invalide
+bloque le démarrage (`python config.py --validate`).
+
 Si une autre application possède déjà la combinaison, l'application le signale
-au démarrage et le raccourci de fenêtre reste disponible. Le fichier n'est
-jamais supprimé automatiquement : retirez-le avant de relancer une session.
+au démarrage avec le libellé exact et le raccourci de fenêtre reste
+disponible. Le fichier n'est jamais supprimé automatiquement : retirez-le avant
+de relancer une session.
 
 ## Reprise d'une trace interrompue
 

@@ -115,6 +115,26 @@ def test_validation_catches_incoherent_research_budget() -> None:
     assert "agent.deep_research_min_queries" in messages
 
 
+def test_validation_rejects_an_unusable_emergency_hotkey() -> None:
+    settings = config.Settings()
+    settings.ui.emergency_hotkey = "S"
+    messages = [i.field for i in settings.validate() if i.level == "error"]
+    assert "ui.emergency_hotkey" in messages
+
+
+def test_emergency_hotkey_is_serialised_and_overridable() -> None:
+    settings = config.Settings()
+    settings.ui.emergency_hotkey = "Ctrl+Shift+F9"
+    assert settings.to_dict()["ui"]["emergency_hotkey"] == "Ctrl+Shift+F9"
+    assert settings.summary()["ui"]["emergency_hotkey"] == "Ctrl+Shift+F9"
+
+    overridden = config.Settings()
+    config._apply_env_overrides(
+        overridden, {"OMNIAGENT_UI_EMERGENCY_HOTKEY": "Alt+Shift+K"}
+    )
+    assert overridden.ui.emergency_hotkey == "Alt+Shift+K"
+
+
 def test_unknown_keys_are_ignored() -> None:
     with tmpdir() as tmp:
         target = Path(tmp) / "config.json"

@@ -66,6 +66,10 @@ SEARCH_ENGINES = (
 
 LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 
+#: Raccourci global d'arrêt d'urgence. Ctrl+Alt+S peut déjà être réservé par
+#: une autre application : `ui.emergency_hotkey` permet de le remplacer.
+DEFAULT_HOTKEY = "Ctrl+Alt+S"
+
 #: Bornes par défaut de la rétention des traces. Elles vivent ici parce que
 #: `config.py` est la source unique des réglages ajustables.
 DEFAULT_TRACE_MAX_RUNS = 50
@@ -109,6 +113,105 @@ class ConfigError(Exception):
     def __init__(self, message: str, issues: list[ConfigIssue] | None = None) -> None:
         super().__init__(message)
         self.issues: list[ConfigIssue] = issues or []
+
+
+# ---------------------------------------------------------------------------
+# Raccourci global
+# ---------------------------------------------------------------------------
+
+#: Modificateurs Windows (`MOD_*`) reconnus dans un raccourci.
+_HOTKEY_MODIFIERS = {
+    "ctrl": 0x0002,
+    "control": 0x0002,
+    "alt": 0x0001,
+    "shift": 0x0004,
+    "win": 0x0008,
+    "windows": 0x0008,
+    "meta": 0x0008,
+}
+
+#: Ordre d'affichage canonique des modificateurs.
+_HOTKEY_MODIFIER_LABELS = (
+    (0x0002, "Ctrl"),
+    (0x0001, "Alt"),
+    (0x0004, "Shift"),
+    (0x0008, "Win"),
+)
+
+#: Touches nommées : code virtuel Windows et libellé canonique.
+_HOTKEY_KEYS = {
+    "space": (0x20, "Space"),
+    "tab": (0x09, "Tab"),
+    "enter": (0x0D, "Enter"),
+    "return": (0x0D, "Enter"),
+    "esc": (0x1B, "Esc"),
+    "escape": (0x1B, "Esc"),
+    "backspace": (0x08, "Backspace"),
+    "delete": (0x2E, "Delete"),
+    "insert": (0x2D, "Insert"),
+    "home": (0x24, "Home"),
+    "end": (0x23, "End"),
+    "pageup": (0x21, "PageUp"),
+    "pagedown": (0x22, "PageDown"),
+    "pause": (0x13, "Pause"),
+    "printscreen": (0x2C, "PrintScreen"),
+}
+_HOTKEY_KEYS.update({f"f{index}": (0x6F + index, f"F{index}") for index in range(1, 25)})
+
+
+class HotkeyError(ValueError):
+    """Raccourci global illisible ou inutilisable."""
+
+
+@dataclass(frozen=True, slots=True)
+class HotkeySpec:
+    """Combinaison décodée en modificateurs et code de touche Windows."""
+
+    modifiers: int
+    key: int
+    label: str
+
+
+def _hotkey_key(part: str, text: str) -> tuple[int, str]:
+    named = _HOTKEY_KEYS.get(part.lower())
+    if named is not None:
+        return named
+    if len(part) == 1 and part.isascii() and part.isalnum():
+        return ord(part.upper()), part.upper()
+    if part.lower() in _HOTKEY_MODIFIERS:
+        raise HotkeyError(f"touche manquante après '{part}' dans '{text}'")
+    raise HotkeyError(f"touche inconnue '{part}' dans '{text}'")
+
+
+def parse_hotkey(text: str) -> HotkeySpec:
+    """Décode ``Ctrl+Alt+S`` en codes natifs ; lève `HotkeyError` sinon.
+
+    Au moins un modificateur est exigé : capturer une touche nue au niveau du
+    système empêcherait de la taper dans n'importe quelle application. Les
+    alias (`Control`, `Windows`) et la casse sont normalisés, et le libellé
+    produit est toujours dans l'ordre Ctrl+Alt+Shift+Win+Touche.
+    """
+    if not isinstance(text, str) or not text.strip():
+        raise HotkeyError("raccourci vide")
+    parts = [part.strip() for part in text.split("+")]
+    if len(parts) < 2 or any(not part for part in parts):
+        raise HotkeyError(
+            f"raccourci '{text}' incomplet : modificateur et touche attendus"
+        )
+    *modifier_parts, key_part = parts
+    modifiers = 0
+    for part in modifier_parts:
+        bit = _HOTKEY_MODIFIERS.get(part.lower())
+        if bit is None:
+            raise HotkeyError(f"modificateur inconnu '{part}' dans '{text}'")
+        if modifiers & bit:
+            raise HotkeyError(f"modificateur répété '{part}' dans '{text}'")
+        modifiers |= bit
+    key, key_label = _hotkey_key(key_part, text)
+    names = [name for bit, name in _HOTKEY_MODIFIER_LABELS if modifiers & bit]
+    return HotkeySpec(
+        modifiers=modifiers, key=key, label="+".join([*names, key_label])
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -424,6 +527,8 @@ class UIConfig:
     show_reasoning: bool = False
     confirm_destructive: bool = False
     max_log_lines: int = 4000
+    #: Combinaison globale d'arrêt d'urgence (`Ctrl+Alt+S` par défaut).
+    emergency_hotkey: str = DEFAULT_HOTKEY
 
 
 @dataclass(slots=True)
@@ -735,6 +840,10 @@ class Settings:
                 "max_entries": self.metrics.max_entries,
                 "max_bytes": self.metrics.max_bytes,
             },
+            "ui": {
+                "appearance": self.ui.appearance,
+                "emergency_hotkey": self.ui.emergency_hotkey,
+            },
             "agent": {
                 "action_first": self.agent.action_first,
                 "max_steps": self.agent.max_steps,
@@ -906,6 +1015,10 @@ class Settings:
             err("ui.accent", "couleur hexadécimale #RRGGBB attendue")
         if not (16 <= ui.stream_refresh_ms <= 500):
             err("ui.stream_refresh_ms", "doit être comprise entre 16 et 500 ms")
+        try:
+            parse_hotkey(ui.emergency_hotkey)
+        except HotkeyError as exc:
+            err("ui.emergency_hotkey", str(exc))
 
         # --- Journalisation
         if self.logging.level not in LOG_LEVELS:

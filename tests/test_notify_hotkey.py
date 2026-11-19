@@ -9,9 +9,13 @@ import queue
 import threading
 from types import SimpleNamespace
 
+import pytest
+
 from support import tmpdir  # noqa: I001
 
+import config
 import core.notify as notify_module
+from config import DEFAULT_HOTKEY, HotkeyError, parse_hotkey
 from core.notify import build_toast_script, notify_windows
 from core.schedule import Schedule, run_scheduled
 from core.stopfile import stop_path
@@ -177,3 +181,58 @@ def test_global_signal_writes_stop_and_queues_the_ui_notice() -> None:
 def test_schedule_slot_guard_remains_independent_of_notification() -> None:
     schedule = Schedule(start_hour=1, end_hour=6)
     assert schedule.slot(__import__("datetime").datetime(2026, 1, 2, 2, 0)) == "2026-01-02"
+
+
+def test_hotkey_default_is_control_alt_s() -> None:
+    assert DEFAULT_HOTKEY == "Ctrl+Alt+S"
+    assert config.Settings().ui.emergency_hotkey == DEFAULT_HOTKEY
+
+    spec = parse_hotkey(DEFAULT_HOTKEY)
+    assert spec.modifiers == 0x0002 | 0x0001
+    assert spec.key == 0x53
+    assert spec.label == "Ctrl+Alt+S"
+
+
+def test_hotkey_parsing_normalises_aliases_and_order() -> None:
+    spec = parse_hotkey(" alt + control + f9 ")
+    assert spec.modifiers == 0x0001 | 0x0002
+    assert spec.key == 0x78
+    assert spec.label == "Ctrl+Alt+F9"
+
+    named = parse_hotkey("Windows+Shift+Space")
+    assert named.modifiers == 0x0008 | 0x0004
+    assert named.key == 0x20
+    # Ordre canonique imposé quel que soit l'ordre saisi : Ctrl, Alt, Shift, Win.
+    assert named.label == "Shift+Win+Space"
+
+
+def test_hotkey_parsing_rejects_unusable_combinations() -> None:
+    for text in ("", "   ", "S", "Ctrl", "Ctrl++S", "Ctrl+Alt+Foo", "Ctrl+Ctrl+S", "Cmd+Alt+S"):
+        with pytest.raises(HotkeyError):
+            parse_hotkey(text)
+
+
+def test_configured_hotkey_is_used_by_the_listener() -> None:
+    listener = HotkeyListener("Ctrl+Shift+F9")
+    assert listener.label == "Ctrl+Shift+F9"
+    assert listener._spec is not None
+    assert listener._spec.key == 0x78
+
+    # Combinaison illisible : pas d'exception au démarrage, un refus motivé.
+    broken = HotkeyListener("S")
+    assert broken.label == ""
+    assert broken.start(lambda: None) is False
+    assert "invalide" in broken.error
+
+
+def test_hotkey_conflict_names_the_configured_combination() -> None:
+    listener = HotkeyListener("Ctrl+Shift+F9")
+    listener._register_native = lambda: False  # type: ignore[method-assign]
+
+    # `_loop` est la vraie boucle du thread ; le conflit est simulé par le
+    # refus de `RegisterHotKey`, donc aucun appui clavier n'est nécessaire.
+    listener._loop()
+
+    assert listener.running is False
+    assert "Ctrl+Shift+F9" in listener.error
+    assert "déjà utilisé" in listener.error

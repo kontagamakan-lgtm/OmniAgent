@@ -147,7 +147,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             self._autonomy_session: Any = None
             self._autonomy_messages: queue.Queue[str] = queue.Queue()
             self._hotkey_messages = queue.Queue()
-            self._hotkey = HotkeyListener()
+            self._hotkey = HotkeyListener(settings.ui.emergency_hotkey)
             #: Proposition dont l'exécution a été lancée par le bouton
             #: Approuver : sa clôture (`executed`/`failed`, run_id) attend la
             #: réponse asynchrone de l'agent.
@@ -165,7 +165,8 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             self._build_widgets()
             if self._hotkey.start(self._global_stop_signal):
                 self._append(
-                    "système", "raccourci global Ctrl+Alt+S actif (arrêt d'urgence)"
+                    "système",
+                    f"raccourci global {self._hotkey.label} actif (arrêt d'urgence)",
                 )
             else:
                 self._append(
