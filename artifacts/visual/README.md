@@ -3,6 +3,12 @@
 Capturées sur `DESKTOP-D7O1SEG`, session console interactive 1, écran
 1920×1080, avec `PIL.ImageGrab` (GDI) et une reconnaissance `tesserocr`.
 
+Ces images sont des artefacts historiques de rendu : elles ne constituent pas
+une vérification manuelle récente du raccourci, du protocole ou du clic dans la
+boîte d'approbation. L'état des vérifications restant à faire est tenu à jour
+dans `docs/OPERATIONS.md`, section « Limites connues et vérifications
+manuelles ».
+
 | Fichier | Ce qu'il montre | Vérification automatique |
 | --- | --- | --- |
 | `approval_dialog.png` | la vraie boîte native ouverte par `OmniAgentWindow._tool_approval` pour `fs_delete` | 420×256, trois boutons `Oui` / `Non` / `Annuler` dans la fenêtre, OCR des trois libellés, écart-type 69,7 |

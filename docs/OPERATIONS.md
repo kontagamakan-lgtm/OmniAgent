@@ -1,5 +1,61 @@
 # Opérations: sauvegarde, planification, reprise
 
+## Limites connues et vérifications manuelles
+
+Cette section est l'état de référence. Elle distingue les garanties logicielles
+des vérifications qui n'ont pas été réalisées dans cet environnement ; les
+détails d'implémentation et les procédures complètes restent dans les sections
+indiquées.
+
+- **Isolation (#11) — au niveau des outils, pas un bac à sable système.**
+  Les profils filtrent les outils, mais **un outil conservé garde les droits du
+  processus hôte** : il peut accéder à ce que le compte OmniAgent peut lire et
+  lancer des processus avec la même identité. Ce sont des contrôles
+  applicatifs, pas un jeton, un espace de noms ou une ACL système. Une
+  séparation réelle exige un conteneur, AppContainer ou une machine virtuelle,
+  non implémenté ici. Détails : « Isolation par run ».
+- **Audit (#9) — chaîne falsifiable par le détenteur de la clé, ancrage
+  externe requis.** Un attaquant qui possède la clé peut réécrire la trace et
+  tout le journal puis recalculer les empreintes ; `--verify-audit` seul peut
+  alors afficher une chaîne cohérente. La parade est une copie de
+  `data/audit/chain.jsonl` vers un support externe contrôlé (clé USB ou partage
+  réseau distinct), après chaque session autonome et au minimum une fois par
+  jour ; `--audit-anchor` effectue la copie et
+  `--verify-audit --audit-anchor` compare le préfixe conservé. Cela détecte
+  une réécriture des entrées déjà copiées, mais ne protège pas si la
+  destination est compromise ; ce n'est ni une signature ni une restauration
+  du contenu des traces. Procédure complète : « Journal d'audit ».
+- **Notifications Windows (#8) — code généré et testé automatiquement, parcours
+  Windows non exécuté ici.** La création du raccourci et du protocole, ainsi
+  que le rendu visuel de la toast, restent à vérifier manuellement sous
+  Windows : exécuter `python app.py --notify-install`, contrôler le raccourci
+  `%APPDATA%\Microsoft\Windows\Start Menu\Programs\OmniAgent.lnk` et la clé
+  `HKCU:\Software\Classes\omniagent\shell\open\command`, déclencher une
+  notification puis ses boutons, et si nécessaire régénérer les captures avec
+  `python tools/visual_check.py --capture` avant de lancer
+  `python -m pytest tests/test_visual_artifacts.py -q`. Les images de
+  `artifacts/visual/` sont des artefacts historiques, pas une validation du
+  parcours manuel dans cette passe.
+- **Approbation (#6) — dialogue jamais cliqué visuellement.** Pour le vérifier
+  manuellement sous Windows : lancer `python app.py`, demander une suppression
+  (`fs_delete`) sur un fichier jetable, constater la boîte d'approbation, puis
+  tester séparément `Non` (aucune suppression), `Oui` (suppression) et
+  `Annuler` (refus par défaut), en contrôlant `data/approvals.jsonl`. Cette
+  vérification n'a pas été réalisée ici ; les tests automatiques ne remplacent
+  pas ce clic réel.
+- **Planificateur (#5) — test d'intégration réel opt-in, exécuté avec succès
+  sous Windows.** Le test n'est pas lancé par défaut. Pour l'activer :
+  `set FREEBUFF_SCHTASKS_INTEGRATION=1` puis
+  `python -m pytest tests/test_taskscheduler_integration.py -vv` (PowerShell :
+  `$env:FREEBUFF_SCHTASKS_INTEGRATION = "1"`). Il appelle le vrai
+  `install_task()`, laisse `schtasks.exe` enregistrer une tâche jetable, relit
+  sa définition avec `schtasks /Query /XML`, puis la supprime via
+  `uninstall_task()` dans un `try/finally` et vérifie son absence. Exécuté le
+  2026-11-19 sous Windows : **1 passed**, aucune tâche résiduelle. Les tests
+  `tests/test_taskscheduler_subprocess.py` simulent seulement l'exécutable avec
+  un faux `schtasks` en tête de `PATH` et ne prouvent pas l'enregistrement
+  Windows réel.
+
 ## Sauvegarde et restauration
 
 ```bat
@@ -155,6 +211,10 @@ puis vaut « une fois » ; la porte n'appelle plus que `decide(request)`. Le mod
 autonome continue de refuser
 les outils dangereux sans règle de politique.
 
+La boîte de dialogue n'a pas été cliquée visuellement dans cette passe ; la
+procédure de contrôle manuel est décrite dans « Limites connues et
+vérifications manuelles ».
+
 ## Budget global
 
 `data/budget/ledger.jsonl` garde un enregistrement par run (tokens, coût
@@ -204,17 +264,31 @@ python -m core.memory --forget   :: supprime expirées et sources disparues
 `read-only`, `files`, `files-web` ou `full`. Un outil hors profil n'est ni
 proposé au modèle ni exécutable (`unknown_tool`), même si le modèle l'appelle.
 `isolation.allowed_domains` restreint les hôtes des outils réseautés (sous-domaines
-acceptés) ; chaque tentative est écrite dans `data/network.jsonl`.
+acceptés) ; les appels sont vérifiés et leurs décisions écrites dans
+`data/network.jsonl` lorsque `isolation.log_network` est actif.
 
 ```bat
 python app.py --task "resume mes notes" --profile read-only
 ```
 
-C'est une isolation au niveau des outils : un outil conservé garde les droits
-du processus, ce n'est pas un bac à sable système. `shell_run` est seulement
-durci : son répertoire reste confiné, il n'hérite pas des variables qui
-ressemblent à des secrets (ni de la clé du fournisseur), et son arbre de
-processus est tué au délai. Pour retirer réellement les droits, il faut un
+C'est une isolation au niveau des outils : **un outil conservé garde les
+droits du processus hôte**, ce n'est pas un bac à sable système. Concrètement,
+`core/profile.py` définit les profils (`RunProfile`, `PROFILES`,
+`apply_profile()`) et `core/factory.py` applique le profil avant de construire
+le registre. `NetworkGuard`, dans le même module, contrôle les hôtes des outils
+réseautés ; `core/tool_registry.py` applique ce garde réseau puis la porte
+d'approbation (`core/approval.py`) avant tout appel à l'outil.
+
+Les garde-fous de `tools/shell.py` sont réels mais restent des contrôles
+d'application : le répertoire de travail est résolu dans les racines autorisées
+par `tools/file_manager.py`, l'environnement enfant est expurgé des variables
+qui ressemblent à des secrets (dont `llm.api_key_env`), certaines commandes
+destructrices sont refusées et l'arbre de processus est tué au délai. En
+revanche, il n'y a ni jeton de sécurité par outil, ni espace de noms, ni ACL
+appliquée par le système : un outil conservé peut utiliser tous les droits du
+compte qui exécute OmniAgent, accéder aux fichiers que ce compte peut lire et
+lancer des processus avec la même identité. Le profil `full` conserve tous les
+outils, y compris le shell. Pour retirer réellement ces droits, il faut un
 runtime séparé (conteneur, AppContainer ou machine virtuelle) : c'est une
 décision ouverte qui demande de choisir l'image, les montages et le réseau. Ce
 n'est pas implémenté dans ce passage.
@@ -229,17 +303,58 @@ détectée ; les décisions de politique sont chaînées de la même façon.
 ```bat
 python app.py --audit-seal      :: migre les traces existantes
 python app.py --verify-audit
-python app.py --audit-anchor E:\audit\chain.jsonl
-python app.py --verify-audit --audit-anchor E:\audit\chain.jsonl
 ```
 
-Un attaquant qui possède la clé peut réécrire la trace et tout le journal :
-recopiez régulièrement `chain.jsonl` hors de la machine pour un ancrage externe.
-`--audit-anchor` produit cette copie (support USB, partage réseau) et
-`--verify-audit --audit-anchor` compare le journal courant au préfixe ancré :
-les entrées ajoutées après la copie restent valides, mais toute réécriture des
-entrées déjà copiées est signalée, même si l'attaquant a recalculé toute la
-chaîne. L'ancre ne protège que si elle reste hors de portée de l'attaquant.
+La chaîne détecte une altération accidentelle ou partielle, mais **elle n'est
+pas une preuve d'intégrité auto-suffisante** : un attaquant qui détient la clé
+peut réécrire la trace puis toutes les entrées du journal et recalculer les
+empreintes. `--verify-audit` seul peut alors afficher une chaîne cohérente. La
+parade est un ancrage externe : conserver une copie de `chain.jsonl` sur un
+support que l'attaquant ne peut pas réécrire.
+
+L'implémentation existe déjà dans `core/audit.py` : `export_anchor()` copie
+le fichier source `data/audit/chain.jsonl` (défini par `audit_path()`) et
+`verify_anchor()` compare le journal courant au préfixe de cette copie. Les
+options correspondantes sont déclarées dans `app.py`.
+
+### Procédure d'ancrage externe
+
+1. **Fichier source** : `data/audit/chain.jsonl` sur la machine OmniAgent.
+2. **Destination** : un autre support, hors de la machine et hors de portée du
+   compte compromis, par exemple une clé USB montée en `E:` ou un partage
+   réseau contrôlé : `E:\audit\omniagent-chain-2026-11-19.jsonl`. Ne pas
+   réutiliser le même nom sans conserver l'ancienne copie : des copies datées
+   permettent de comparer plusieurs points de l'historique.
+3. **Fréquence** : après chaque session autonome, et au minimum une fois par
+   jour. Copier également avant une maintenance ou une mise à jour importante.
+4. **Copie** :
+
+```bat
+python app.py --audit-anchor E:\audit\omniagent-chain-2026-11-19.jsonl
+```
+
+   La commande écrit une copie exacte et atomique du journal et affiche le
+   nombre d'entrées et la tête de chaîne. Elle ne signe pas la copie : sa
+   valeur vient uniquement du fait qu'elle quitte la machine et reste sous un
+   contrôle séparé.
+
+5. **Contrôle ultérieur** : sur la machine, comparer le journal courant à la
+   copie conservée :
+
+```bat
+python app.py --verify-audit --audit-anchor E:\audit\omniagent-chain-2026-11-19.jsonl
+```
+
+   Le code de sortie est `0` si le journal courant commence par exactement la
+   même chaîne que l'ancre, `1` sinon. Les ajouts postérieurs à la copie sont
+   acceptés ; une entrée réécrite est signalée par
+   `entree N : differente de l'ancre externe`, et un journal tronqué par
+   `journal plus court que l'ancre`. Ces messages viennent de
+   `core/audit.verify_anchor()`. Une contradiction avec une copie externe doit
+   être traitée comme un incident : conserver l'ancre et les traces, ne pas
+   écraser la copie, puis examiner les deux historiques. Si l'attaquant peut
+   aussi modifier la destination, l'ancrage ne protège plus : la copie doit
+   rester hors de portée de l'attaquant.
 
 ## Notifications Windows
 
@@ -254,9 +369,13 @@ session proposent « Ouvrir la trace » et « Arrêter ». Si Windows refuse la
 version avec boutons, une toast simple est affichée ; si PowerShell est
 indisponible, la session continue et l'échec est journalisé.
 
-La preuve visuelle de la toast et du chemin `.lnk`/protocole est versionnée :
-`artifacts/visual/toast.png`, `artifacts/visual/notification_path.png` et
-leurs entrées dans `artifacts/visual/manifest.json`.
+Les captures historiques de la toast et du chemin `.lnk`/protocole sont
+versionnées : `artifacts/visual/toast.png`,
+`artifacts/visual/notification_path.png` et leurs entrées dans
+`artifacts/visual/manifest.json`. Elles ne remplacent pas la vérification
+manuelle du raccourci, du protocole et des boutons décrite dans « Limites
+connues et vérifications manuelles » ; cette vérification n'a pas été
+rejouée ici.
 
 ## Répétition de restauration
 

@@ -6,6 +6,9 @@ Playwright, coffre-fort d'identifiants AES-256-GCM, recherche web multi-moteurs
 et index sémantique local. Interface CustomTkinter, backend LLM interchangeable
 (DeepSeek, endpoint compatible OpenAI, Ollama local), compilation PyInstaller.
 
+> **Limites de sûreté et vérifications manuelles restantes** : voir
+> `docs/OPERATIONS.md`, section « Limites connues et vérifications manuelles ».
+
 ---
 
 ## Décisions d'architecture
@@ -67,7 +70,7 @@ OmniAgent/
 ├── ui/
 │   ├── controller.py          # ✔ LIVRABLE 5 — AgentCore dans un thread, file d'événements
 │   └── app_gui.py             # ✔ LIVRABLE 5 — fenêtre CustomTkinter (chat + journal d'outils)
-├── tests/                     # 181 tests, tous verts
+├── tests/                     # suite pytest; tests opt-in ignorés par défaut
 └── data/                      # généré à l'exécution, ignoré par git
     ├── config.json            #    configuration persistée
     ├── vault.enc              #    coffre chiffré
@@ -399,10 +402,10 @@ pas ou si ses drapeaux divergent du contrat.
 
 ```bat
 python tests/test_crypto.py        :: 16/16
-python tests/test_redaction.py     :: 12/12
+python tests/test_redaction.py     :: 17/17
 python tests/test_vault.py         :: 16/16
 python tests/test_file_manager.py  :: 28/28
 python tests/test_integration.py   :: 3/3
-python tests/golden_traces.py      :: 6 scénarios hors ligne (golden)
+python tests/golden_traces.py      :: 9 scénarios hors ligne (golden)
 python -m ruff check --select F,B,E9 security tools
 ```
