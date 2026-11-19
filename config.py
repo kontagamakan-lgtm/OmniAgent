@@ -269,7 +269,6 @@ class Paths:
     data_dir: Path
     config_file: Path
     vault_file: Path
-    database_file: Path
     index_dir: Path
     log_dir: Path
     download_dir: Path
@@ -289,7 +288,6 @@ def default_paths() -> Paths:
         data_dir=data,
         config_file=data / "config.json",
         vault_file=data / "vault.enc",
-        database_file=data / "omniagent.db",
         index_dir=data / "index",
         log_dir=data / "logs",
         download_dir=data / "downloads",

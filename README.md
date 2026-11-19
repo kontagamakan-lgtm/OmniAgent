@@ -64,10 +64,6 @@ OmniAgent/
 ├── security/
 │   ├── crypto.py              # ✔ LIVRABLE 2 — Argon2id/scrypt + AES-256-GCM
 │   └── redaction.py           # ✔ LIVRABLE 2 — masquage des secrets (logs + UI)
-├── storage/
-│   ├── db.py                  #    SQLite WAL, migrations, runs/événements, FTS5
-│   ├── schema.sql
-│   └── __init__.py
 ├── ui/
 │   ├── approval_dialog.py     # boîte Autoriser une fois / session / Refuser
 │   ├── controller.py          # ✔ LIVRABLE 5 — AgentCore dans un thread, file d'événements
@@ -76,7 +72,6 @@ OmniAgent/
 └── data/                      # généré à l'exécution, ignoré par git
     ├── config.json            #    configuration persistée
     ├── vault.enc              #    coffre chiffré
-    ├── omniagent.db           #    base locale (runs, événements, documents FTS5)
     ├── index/  logs/  downloads/  cache/  reports/  browser_profile/
 ```
 

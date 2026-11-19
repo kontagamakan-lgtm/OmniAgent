@@ -1,9 +1,11 @@
 """Sauvegarde et restauration des données critiques.
 
-Une archive contient `config.json`, `vault.enc`, `omniagent.db`, le dossier
-`autonomy/` (objectifs, journal, propositions, politique) et les traces
-(`logs/runs/`), plus `logs/metrics.jsonl`. Ni le cache, ni le profil navigateur,
-ni les téléchargements : ce ne sont pas des données utilisateur.
+Une archive contient `config.json`, `vault.enc`, le dossier `autonomy/`
+(objectifs, journal, propositions, politique) et les traces (`logs/runs/`),
+plus `logs/metrics.jsonl`. Un ancien `omniagent.db` est conservé s'il existe
+encore, pour ne pas perdre de données d'une version antérieure ; l'application
+actuelle n'en crée plus. Ni le cache, ni le profil navigateur, ni les
+téléchargements : ce ne sont pas des données utilisateur.
 
 Format `.ombak` :
 

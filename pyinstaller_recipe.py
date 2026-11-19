@@ -118,14 +118,11 @@ def build_package(
         if candidate.is_file():
             datas.append((str(candidate), "data"))
 
-    # Ressources de l'interface et schéma SQLite, chargés par chemin relatif.
+    # Ressources de l'interface, chargées par chemin relatif.
     for asset in ("icon.ico", "theme.json"):
         candidate = root / "assets" / asset
         if candidate.is_file():
             datas.append((str(candidate), "assets"))
-    schema = root / "storage" / "schema.sql"
-    if schema.is_file():
-        datas.append((str(schema), "storage"))
 
     # OCR sans installation système : DLL du moteur et données de langue.
     ocr_binaries = _tesserocr_binaries()
@@ -138,8 +135,6 @@ def build_package(
         hiddenimports.append("PIL._tkinter_finder")
     hiddenimports += [
         "core",
-        "storage",
-        "storage.db",
         "ui.app_gui",
         "tools.browser_agent",
         "tools.web_search",

@@ -47,7 +47,6 @@ def make_settings(root: Path) -> config.Settings:
         data_dir=root,
         config_file=root / "config.json",
         vault_file=root / "vault.enc",
-        database_file=root / "omniagent.db",
         index_dir=root / "index",
         log_dir=root / "logs",
         download_dir=root / "downloads",
