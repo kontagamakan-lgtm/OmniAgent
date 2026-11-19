@@ -856,6 +856,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(format_run(replay(path)))
         return 0
 
+    config.configure_logging(settings, redact, filters=(RunIdFilter(),))
+    # Après le journal : une approbation exécute une tâche (et écrit donc une
+    # trace) ; elle ne doit pas précéder la configuration du logging.
     if args.autonomy_reject:
         from core.proposals import reject_proposal
 
@@ -877,7 +880,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.task = str(record.get("task") or "")
         return _run_task(settings, args)
 
-    config.configure_logging(settings, redact, filters=(RunIdFilter(),))
     if args.autonomy_propose:
         return _run_proposal(settings, args)
     if args.autonomy:

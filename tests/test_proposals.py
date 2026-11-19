@@ -126,3 +126,68 @@ def test_the_proposal_store_is_bounded_and_survives_bad_lines() -> None:
 
         assert [record["id"] for record in records] == ["1", "2"]
         assert proposals_path(make_settings(tmp)).name == "proposals.jsonl"
+
+
+def test_approval_from_the_command_line_runs_the_stored_task(monkeypatch) -> None:
+    import app as app_module
+    import config as config_module
+
+    with tmpdir("approbation-cli") as tmp:
+        settings = make_settings(tmp)
+        store = ProposalStore(proposals_path(settings))
+        store.append(
+            {
+                "type": "proposal",
+                "id": "abc12345",
+                "state": "pending",
+                "task": "Ranger les rapports",
+                "tools": [],
+                "risk": "faible",
+                "why": "",
+            }
+        )
+        order: list[str] = []
+        monkeypatch.setattr(
+            config_module.Settings,
+            "load",
+            classmethod(lambda cls, *args, **kwargs: settings),
+        )
+        monkeypatch.setattr(
+            app_module.config, "configure_logging", lambda *args, **kwargs: order.append("logging")
+        )
+        monkeypatch.setattr(
+            app_module,
+            "_run_task",
+            lambda s, a: (order.append(f"task:{a.task}"), 0)[1],
+        )
+
+        code = app_module.main(["--autonomy-approve", "abc12345"])
+
+        assert code == 0
+        assert order == ["logging", "task:Ranger les rapports"], (
+            "le journal doit être configuré avant l'exécution de la tâche approuvée"
+        )
+        assert store.find("abc12345")["state"] == "approved"
+
+
+def test_approving_an_unknown_proposal_changes_nothing(monkeypatch) -> None:
+    import app as app_module
+    import config as config_module
+
+    with tmpdir("approbation-inconnue") as tmp:
+        settings = make_settings(tmp)
+        calls: list[str] = []
+        monkeypatch.setattr(
+            config_module.Settings,
+            "load",
+            classmethod(lambda cls, *args, **kwargs: settings),
+        )
+        monkeypatch.setattr(app_module.config, "configure_logging", lambda *a, **k: None)
+        monkeypatch.setattr(
+            app_module, "_run_task", lambda s, a: (calls.append(a.task), 0)[1]
+        )
+
+        code = app_module.main(["--autonomy-approve", "inconnu"])
+
+        assert code == 2
+        assert calls == [], "une proposition introuvable ne lance aucune tâche"
