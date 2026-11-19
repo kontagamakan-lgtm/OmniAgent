@@ -438,6 +438,14 @@ class TraceConfig:
     max_bytes: int = DEFAULT_TRACE_MAX_BYTES
     #: Compresser les vieilles traces (`.jsonl.gz`) au lieu de les supprimer.
     archive: bool = False
+    #: Taille à partir de laquelle un run terminé est archivé immédiatement
+    #: (0 : attendre la purgation suivante).
+    archive_min_bytes: int = 64 * 1024
+    #: Tracer chaque espace de travail dans son propre sous-dossier, donc avec
+    #: son propre quota : un projet bavard ne purge pas l'historique d'un autre.
+    per_workspace: bool = False
+    #: Tenir `<runs>/runs.index` : liste et états sans relire chaque trace.
+    index: bool = True
     #: `fsync` groupé toutes les N lignes (0 = jamais) : survit à une coupure.
     fsync_every: int = 0
     #: Durée de validité du marqueur d'activité d'une exécution concurrente.
@@ -620,6 +628,7 @@ class Settings:
                 "max_age_days": self.trace.max_age_days,
                 "max_bytes": self.trace.max_bytes,
                 "archive": self.trace.archive,
+                "per_workspace": self.trace.per_workspace,
                 "trace_format": TRACE_FORMAT_VERSION,
             },
             "agent": {
@@ -816,8 +825,12 @@ class Settings:
             err("trace.fsync_every", "doit être >= 0 (0 désactive la synchronisation)")
         if trace.active_ttl_s < 1:
             err("trace.active_ttl_s", "doit être >= 1 seconde")
+        if trace.archive_min_bytes < 0:
+            err("trace.archive_min_bytes", "doit être >= 0 (0 désactive l'archivage immédiat)")
         if not trace.enabled and trace.archive:
             warn("trace.archive", "sans effet : la trace est désactivée")
+        if not trace.archive and trace.archive_min_bytes:
+            warn("trace.archive_min_bytes", "sans effet : l'archivage est désactivé")
 
         return issues
 
@@ -972,6 +985,15 @@ def load_dotenv(path: str | os.PathLike[str]) -> bool:
 # ---------------------------------------------------------------------------
 
 
+class _RunFieldFilter(logging.Filter):
+    """Garantit `record.run_id` : un format sans le champ ferait taire le journal."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not getattr(record, "run_id", None):
+            record.run_id = "-"
+        return True
+
+
 class _RedactingFormatter(logging.Formatter):
     """Applique un nettoyeur de secrets sur chaque ligne formatée."""
 
@@ -989,11 +1011,18 @@ class _RedactingFormatter(logging.Formatter):
         return self._redactor(text) if callable(self._redactor) else text
 
 
-def configure_logging(settings: Settings, redactor: Any = None) -> logging.Logger:
+def configure_logging(
+    settings: Settings,
+    redactor: Any = None,
+    *,
+    filters: tuple[logging.Filter, ...] = (),
+) -> logging.Logger:
     """Installe les handlers console + fichier rotatif sur le logger applicatif.
 
     `redactor` est une fonction `str -> str` fournie par `security.redaction`
     (Livrable 2) afin de masquer clés API, mots de passe et cookies.
+    `filters` reçoit le contexte d'exécution (`core.observability`), qui ajoute
+    le `run_id` pour joindre une ligne de journal à une trace.
     """
     logger = logging.getLogger(APP_ID)
     logger.setLevel(settings.logging.level)
@@ -1004,12 +1033,15 @@ def configure_logging(settings: Settings, redactor: Any = None) -> logging.Logge
             logger.removeHandler(handler)
             handler.close()
 
-    fmt = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
+    fmt = "%(asctime)s | %(levelname)-8s | %(run_id)s | %(name)s | %(message)s"
     datefmt = "%Y-%m-%d %H:%M:%S"
+    extra_filters = (_RunFieldFilter(), *filters)
 
     if settings.logging.console:
         stream = logging.StreamHandler(stream=sys.stderr)
         stream.setFormatter(_RedactingFormatter(fmt, datefmt, redactor))
+        for item in extra_filters:
+            stream.addFilter(item)
         stream._omniagent = True  # type: ignore[attr-defined]
         logger.addHandler(stream)
 
@@ -1023,6 +1055,8 @@ def configure_logging(settings: Settings, redactor: Any = None) -> logging.Logge
             delay=True,
         )
         file_handler.setFormatter(_RedactingFormatter(fmt, datefmt, redactor))
+        for item in extra_filters:
+            file_handler.addFilter(item)
         file_handler._omniagent = True  # type: ignore[attr-defined]
         logger.addHandler(file_handler)
     except OSError as exc:  # disque plein, droits, etc.

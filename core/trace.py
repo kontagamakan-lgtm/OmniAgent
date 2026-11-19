@@ -26,11 +26,13 @@ Trois garanties supplémentaires, ajoutées après coup :
 from __future__ import annotations
 
 import gzip
+import hashlib
 import json
 import logging
 import os
 import re
 import shutil
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -46,6 +48,7 @@ from config import (
     Settings,
 )
 from core.events import Event, EventType
+from core.run_index import FINISHED, INDEX_NAME, STARTED, RunIndex, scan_interrupted
 from security.redaction import redactor
 
 __all__ = [
@@ -124,7 +127,14 @@ def read_events(
     target = Path(path)
     counts = report if report is not None else TraceReadReport()
     ends_with_newline = True
-    with target.open(encoding="utf-8") as handle:
+    # Une trace archivée reste lisible : le rejeu ne doit pas dépendre de
+    # l'extension choisie par la rétention.
+    handle_ctx = (
+        gzip.open(target, "rt", encoding="utf-8")
+        if target.name.endswith(".gz")
+        else target.open(encoding="utf-8")
+    )
+    with handle_ctx as handle:
         for number, line in enumerate(handle, start=1):
             counts.lines += 1
             ends_with_newline = line.endswith("\n")
@@ -167,20 +177,37 @@ def read_trace(
     return records, report
 
 
+def workspace_slug(directory: Path | str | None = None) -> str:
+    """Nom de dossier stable et lisible pour un espace de travail.
+
+    Le nom seul ne suffit pas (deux projets peuvent s'appeler `src`) : un court
+    condensat du chemin complet évite de mélanger deux quotas de rétention.
+    """
+    base = Path(directory) if directory is not None else Path.cwd()
+    name = _SAFE_NAME.sub("_", base.name)[:40].strip("._") or "espace"
+    digest = hashlib.sha1(str(base).lower().encode("utf-8")).hexdigest()[:6]
+    return f"{name}-{digest}"
+
+
 def build_trace(settings: Settings, directory: Path | str | None = None) -> "RunTrace | None":
     """Trace conforme à la configuration, ou `None` si elle est désactivée."""
     cfg = settings.trace
     if not cfg.enabled:
         return None
+    root = Path(directory) if directory else settings.paths.log_dir / "runs"
+    if cfg.per_workspace:
+        root = root / workspace_slug()
     return RunTrace(
-        directory or settings.paths.log_dir / "runs",
+        root,
         content=cfg.content,
         max_runs=cfg.max_runs,
         max_age_days=cfg.max_age_days,
         max_bytes=cfg.max_bytes,
         archive=cfg.archive,
+        archive_min_bytes=cfg.archive_min_bytes,
         fsync_every=cfg.fsync_every,
         active_ttl_s=cfg.active_ttl_s,
+        index=cfg.index,
     )
 
 
@@ -203,8 +230,10 @@ class RunTrace:
         max_bytes: int = DEFAULT_MAX_BYTES,
         content: str = "full",
         archive: bool = False,
+        archive_min_bytes: int = 0,
         fsync_every: int = 0,
         active_ttl_s: float = DEFAULT_ACTIVE_TTL_S,
+        index: bool = True,
     ) -> None:
         self.directory = Path(directory)
         self._sanitize = sanitize or redactor.redact_data
@@ -217,10 +246,17 @@ class RunTrace:
         self._reserve = 220 if self.max_bytes > 1024 else 0
         self.content = content if content in {"full", "metadata"} else "full"
         self.archive = bool(archive)
+        #: Taille à partir de laquelle la trace est archivée dès sa fermeture
+        #: (0 désactive l'archivage immédiat ; `_prune` reste le filet de fond).
+        self.archive_min_bytes = max(0, int(archive_min_bytes))
         self.fsync_every = max(0, int(fsync_every))
         self.active_ttl_s = max(1.0, float(active_ttl_s))
+        self.index = bool(index)
         self._handle: TextIO | None = None
         self._run_id = ""
+        self._last_seq = 0
+        self._beat_stop: threading.Event | None = None
+        self._beat: threading.Thread | None = None
         self.path: Path | None = None
         self._marker_path: Path | None = None
         self._bytes_written = 0
@@ -233,6 +269,7 @@ class RunTrace:
         try:
             if event.type == EventType.RUN_STARTED:
                 self._open(event.run_id)
+                self._index_start(event.payload)
             if self._handle is None or event.run_id != self._run_id:
                 return
             payload = self._payload(event)
@@ -252,7 +289,8 @@ class RunTrace:
             logger.exception("trace impossible pour %s", event.type)
             self.close()
         if event.type == EventType.RUN_FINISHED:
-            self.close()
+            self._index_finish(event.payload)
+            self.close(finished=True)
 
     # -- contenu ------------------------------------------------------------
 
@@ -286,6 +324,7 @@ class RunTrace:
             return False
         handle.write(line)
         handle.flush()
+        self._last_seq = int(record.get("seq") or self._last_seq)
         self._bytes_written += size
         self._lines_since_sync += 1
         if self.fsync_every and self._lines_since_sync >= self.fsync_every:
@@ -311,7 +350,9 @@ class RunTrace:
                 "run_id": run_id,
                 "timestamp": datetime.now(tz=timezone.utc).isoformat(),
                 "type": EventType.TRACE_TRUNCATED,
-                "seq": 0,
+                # Après le dernier événement : le vérificateur exige une
+                # séquence strictement croissante.
+                "seq": self._last_seq + 1,
                 "payload": {
                     "max_bytes": self.max_bytes,
                     "bytes": self._bytes_written,
@@ -341,6 +382,10 @@ class RunTrace:
             return
         name = _SAFE_NAME.sub("_", self._run_id)[:80]
         self.directory.mkdir(parents=True, exist_ok=True)
+        if self.index:
+            # Un run sans `run_finished` et sans marqueur frais est déclaré
+            # interrompu avant que la rétention ne puisse l'effacer sans trace.
+            scan_interrupted(self.directory, active_ttl_s=self.active_ttl_s)
         self._prune(keep=f"{name}.jsonl")
         self.path = self.directory / f"{name}.jsonl"
         self._marker_path = self.directory / f"{name}.active"
@@ -353,6 +398,70 @@ class RunTrace:
         except OSError:
             self._bytes_written = 0
         self._touch_marker(create=True)
+        self._start_heartbeat()
+
+    # -- index --------------------------------------------------------------
+
+    def _index_start(self, payload: dict[str, Any]) -> None:
+        """Inscrit le démarrage : la liste des runs n'a plus à lire chaque fichier."""
+        if not self.index or self.path is None:
+            return
+        RunIndex(self.directory).mark(
+            self._run_id,
+            STARTED,
+            path=self.path,
+            manifest={
+                "started": datetime.now(tz=timezone.utc).isoformat(),
+                "app_version": payload.get("app_version", ""),
+                "model": payload.get("model", ""),
+                "workspace": payload.get("workspace", ""),
+                "trace_format": payload.get("trace_format", TRACE_FORMAT_VERSION),
+            },
+        )
+
+    def _index_finish(self, payload: dict[str, Any]) -> None:
+        if not self.index or self.path is None:
+            return
+        RunIndex(self.directory).mark(
+            self._run_id,
+            FINISHED,
+            path=self.path,
+            stop_reason=str(payload.get("stop_reason") or ""),
+            ok=bool(payload.get("ok")),
+            detail="trace tronquee" if self.truncated else "",
+        )
+
+    # -- battement ----------------------------------------------------------
+
+    def _start_heartbeat(self) -> None:
+        """Rafraîchit le marqueur même quand aucun événement n'est écrit.
+
+        Un appel d'outil long (navigateur, OCR, fsync sur un partage réseau) ne
+        produit aucun événement : sans battement, le marqueur vieillirait et un
+        autre processus pourrait purger la trace d'un run pourtant vivant.
+        """
+        self._stop_heartbeat()
+        interval = max(1.0, self.active_ttl_s / 4)
+        stop = threading.Event()
+        self._beat_stop = stop
+
+        def beat() -> None:
+            while not stop.wait(interval):
+                self._touch_marker()
+
+        thread = threading.Thread(
+            target=beat, name="omniagent-trace-beat", daemon=True
+        )
+        thread.start()
+        self._beat = thread
+
+    def _stop_heartbeat(self) -> None:
+        stop, self._beat_stop = self._beat_stop, None
+        if stop is not None:
+            stop.set()
+        beat, self._beat = self._beat, None
+        if beat is not None and beat is not threading.current_thread():
+            beat.join(timeout=1.0)
 
     def _touch_marker(self, *, create: bool = False) -> None:
         """Pose ou rafraîchit `<run>.active` : ce run ne doit pas être purgé."""
@@ -403,8 +512,13 @@ class RunTrace:
     # -- rétention ----------------------------------------------------------
 
     def _files(self, pattern: str) -> list[Path]:
+        """Fichiers de trace du dossier ; l'index n'en est pas une."""
         try:
-            return [path for path in self.directory.glob(pattern) if path.is_file()]
+            return [
+                path
+                for path in self.directory.glob(pattern)
+                if path.is_file() and path.name != INDEX_NAME
+            ]
         except OSError:
             logger.debug("rétention impossible : dossier illisible", exc_info=True)
             return []
@@ -519,21 +633,54 @@ class RunTrace:
             logger.debug("rétention : suppression impossible de %s", path, exc_info=True)
             return False
 
-    def close(self) -> None:
+    def close(self, *, finished: bool = False) -> None:
+        """Ferme la trace, retire le marqueur et, si demandé, archive le run.
+
+        `finished=True` n'est posé qu'après `run_finished` : une trace encore
+        ouverte par une exécution en cours n'est jamais compressée sous les
+        pieds de son lecteur.
+        """
         handle, self._handle = self._handle, None
         if handle is not None:
             if self.fsync_every:
-                self._sync()
+                try:
+                    os.fsync(handle.fileno())
+                except (OSError, ValueError):  # pragma: no cover - best effort
+                    logger.debug("synchronisation de fermeture impossible", exc_info=True)
             try:
                 handle.close()
             except OSError:  # pragma: no cover - fermeture best-effort
                 logger.debug("fermeture de trace impossible", exc_info=True)
+        self._stop_heartbeat()
         marker, self._marker_path = self._marker_path, None
         if marker is not None:
             try:
                 marker.unlink(missing_ok=True)
             except OSError:  # pragma: no cover - suppression best-effort
                 logger.debug("marqueur d'activité non supprimé", exc_info=True)
+        if finished:
+            self._archive_finished()
+
+    def _archive_finished(self) -> None:
+        """Compresse le run terminé au-delà du seuil, sans attendre le suivant."""
+        if not (self.archive and self.archive_min_bytes) or self.path is None:
+            return
+        try:
+            size = self.path.stat().st_size
+        except OSError:
+            return
+        if size < self.archive_min_bytes:
+            return
+        target = self.path.with_name(self.path.name + ".gz")
+        if self._archive(self.path):
+            self.path = target
+            if self.index:
+                RunIndex(self.directory).mark(
+                    self._run_id,
+                    FINISHED,
+                    path=target,
+                    detail="archive a la fermeture",
+                )
 
     def summary(self) -> dict[str, Any]:
         """État de la trace courante, pour l'affichage ou un bilan."""

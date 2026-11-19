@@ -15,6 +15,7 @@ from core.agent_core import AgentCore
 from core.events import Event, EventBus, EventType
 from core.llm_client import LLMResponse, ParsedToolCall
 from core.tool_registry import ToolRegistry
+from core.run_index import RunIndex
 from core.trace import (
     DEFAULT_MAX_AGE_DAYS,
     DEFAULT_MAX_BYTES,
@@ -476,3 +477,99 @@ def test_build_trace_honours_the_configuration() -> None:
         assert trace.directory == settings.paths.log_dir / "runs"
         assert trace.content == "metadata"
         assert trace.max_runs == 7 and trace.archive is True
+
+
+def test_build_trace_can_group_runs_by_workspace() -> None:
+    with tmpdir("espaces") as tmp:
+        settings = make_settings(tmp)
+        settings.trace.per_workspace = True
+
+        trace = build_trace(settings)
+
+        assert trace is not None
+        assert trace.directory.parent == settings.paths.log_dir / "runs"
+        assert trace.directory != settings.paths.log_dir / "runs"
+        assert trace.directory.name
+
+
+def test_a_finished_run_is_archived_at_close() -> None:
+    with tmpdir("archive-fin") as tmp:
+        directory = Path(tmp) / "runs"
+        trace = RunTrace(directory, archive=True, archive_min_bytes=1)
+        trace(Event(type=EventType.RUN_STARTED, run_id="fin", seq=1))
+        trace(Event(type=EventType.RUN_FINISHED, run_id="fin", payload={}, seq=2))
+
+        assert trace.path is not None and trace.path.name.endswith(".gz")
+        assert not (directory / "fin.jsonl").exists()
+        records = list(read_events(trace.path))
+        assert records[-1]["type"] == EventType.RUN_FINISHED
+
+
+def test_run_index_records_started_and_finished_states() -> None:
+    with tmpdir("index") as tmp:
+        directory = Path(tmp) / "runs"
+        trace = RunTrace(directory)
+        trace(
+            Event(
+                type=EventType.RUN_STARTED,
+                run_id="idx",
+                payload={"app_version": "9.9", "model": "m", "trace_format": 2},
+                seq=1,
+            )
+        )
+        trace(
+            Event(
+                type=EventType.RUN_FINISHED,
+                run_id="idx",
+                payload={"stop_reason": "final", "ok": True},
+                seq=2,
+            )
+        )
+
+        entries = RunIndex(directory).entries()
+
+        assert entries["idx"].state == "finished"
+        assert entries["idx"].model == "m"
+        assert entries["idx"].ok is True
+
+
+def test_a_killed_run_is_marked_interrupted_by_the_next_one() -> None:
+    with tmpdir("interrompu") as tmp:
+        directory = Path(tmp) / "runs"
+        dead = RunTrace(directory)
+        dead(
+            Event(
+                type=EventType.RUN_STARTED,
+                run_id="mort",
+                payload={"task": "x", "trace_format": 2},
+                seq=1,
+            )
+        )
+        dead.close()  # marqueur retiré, aucun run_finished : processus tué
+
+        alive = RunTrace(directory)
+        alive(Event(type=EventType.RUN_STARTED, run_id="vivant", payload={"trace_format": 2}, seq=1))
+        alive(Event(type=EventType.RUN_FINISHED, run_id="vivant", payload={}, seq=2))
+
+        entries = RunIndex(directory).entries()
+
+        assert entries["mort"].state == "interrupted"
+        assert entries["vivant"].state == "finished"
+
+
+def test_heartbeat_refreshes_the_activity_marker_without_events() -> None:
+    """Un run silencieux (outil long) ne doit pas paraître abandonné."""
+    with tmpdir("battement") as tmp:
+        directory = Path(tmp) / "runs"
+        trace = RunTrace(directory, active_ttl_s=1.0)
+        trace(Event(type=EventType.RUN_STARTED, run_id="battant", seq=1))
+        marker = directory / "battant.active"
+        old = time.time() - 10
+        os.utime(marker, (old, old))
+
+        deadline = time.time() + 5
+        while time.time() < deadline and marker.stat().st_mtime <= old + 1:
+            time.sleep(0.05)
+
+        assert marker.stat().st_mtime > old + 1, "le marqueur n'a pas été rafraîchi"
+        trace.close()
