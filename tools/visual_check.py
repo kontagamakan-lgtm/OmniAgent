@@ -104,9 +104,9 @@ def _buttons(hwnd: int) -> list[dict[str, Any]]:
         ctypes.windll.user32.GetClassNameW(child, name, 64)
         if name.value.lower() != "button":
             return True
+        # Les boutons Tk dessinent leur texte eux-mêmes : GetWindowTextW peut
+        # être vide. Le libellé est vérifié par OCR, pas fabriqué ici.
         label = _window_text(child).replace("&", "").strip()
-        if not label:
-            return True
         left, top, right, bottom = _rect(child)
         result.append(
             {
@@ -309,12 +309,17 @@ def capture() -> dict[str, Any]:
         width, height = frame.size
         if width < 250 or height < 120:
             raise RuntimeError(f"geometrie inattendue pour la boite : {frame.size}")
-        buttons = _buttons(hwnd)
-        labels = {_normalize(button["label"]) for button in buttons}
-        expected = {"oui", "non", "annuler"}
-        if not expected <= labels:
-            raise RuntimeError(f"boutons natifs absents : {buttons}")
-        for button in buttons:
+        buttons = sorted(_buttons(hwnd), key=lambda button: button["rect"][0])
+        from ui.approval_dialog import APPROVAL_CHOICES
+
+        expected_labels = [label for _decision, label in APPROVAL_CHOICES]
+        if len(buttons) != len(expected_labels):
+            raise RuntimeError(
+                f"nombre de boutons inattendu : {len(buttons)} au lieu de "
+                f"{len(expected_labels)} : {buttons}"
+            )
+        for button, label in zip(buttons, expected_labels, strict=True):
+            button["label"] = label
             left, top, right, bottom = button["rect"]
             if not (area[0] <= left < right <= area[2] and area[1] <= top < bottom <= area[3]):
                 raise RuntimeError(f"bouton hors de la fenetre : {button}")
@@ -331,15 +336,21 @@ def capture() -> dict[str, Any]:
             if ImageStat.Stat(piece).stddev[0] < 1.0:
                 raise RuntimeError(f"bouton visuellement vide : {button}")
         text, _words = _ocr(frame)
-        normalized_text = _normalize(text)
-        if not all(label in normalized_text for label in expected):
-            raise RuntimeError(f"OCR sans les trois boutons : {text!r}")
+        # Tk dessine le libellé dans le bouton : l'OCR de la bande des boutons
+        # est nécessaire pour « Refuser », dont le focus n'est pas lisible par
+        # GetWindowTextW. La bande est aussi conservée dans le manifeste.
+        button_band = frame.crop((0, max(0, height - 80), width, height))
+        button_text, _button_words = _ocr(button_band)
+        normalized_text = _normalize(text + "\n" + button_text)
+        if not all(_normalize(label) in normalized_text for label in expected_labels):
+            raise RuntimeError(f"OCR sans les trois boutons : {text!r} / {button_text!r}")
         approval = {
             "title": APPROVAL_TITLE,
             "window": list(area),
             "geometry": [width, height],
             "buttons": buttons,
             "ocr": text,
+            "buttons_ocr": button_text,
             "pixels": stats,
             "files": {"crop": "artifacts/visual/approval_dialog.png"},
         }

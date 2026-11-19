@@ -3,16 +3,15 @@
 Capturées sur `DESKTOP-D7O1SEG`, session console interactive 1, écran
 1920×1080, avec `PIL.ImageGrab` (GDI) et une reconnaissance `tesserocr`.
 
-Ces images sont des artefacts historiques de rendu : elles ne constituent pas
-une vérification manuelle récente du raccourci, du protocole ou du clic dans la
-boîte d'approbation. L'état des vérifications restant à faire est tenu à jour
-dans `docs/OPERATIONS.md`, section « Limites connues et vérifications
-manuelles ».
+Ces images documentent le rendu réel. La boîte d'approbation a été ouverte et
+ses trois boutons cliqués lors de la vérification du 2026-11-19 ; les points
+qui restent manuels sont tenus à jour dans `docs/OPERATIONS.md`, section
+« Limites connues et vérifications manuelles ».
 
 | Fichier | Ce qu'il montre | Vérification automatique |
 | --- | --- | --- |
-| `approval_dialog.png` | la vraie boîte native ouverte par `OmniAgentWindow._tool_approval` pour `fs_delete` | 420×256, trois boutons `Oui` / `Non` / `Annuler` dans la fenêtre, OCR des trois libellés, écart-type 69,7 |
-| `toast.png` | la toast Windows réellement affichée par `core.notify.notify_windows` | 479×163, 62 373 pixels modifiés, OCR `OmniAgent` + « Les notifications fonctionnent. » |
+| `approval_dialog.png` | la vraie boîte Tk ouverte par `OmniAgentWindow._tool_approval` pour `fs_delete` | 795×499, trois boutons `Autoriser une fois` / `Autoriser pour la session` / `Refuser`, OCR des trois libellés, écart-type 62,5 |
+| `toast.png` | la toast Windows réellement affichée par `core.notify.notify_windows` | 479×163, 62 322 pixels modifiés, OCR `OmniAgent` + « Les notifications fonctionnent. » |
 | `notification_path.png` | le chemin réel du raccourci et la commande du protocole lus dans Windows | `.lnk`, cible `pythonw.exe`, `--notify-action`, AUMID présent, OCR du chemin |
 | `manifest.json` | géométries, rectangles des boutons, OCR, statistiques de pixels et valeurs exactes du `.lnk`/protocole | lu par `tests/test_visual_artifacts.py` |
 

@@ -44,14 +44,18 @@ def test_visual_manifest_and_committed_renders() -> None:
     assert approval["window"][2] - approval["window"][0] == window.width
     assert approval["window"][3] - approval["window"][1] == window.height
     labels = {_normalize(button["label"]) for button in approval["buttons"]}
-    assert labels == {"oui", "non", "annuler"}, approval["buttons"]
+    assert labels == {
+        "autoriser une fois",
+        "autoriser pour la session",
+        "refuser",
+    }, approval["buttons"]
     for button in approval["buttons"]:
         left, top, right, bottom = button["rect"]
         assert approval["window"][0] <= left < right <= approval["window"][2]
         assert approval["window"][1] <= top < bottom <= approval["window"][3]
         assert button["width"] >= 40 and button["height"] >= 15
-    approval_text = _normalize(approval["ocr"])
-    for label in ("oui", "non", "annuler"):
+    approval_text = _normalize(approval["ocr"] + "\n" + approval["buttons_ocr"])
+    for label in ("autoriser une fois", "autoriser pour la session", "refuser"):
         assert label in approval_text, approval["ocr"]
 
     route = manifest["notification_path"]

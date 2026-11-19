@@ -402,22 +402,16 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
 
         def _tool_approval(self, request: Any) -> str:
             """Demande la décision sur le fil Tk et attend, sans contournement."""
-            from tkinter import messagebox
+            from ui.approval_dialog import ask_tool_approval
 
             outcome: dict[str, str] = {}
             done = threading.Event()
 
             def ask() -> None:
                 try:
-                    answer = messagebox.askyesnocancel(
-                        f"Confirmation requise — {request.tool}",
-                        request.preview[:1500]
-                        + "\n\nOui : autoriser une fois\n"
-                        "Non : autoriser pour la session\nAnnuler : refuser",
-                    )
-                    outcome["value"] = (
-                        "once" if answer is True else "session" if answer is False else "deny"
-                    )
+                    outcome["value"] = ask_tool_approval(self, request)
+                except Exception:  # noqa: BLE001 - panne d'interface : refus
+                    logger.exception("boîte d'approbation indisponible")
                 finally:
                     done.set()
 

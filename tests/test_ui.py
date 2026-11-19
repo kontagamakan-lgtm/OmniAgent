@@ -512,32 +512,61 @@ def test_context_trim_report_is_written_in_the_transcript() -> None:
     assert "5 résumé(s)" in text
 
 
-def test_approval_dialog_maps_yes_no_cancel_to_once_session_deny(monkeypatch) -> None:
-    """La boîte native à trois choix est traduite en une seule décision."""
+def test_approval_dialog_uses_explicit_labels_and_refuses_by_default() -> None:
+    """Les trois choix explicites sont seuls acceptés ; l'absence vaut refus."""
+    from ui import approval_dialog
+
+    assert [label for _decision, label in approval_dialog.APPROVAL_CHOICES] == [
+        "Autoriser une fois",
+        "Autoriser pour la session",
+        "Refuser",
+    ]
+    assert approval_dialog.DEFAULT_DECISION == "deny"
+    assert approval_dialog.APPROVAL_CHOICES[-1] == ("deny", "Refuser")
+    assert approval_dialog.decision_for("once") == "once"
+    assert approval_dialog.decision_for("session") == "session"
+    assert approval_dialog.decision_for("deny") == "deny"
+    assert approval_dialog.decision_for(None) == "deny"
+    assert approval_dialog.decision_for("inconnu") == "deny"
+    assert approval_dialog.dialog_title("fs_delete") == (
+        "Confirmation requise — fs_delete"
+    )
+
+
+def test_approval_dialog_close_is_a_refusal() -> None:
+    """Fermer la fenêtre (X ou Échap) emprunte toujours la décision Refuser."""
+    from ui.approval_dialog import ApprovalDialog
+
+    decisions: list[str] = []
+    dialog = object.__new__(ApprovalDialog)
+    dialog._choose = decisions.append
+
+    dialog._refuse()
+
+    assert decisions == ["deny"]
+
+
+def test_approval_dialog_delegates_to_explicit_choices(monkeypatch) -> None:
+    """La fenêtre reçoit la demande et retourne once/session/deny tel quel."""
     from ui.app_gui import OmniAgentWindow
 
     request = SimpleNamespace(tool="fs_delete", preview="Suppression de C:\\tmp\\x")
-    prompts: list[tuple[str, str]] = []
-    answers = [True, False, None]
+    seen: list[tuple[object, object]] = []
+    answers = ["once", "session", "deny"]
 
-    def ask(title: str, message: str):
-        prompts.append((title, message))
+    def ask(parent: object, received: object) -> str:
+        seen.append((parent, received))
         return answers.pop(0)
 
-    monkeypatch.setattr("tkinter.messagebox.askyesnocancel", ask)
+    monkeypatch.setattr("ui.approval_dialog.ask_tool_approval", ask)
     window = object.__new__(OmniAgentWindow)
     window.after = lambda _ms, callback: callback()
 
     assert window._tool_approval(request) == "once"
     assert window._tool_approval(request) == "session"
     assert window._tool_approval(request) == "deny"
-    assert len(prompts) == 3
-    title, message = prompts[0]
-    assert "fs_delete" in title
-    assert "Suppression de C:\\tmp\\x" in message
-    assert "Oui : autoriser une fois" in message
-    assert "Non : autoriser pour la session" in message
-    assert "Annuler : refuser" in message
+    assert len(seen) == 3
+    assert all(parent is window and received is request for parent, received in seen)
 
 
 def test_close_stream_lowers_the_flag_even_without_a_displayed_attempt() -> None:

@@ -25,24 +25,25 @@ indiquées.
   une réécriture des entrées déjà copiées, mais ne protège pas si la
   destination est compromise ; ce n'est ni une signature ni une restauration
   du contenu des traces. Procédure complète : « Journal d'audit ».
-- **Notifications Windows (#8) — code généré et testé automatiquement, parcours
-  Windows non exécuté ici.** La création du raccourci et du protocole, ainsi
-  que le rendu visuel de la toast, restent à vérifier manuellement sous
-  Windows : exécuter `python app.py --notify-install`, contrôler le raccourci
-  `%APPDATA%\Microsoft\Windows\Start Menu\Programs\OmniAgent.lnk` et la clé
-  `HKCU:\Software\Classes\omniagent\shell\open\command`, déclencher une
-  notification puis ses boutons, et si nécessaire régénérer les captures avec
-  `python tools/visual_check.py --capture` avant de lancer
-  `python -m pytest tests/test_visual_artifacts.py -q`. Les images de
-  `artifacts/visual/` sont des artefacts historiques, pas une validation du
-  parcours manuel dans cette passe.
-- **Approbation (#6) — dialogue jamais cliqué visuellement.** Pour le vérifier
-  manuellement sous Windows : lancer `python app.py`, demander une suppression
-  (`fs_delete`) sur un fichier jetable, constater la boîte d'approbation, puis
-  tester séparément `Non` (aucune suppression), `Oui` (suppression) et
-  `Annuler` (refus par défaut), en contrôlant `data/approvals.jsonl`. Cette
-  vérification n'a pas été réalisée ici ; les tests automatiques ne remplacent
-  pas ce clic réel.
+- **Notifications Windows (#8) — raccourci, protocole et toast vérifiés sous
+  Windows.** Vérifié le 2026-11-19 : le raccourci
+  `%APPDATA%\Microsoft\Windows\Start Menu\Programs\OmniAgent.lnk` pointe vers
+  `pythonw.exe` avec `app.py`, l'AUMID `OmniAgent.Desktop` est présent, la clé
+  `HKCU:\Software\Classes\omniagent\shell\open\command` appelle
+  `--notify-action "%1"`, et une toast réelle a été affichée et capturée. Les
+  boutons d'action de la toast (`Ouvrir la trace`, `Arrêter`) et le lancement
+  depuis le menu Démarrer restent à vérifier manuellement ; `--notify-install`
+  n'a pas été rejoué dans cette passe.
+- **Approbation (#6) — dialogue explicite, cliqué visuellement sous Windows.**
+  Les trois choix sont désormais `Autoriser une fois`, `Autoriser pour la
+  session` et `Refuser` ; `Refuser` est le bouton par défaut, et fermer la
+  fenêtre (ou Échap) refuse. Vérifié le 2026-11-19 : les trois clics et la
+  fermeture ont été testés sur la boîte réelle, avec les décisions
+  `once`/`session`/`deny`. La capture `artifacts/visual/approval_dialog.png`
+  montre les trois libellés. Reste à rejouer le parcours complet dans
+  l'application (suppression d'un fichier jetable et contrôle de
+  `data/approvals.jsonl`) ; le harnais de vérification ne dispatche pas
+  l'outil lui-même.
 - **Planificateur (#5) — test d'intégration réel opt-in, exécuté avec succès
   sous Windows.** Le test n'est pas lancé par défaut. Pour l'activer :
   `set FREEBUFF_SCHTASKS_INTEGRATION=1` puis
@@ -211,9 +212,10 @@ puis vaut « une fois » ; la porte n'appelle plus que `decide(request)`. Le mod
 autonome continue de refuser
 les outils dangereux sans règle de politique.
 
-La boîte de dialogue n'a pas été cliquée visuellement dans cette passe ; la
-procédure de contrôle manuel est décrite dans « Limites connues et
-vérifications manuelles ».
+La boîte de dialogue affiche trois boutons explicites : `Autoriser une fois`,
+`Autoriser pour la session` et `Refuser`. `Refuser` est sélectionné par défaut ;
+fermer la fenêtre ou appuyer sur Échap refuse. La procédure de contrôle manuel
+complète est décrite dans « Limites connues et vérifications manuelles ».
 
 ## Budget global
 

@@ -1,5 +1,5 @@
 {
-  "captured_at": "2026-11-19T19:18:31+0000",
+  "captured_at": "2026-11-19T19:38:25+0000",
   "machine": "DESKTOP-D7O1SEG",
   "session": "Console",
   "screen": [
@@ -11,60 +11,61 @@
   "approval": {
     "title": "Confirmation requise — fs_delete",
     "window": [
-      760,
-      451,
-      1180,
-      707
+      573,
+      315,
+      1368,
+      814
     ],
     "geometry": [
-      420,
-      256
+      795,
+      499
     ],
     "buttons": [
       {
-        "label": "Oui",
+        "label": "Autoriser une fois",
         "rect": [
-          819,
-          656,
-          923,
-          685
+          605,
+          751,
+          841,
+          784
         ],
-        "width": 104,
-        "height": 29
+        "width": 236,
+        "height": 33
       },
       {
-        "label": "Non",
+        "label": "Autoriser pour la session",
         "rect": [
-          934,
-          656,
-          1038,
-          685
+          851,
+          751,
+          1087,
+          784
         ],
-        "width": 104,
-        "height": 29
+        "width": 236,
+        "height": 33
       },
       {
-        "label": "Annuler",
+        "label": "Refuser",
         "rect": [
-          1046,
-          656,
-          1150,
-          685
+          1098,
+          751,
+          1336,
+          784
         ],
-        "width": 104,
-        "height": 29
+        "width": 238,
+        "height": 33
       }
     ],
-    "ocr": "‘onfirmation requise — fs_delete\n\nSuppression definitive de C:\\tmp\\rapport.txt\n(1 fichier, 42 octet(s))\n\nOui: autoriser une fois\n\nNon : autoriser pour la session\nAnnuler: refuser\n\nAnnuler\n\n",
+    "ocr": "Confirmation requise — fs_delete\n\nChoisissez explicitement I'action 8 appliquer:\n\nSuppression definitive de C:\\tmp\\rapport.txt\n(1 fichier, 42 octet(s)).\n\nAutoriser une fois Autoriser pour la session\n\nree SSIS\n",
+    "buttons_ocr": "Autoriser une fois\n\nAutoriser pour la session\n\nRefuser\n\n",
     "pixels": {
       "size": [
-        420,
-        256
+        795,
+        499
       ],
-      "stddev": 71.216,
-      "mean": 206.429,
-      "unique_colors": 5244,
-      "dark_fraction": 0.362
+      "stddev": 62.504,
+      "mean": 222.773,
+      "unique_colors": 4729,
+      "dark_fraction": 0.1757
     },
     "files": {
       "crop": "artifacts/visual/approval_dialog.png"
@@ -93,10 +94,10 @@
         519,
         273
       ],
-      "stddev": 69.753,
-      "mean": 208.817,
-      "unique_colors": 11340,
-      "dark_fraction": 0.3112
+      "stddev": 69.856,
+      "mean": 208.768,
+      "unique_colors": 11238,
+      "dark_fraction": 0.3114
     },
     "files": {
       "crop": "artifacts/visual/notification_path.png"
@@ -121,18 +122,18 @@
       479,
       163
     ],
-    "changed_pixels": 62320,
-    "ocr": "‘OmniAgent\n\nOmniAgent — verification visuelle\nLes notifications fonctionnent.\n\nLeal > ggg\n",
+    "changed_pixels": 62322,
+    "ocr": "‘OmniAgent\n\nOmniAgent — verification visuelle\nLes notifications fonctionnent.\n\nL6@al ggg\n",
     "words": [],
     "pixels": {
       "size": [
         479,
         163
       ],
-      "stddev": 36.851,
-      "mean": 72.283,
-      "unique_colors": 864,
-      "dark_fraction": 0.9835
+      "stddev": 36.419,
+      "mean": 72.256,
+      "unique_colors": 1392,
+      "dark_fraction": 0.983
     },
     "files": {
       "crop": "artifacts/visual/toast.png"
