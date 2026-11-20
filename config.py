@@ -43,7 +43,7 @@ from typing import Any, Literal, get_args, get_origin, get_type_hints
 
 APP_NAME = "OmniAgent Windows"
 APP_ID = "OmniAgent"
-APP_VERSION = "1.0.1"
+APP_VERSION = "1.0.2"
 CONFIG_SCHEMA_VERSION = 1
 #: Version du format des fichiers de trace. À incrémenter quand la forme des
 #: enregistrements change : un lecteur peut alors refuser ou migrer.
