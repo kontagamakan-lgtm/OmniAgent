@@ -22,6 +22,12 @@ from core.self_evolver import format_evolution_journal, format_evolution_status
 from ui.controller import AgentController
 from ui.hotkey import HotkeyListener
 from ui.key_panel import KeyTable
+from ui.layout import (
+    LayoutPlan,
+    fit_dialog_geometry,
+    plan_layout,
+    sidebar_needs_scroll,
+)
 
 try:  # pragma: no cover - dépend de l'environnement
     import customtkinter as ctk
@@ -69,8 +75,12 @@ class TranscriptBuffer:
     paramètre, ce qui permet de tester l'écriture sans afficheur.
     """
 
-    def __init__(self, widget: Any) -> None:
+    def __init__(
+        self, widget: Any, *, max_lines: int = 0, trim_chunk: int = 200
+    ) -> None:
         self.widget = widget
+        self.max_lines = max(0, int(max_lines))
+        self.trim_chunk = max(1, int(trim_chunk))
 
     def write(self, text: str) -> None:
         if not text:
@@ -78,6 +88,32 @@ class TranscriptBuffer:
         self.widget.configure(state="normal")
         self.widget.insert("end", text)
         self.widget.see("end")
+        self.widget.configure(state="disabled")
+        self._trim()
+
+    def _trim(self) -> None:
+        """Borne la transcription des très longues sessions.
+
+        La coupe se fait par blocs, uniquement quand le plafond est dépassé,
+        pour ne pas déplacer le curseur à chaque fragment. Les widgets de test
+        sans `index` sont laissés intacts.
+        """
+        if self.max_lines <= 0 or not hasattr(self.widget, "index"):
+            return
+        try:
+            total = int(str(self.widget.index("end-1c")).split(".", 1)[0])
+        except (TypeError, ValueError, IndexError):
+            return
+        if total <= self.max_lines + self.trim_chunk:
+            return
+        cut = total - self.max_lines
+        if cut <= 0:
+            return
+        self.widget.configure(state="normal")
+        self.widget.delete("1.0", f"{cut + 1}.0")
+        self.widget.insert(
+            "1.0", "• historique ancien tronqué pour garder l'interface fluide\n\n"
+        )
         self.widget.configure(state="disabled")
 
     def text(self) -> str:
@@ -186,6 +222,17 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             # s'affiche pas, seul le tour qui conclut est libéré (règle identique
             # à `_ConsoleStream` en mode `--task`).
             self._pending: dict[int, list[str]] = {}
+            #: Mode compact pour la taille minimale 900×620 : les cartes de
+            #: synthèse et le pied de page s'effacent, l'accueil se réduit à
+            #: son titre et la barre latérale se densifie.
+            self._compact_layout = False
+            self._layout_ready = False
+            #: Besoins mesurés une fois en mode normal : largeur totale,
+            #: hauteur du contenu et hauteur de la sidebar. Ils remplacent les
+            #: seuils fixes 1100×720 et suivent la police ou les libellés.
+            self._normal_requirements: tuple[float, float, float] | None = None
+            self._sidebar_scroll_visible = False
+            self._original_fonts: dict[Any, tuple] = {}
 
             self.title(f"{APP_NAME} {APP_VERSION}")
             self.geometry(f"{settings.ui.window_width}x{settings.ui.window_height}")
@@ -193,6 +240,10 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             self.protocol("WM_DELETE_WINDOW", self._on_close)
 
             self._build_widgets()
+            self.bind("<Configure>", self._on_window_configure, add="+")
+            self.bind("<F6>", self._focus_navigation)
+            self.bind("<Shift-F6>", lambda _event: self._focus_composer())
+            self.after_idle(self._apply_layout_mode)
             try:
                 self._install_approval_gate()
             except Exception:  # noqa: BLE001 - l'interface reste utilisable sans porte
@@ -232,6 +283,68 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 max(9, int(self.settings.ui.font_size) + delta),
                 weight,
             )
+
+        def _window_scale(self) -> float:
+            """Facteur DPI de la fenêtre, avec repli sûr avant le mapping."""
+            try:
+                return max(1.0, float(ctk.ScalingTracker.get_window_scaling(self)))
+            except Exception:  # noqa: BLE001 - fenêtre en cours de destruction
+                return 1.0
+
+        def _fit_dialog(self, window: Any, width: int, height: int) -> tuple[int, int]:
+            """Centre une fenêtre secondaire sans la laisser déborder."""
+            actual_w, actual_h, x, y = fit_dialog_geometry(
+                parent_width=self.winfo_width(),
+                parent_height=self.winfo_height(),
+                screen_width=self.winfo_screenwidth(),
+                screen_height=self.winfo_screenheight(),
+                desired_width=width,
+                desired_height=height,
+            )
+            window.geometry(
+                f"{actual_w}x{actual_h}+{self.winfo_rootx() + x}+{self.winfo_rooty() + y}"
+            )
+            return actual_w, actual_h
+
+        def _apply_compact_typography(self, compact: bool) -> None:
+            """Réduit les polices en compact si la configuration est extrême.
+
+            Sans ce garde-fou, ``ui.font_size=28`` rend la sidebar et les
+            en-têtes plus larges que la fenêtre minimale. Les tailles d'origine
+            sont restaurées au retour en mode normal.
+            """
+            font_size = int(self.settings.ui.font_size)
+            if not compact or font_size <= 18:
+                for widget, original in list(self._original_fonts.items()):
+                    try:
+                        if widget.winfo_exists():
+                            widget.configure(font=original)
+                    except Exception:  # noqa: BLE001 - widget détruit
+                        pass
+                self._original_fonts.clear()
+                return
+            factor = 14.0 / font_size
+
+            def visit(widget: Any) -> None:
+                try:
+                    current = widget.cget("font")
+                except Exception:  # noqa: BLE001 - widget sans police
+                    current = None
+                if isinstance(current, tuple) and len(current) >= 2:
+                    original = self._original_fonts.setdefault(widget, current)
+                    size = int(original[1])
+                    scaled = max(9, int(round(size * factor)))
+                    if scaled != size:
+                        try:
+                            widget.configure(
+                                font=(original[0], scaled, *original[2:])
+                            )
+                        except Exception:  # noqa: BLE001 - police non modifiable
+                            pass
+                for child in widget.winfo_children():
+                    visit(child)
+
+            visit(self)
 
         def _button(
             self,
@@ -316,6 +429,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                     text_color=self._accent,
                 )
             button.pack(fill="x", pady=2)
+            self._nav_buttons.append(button)
             return button
 
         def _card(self, parent: Any) -> Any:
@@ -343,6 +457,14 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
         def _focus_composer(self) -> None:
             """Cliquer sur « Assistant » ramène au composeur sans effacer la session."""
             self.prompt.focus_set()
+
+        def _focus_navigation(self, _event: object | None = None) -> str:
+            """F6 place le focus sur la première entrée de navigation visible."""
+            for button in self._nav_buttons:
+                if button.winfo_viewable():
+                    button.focus_set()
+                    break
+            return "break"
 
         def _new_session(self) -> None:
             """Vide la conversation affichée sans toucher aux traces sur disque."""
@@ -375,13 +497,26 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             self._tasks_done = 0
 
             # -- barre latérale ------------------------------------------------
-            side = ctk.CTkFrame(
-                self, width=226, corner_radius=0, fg_color=_UI_SIDEBAR
+            # Défilement vertical disponible seulement si le contenu dépasse :
+            # la scrollbar reste cachée en 1280×860 et lorsque la densité
+            # compacte suffit à 900×620.
+            side = ctk.CTkScrollableFrame(
+                self,
+                width=226,
+                corner_radius=0,
+                fg_color=_UI_SIDEBAR,
+                scrollbar_button_color=_UI_LINE,
+                scrollbar_button_hover_color="#3A4739",
             )
             side.grid(row=0, column=0, sticky="ns")
+            self.sidebar = side
+            self._sidebar_scrollbar = getattr(side, "_scrollbar", None)
+            if self._sidebar_scrollbar is not None:
+                self._sidebar_scrollbar.grid_remove()
 
             brand = ctk.CTkFrame(side, fg_color="transparent")
             brand.pack(fill="x", padx=16, pady=(28, 0))
+            self.side_brand = brand
             ctk.CTkLabel(
                 brand,
                 text="◆",
@@ -407,6 +542,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 corner_radius=8,
             )
             workspace_switch.pack(fill="x", padx=16, pady=(28, 22))
+            self.workspace_switch = workspace_switch
             ctk.CTkLabel(
                 workspace_switch,
                 text="▦",
@@ -431,13 +567,15 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 anchor="w",
             ).pack(fill="x")
 
-            ctk.CTkLabel(
+            self.workspace_label = ctk.CTkLabel(
                 side,
                 text="ESPACE DE TRAVAIL",
                 font=self._font(-3, "bold"),
                 text_color="#68746D",
                 anchor="w",
-            ).pack(fill="x", padx=24, pady=(0, 8))
+            )
+            self.workspace_label.pack(fill="x", padx=24, pady=(0, 8))
+            self._nav_buttons: list[Any] = []
             primary_nav = ctk.CTkFrame(side, fg_color="transparent")
             primary_nav.pack(fill="x", padx=12)
             self._nav(
@@ -457,13 +595,14 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 primary_nav, "Propositions", self._open_proposals, glyph="✦"
             )
 
-            ctk.CTkLabel(
+            self.config_label = ctk.CTkLabel(
                 side,
                 text="CONFIGURATION",
                 font=self._font(-3, "bold"),
                 text_color="#68746D",
                 anchor="w",
-            ).pack(fill="x", padx=24, pady=(24, 8))
+            )
+            self.config_label.pack(fill="x", padx=24, pady=(24, 8))
             config_nav = ctk.CTkFrame(side, fg_color="transparent")
             config_nav.pack(fill="x", padx=12)
             self._nav(
@@ -490,6 +629,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
 
             sidebar_bottom = ctk.CTkFrame(side, fg_color="transparent")
             sidebar_bottom.pack(side="bottom", fill="x", padx=16, pady=16)
+            self.sidebar_bottom = sidebar_bottom
             ctk.CTkFrame(
                 sidebar_bottom, height=1, fg_color=_UI_LINE
             ).pack(fill="x", pady=(0, 12))
@@ -581,16 +721,29 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 height=30,
                 font_delta=1,
             ).pack(side="left")
+            self.layout_badge = ctk.CTkLabel(
+                top_actions,
+                text="Mode compact",
+                font=self._font(-4),
+                text_color="#B4C5A8",
+                fg_color="#243027",
+                corner_radius=4,
+                padx=6,
+                pady=3,
+            )
+            # Affiché uniquement en compact par `_apply_layout_mode`.
 
             content = ctk.CTkFrame(main, fg_color=_UI_BG, corner_radius=0)
             content.grid(
                 row=1, column=0, sticky="nsew", padx=34, pady=(12, 20)
             )
+            self.content_panel = content
             content.grid_columnconfigure(0, weight=1)
             content.grid_rowconfigure(2, weight=1)
 
             heading = ctk.CTkFrame(content, fg_color="transparent")
             heading.grid(row=0, column=0, sticky="ew", pady=(6, 22))
+            self.heading = heading
             heading.grid_columnconfigure(0, weight=1)
             heading_text = ctk.CTkFrame(heading, fg_color="transparent")
             heading_text.grid(row=0, column=0, sticky="w")
@@ -601,22 +754,25 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 text_color=self._accent,
                 anchor="w",
             ).pack(fill="x", pady=(0, 8))
-            ctk.CTkLabel(
+            self.heading_title = ctk.CTkLabel(
                 heading_text,
                 text="À vous de donner le cap.",
                 font=self._font(9, "bold"),
                 text_color=_UI_TEXT,
                 anchor="w",
-            ).pack(fill="x")
-            ctk.CTkLabel(
+            )
+            self.heading_title.pack(fill="x")
+            self.heading_subtitle = ctk.CTkLabel(
                 heading_text,
                 text="Une tâche en tête ? Votre agent s'occupe de la suite.",
                 font=self._font(-1),
                 text_color=_UI_MUTED,
                 anchor="w",
-            ).pack(fill="x", pady=(6, 0))
+            )
+            self.heading_subtitle.pack(fill="x", pady=(6, 0))
             heading_actions = ctk.CTkFrame(heading, fg_color="transparent")
             heading_actions.grid(row=0, column=1, sticky="e")
+            self.heading_actions = heading_actions
             self._button(
                 heading_actions,
                 "Voir l'historique",
@@ -634,6 +790,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
 
             summary = ctk.CTkFrame(content, fg_color="transparent")
             summary.grid(row=1, column=0, sticky="ew", pady=(0, 20))
+            self.summary_panel = summary
             for column in range(3):
                 summary.grid_columnconfigure(column, weight=1, uniform="stat")
 
@@ -663,6 +820,8 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 font=self._font(1, "bold"),
                 text_color=_UI_TEXT,
                 anchor="w",
+                justify="left",
+                wraplength=240,
             )
             self.status.grid(row=1, column=1, sticky="nw", pady=(2, 14))
 
@@ -741,6 +900,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
 
             assistant = self._card(workspace)
             assistant.grid(row=0, column=0, sticky="nsew")
+            self.assistant_panel = assistant
             assistant.grid_columnconfigure(0, weight=1)
             assistant.grid_rowconfigure(1, weight=1)
 
@@ -766,6 +926,8 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 corner_radius=20,
                 padx=9,
                 pady=4,
+                justify="right",
+                wraplength=220,
             )
             self.session_status.grid(row=0, column=1, sticky="e", padx=18)
 
@@ -780,7 +942,8 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 self.welcome_frame, fg_color="transparent"
             )
             welcome_center.pack(expand=True, pady=(22, 12))
-            ctk.CTkLabel(
+            self.welcome_center = welcome_center
+            self.welcome_icon = ctk.CTkLabel(
                 welcome_center,
                 text="◆",
                 width=58,
@@ -789,14 +952,16 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 fg_color="#29382A",
                 text_color=self._accent,
                 font=self._font(12, "bold"),
-            ).pack()
-            ctk.CTkLabel(
+            )
+            self.welcome_icon.pack()
+            self.welcome_title = ctk.CTkLabel(
                 welcome_center,
                 text="Moins de tâches. Plus de possibilités.",
                 font=self._font(5, "bold"),
                 text_color=_UI_TEXT,
-            ).pack(pady=(15, 5))
-            ctk.CTkLabel(
+            )
+            self.welcome_title.pack(pady=(15, 5))
+            self.welcome_subtitle = ctk.CTkLabel(
                 welcome_center,
                 text=(
                     "Décrivez ce que vous souhaitez accomplir.\n"
@@ -805,7 +970,8 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 font=self._font(-1),
                 text_color=_UI_MUTED,
                 justify="center",
-            ).pack(pady=(0, 17))
+            )
+            self.welcome_subtitle.pack(pady=(0, 17))
 
             self.transcript = ctk.CTkTextbox(
                 conversation,
@@ -821,7 +987,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             )
             self.transcript.grid(row=0, column=0, sticky="nsew", padx=18, pady=12)
             self.transcript.grid_remove()
-            self._buffer = TranscriptBuffer(self.transcript)
+            self._buffer = TranscriptBuffer(self.transcript, max_lines=6000)
 
             composer_wrap = ctk.CTkFrame(assistant, fg_color=_UI_SURFACE)
             composer_wrap.grid(row=2, column=0, sticky="ew", padx=17, pady=(2, 13))
@@ -903,13 +1069,15 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
 
             composer_note = ctk.CTkFrame(assistant, fg_color=_UI_SURFACE)
             composer_note.grid(row=3, column=0, sticky="ew", padx=20, pady=(0, 12))
-            ctk.CTkLabel(
+            self.composer_note_label = ctk.CTkLabel(
                 composer_note,
                 text="Ctrl + Entrée pour envoyer  ·  Entrée pour une nouvelle ligne",
                 font=self._font(-4),
                 text_color="#68736A",
                 anchor="w",
-            ).pack(side="left")
+                justify="left",
+            )
+            self.composer_note_label.pack(side="left")
 
             # -- colonne de droite ---------------------------------------------
             right = ctk.CTkFrame(workspace, fg_color=_UI_BG)
@@ -999,6 +1167,9 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 text="0,00 $ · sans plafond",
                 font=self._font(-3, "bold"),
                 text_color="#DBE3D5",
+                anchor="e",
+                justify="right",
+                wraplength=180,
             )
             self.budget_label.pack(side="right")
             self.budget_progress = ctk.CTkProgressBar(
@@ -1010,13 +1181,14 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             )
             self.budget_progress.pack(fill="x", pady=(10, 5))
             self.budget_progress.set(0)
-            ctk.CTkLabel(
+            self.budget_reset_label = ctk.CTkLabel(
                 session_body,
                 text="Réinitialisation à minuit",
                 font=self._font(-4),
                 text_color="#71806F",
                 anchor="w",
-            ).pack(fill="x")
+            )
+            self.budget_reset_label.pack(fill="x")
 
             self.emergency_button = self._button(
                 right,
@@ -1033,6 +1205,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
 
             footer = ctk.CTkFrame(content, fg_color="transparent")
             footer.grid(row=3, column=0, sticky="ew", pady=(16, 0))
+            self.footer = footer
             ctk.CTkLabel(
                 footer,
                 text="◇  Vos données restent sur votre machine. Votre confiance, notre priorité.",
@@ -1041,6 +1214,187 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 anchor="w",
             ).pack(side="left")
             self.bind_all("<Control-Alt-s>", lambda _event: self._emergency_stop())
+
+        def _on_window_configure(self, event: Any) -> None:
+            """Bascule le mode compact sans traiter les Configure des enfants."""
+            if event.widget is self:
+                self._apply_layout_mode(event.width, event.height)
+                self.after_idle(self._sync_sidebar_scroll)
+
+        def _sidebar_content_height(self) -> float:
+            """Hauteur réelle du contenu, même dans un CTkScrollableFrame."""
+            canvas = getattr(self.sidebar, "_parent_canvas", None)
+            if canvas is not None:
+                try:
+                    bbox = canvas.bbox("all")
+                except Exception:  # noqa: BLE001 - fenêtre en destruction
+                    bbox = None
+                if bbox:
+                    return float(bbox[3] - bbox[1])
+            return float(self.sidebar.winfo_reqheight())
+
+        def _sync_sidebar_scroll(self) -> None:
+            """N'affiche la scrollbar que si le contenu ne tient pas."""
+            scrollbar = getattr(self, "_sidebar_scrollbar", None)
+            if scrollbar is None or not hasattr(self, "sidebar"):
+                return
+            try:
+                canvas = getattr(self.sidebar, "_parent_canvas", None)
+                viewport = max(
+                    1,
+                    canvas.winfo_height()
+                    if canvas is not None
+                    else self.sidebar.winfo_height(),
+                )
+                if viewport <= 10:
+                    # Avant le premier layout, le canvas vaut 1 px : attendre
+                    # une passe au lieu d'afficher une scrollbar inutile.
+                    self.after(50, self._sync_sidebar_scroll)
+                    return
+                content = self._sidebar_content_height()
+                needed = sidebar_needs_scroll(content, viewport)
+                if needed == self._sidebar_scroll_visible:
+                    return
+                self._sidebar_scroll_visible = needed
+                if needed:
+                    scrollbar.grid()
+                else:
+                    scrollbar.grid_remove()
+                    canvas = getattr(self.sidebar, "_parent_canvas", None)
+                    if canvas is not None:
+                        canvas.yview_moveto(0)
+            except Exception:  # noqa: BLE001 - jamais bloquant
+                logger.debug("synchronisation de la scrollbar impossible", exc_info=True)
+
+        def _measure_normal_requirements(self) -> tuple[float, float, float]:
+            """Mesure le mode normal : largeur totale, hauteur et sidebar."""
+            self.update_idletasks()
+            scale = self._window_scale()
+            side_width = self.sidebar.winfo_reqwidth() / scale
+            side_height = self._sidebar_content_height() / scale
+            content_width = self.content_panel.winfo_reqwidth() / scale
+            content_height = self.content_panel.winfo_reqheight() / scale
+            return (
+                side_width + content_width,
+                max(side_height, content_height),
+                side_height,
+            )
+
+        def _apply_layout_mode(
+            self, width: int | None = None, height: int | None = None
+        ) -> None:
+            """Adapte la densité d'après les besoins réels de la fenêtre."""
+            if not hasattr(self, "summary_panel"):
+                return
+            if width is None:
+                width = self.winfo_width()
+            if height is None:
+                height = self.winfo_height()
+            scale = self._window_scale()
+            if self._normal_requirements is None:
+                self._normal_requirements = self._measure_normal_requirements()
+            required_width, required_height, side_height = self._normal_requirements
+            logical_width = width / scale
+            side_width = self.sidebar.winfo_reqwidth() / scale
+            # Largeur réelle du panneau de contenu, puis largeur restante pour
+            # l'accueil une fois la sidebar, les marges et la colonne de session
+            # déduites. L'en-tête occupe toute la largeur du contenu.
+            content_width = max(0.0, logical_width - side_width - 68.0)
+            assistant_width = max(0.0, content_width - 290.0 - 20.0)
+            actions = getattr(self, "heading_actions", None)
+            heading_actions_width = (
+                actions.winfo_reqwidth() / scale if actions is not None else 0.0
+            )
+            plan = plan_layout(
+                width,
+                height,
+                scale=scale,
+                required_width=required_width,
+                required_height=required_height,
+                sidebar_required_height=side_height,
+                assistant_width=assistant_width,
+                heading_width=content_width,
+                heading_actions_width=heading_actions_width,
+            )
+            if self._layout_ready and plan.compact == self._compact_layout:
+                # La largeur peut changer sans changer de mode : le retour à la
+                # ligne doit suivre la largeur réellement disponible.
+                if plan.compact:
+                    self.welcome_title.configure(wraplength=plan.wrap_length or 0)
+                    self.composer_note_label.configure(wraplength=plan.wrap_length)
+                    self.heading_title.configure(
+                        wraplength=plan.heading_wrap_length
+                    )
+                    self.heading_subtitle.configure(
+                        wraplength=plan.heading_wrap_length
+                    )
+                self._sync_sidebar_scroll()
+                return
+            self._layout_ready = True
+            self._compact_layout = plan.compact
+            self._apply_layout_plan(plan)
+            self.after_idle(self._sync_sidebar_scroll)
+
+        def _apply_layout_plan(self, plan: LayoutPlan) -> None:
+            """Applique un plan déjà décidé (séparé pour les tests)."""
+            if plan.summary_visible:
+                self.summary_panel.grid()
+            else:
+                self.summary_panel.grid_remove()
+            if plan.footer_visible:
+                self.footer.grid()
+            else:
+                self.footer.grid_remove()
+            self.heading.grid_configure(pady=plan.heading_pady)
+            self.content_panel.grid_configure(pady=plan.content_pady)
+            if plan.welcome_icon_visible:
+                self.welcome_icon.pack_forget()
+                self.welcome_title.pack_forget()
+                self.welcome_subtitle.pack_forget()
+                self.welcome_title.configure(wraplength=0)
+                self.welcome_icon.pack()
+                self.welcome_title.pack(pady=(15, 5))
+                self.welcome_subtitle.pack(pady=(0, 17))
+            else:
+                self.welcome_icon.pack_forget()
+                self.welcome_subtitle.pack_forget()
+                self.welcome_title.configure(
+                    wraplength=plan.wrap_length or 0, justify="center"
+                )
+                self.welcome_title.pack_configure(pady=(0, 0))
+            self.welcome_center.pack_configure(pady=plan.welcome_center_pady)
+            self.prompt.configure(height=plan.prompt_height)
+            if plan.budget_details_visible:
+                self.budget_progress.pack_forget()
+                self.budget_reset_label.pack_forget()
+                self.budget_progress.pack(fill="x", pady=(10, 5))
+                self.budget_reset_label.pack(fill="x")
+            else:
+                self.budget_progress.pack_forget()
+                self.budget_reset_label.pack_forget()
+            for button in self._nav_buttons:
+                button.configure(height=plan.nav_height)
+                button.pack_configure(pady=plan.nav_pady)
+            self.side_brand.pack_configure(pady=plan.brand_pady)
+            self.workspace_switch.pack_configure(pady=plan.workspace_pady)
+            self.workspace_label.pack_configure(pady=plan.workspace_label_pady)
+            self.config_label.pack_configure(pady=plan.config_label_pady)
+            self.sidebar_bottom.pack_configure(pady=plan.sidebar_bottom_pady)
+            if plan.badge_visible:
+                self.layout_badge.pack(side="left", padx=(0, 8))
+            else:
+                self.layout_badge.pack_forget()
+            self.composer_note_label.configure(
+                wraplength=plan.wrap_length if plan.compact else 0
+            )
+            heading_wrap = plan.heading_wrap_length if plan.compact else 0
+            self.heading_title.configure(wraplength=heading_wrap)
+            self.heading_subtitle.configure(wraplength=heading_wrap)
+            self._apply_compact_typography(plan.compact)
+            # La densité change la hauteur du contenu : refaire le point après
+            # que Tk a appliqué les nouveaux paddings.
+            self.after(120, self._sync_sidebar_scroll)
+            self.after(300, self._sync_sidebar_scroll)
 
         # -- affichage ------------------------------------------------------
 
@@ -1292,12 +1646,13 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
 
             window = ctk.CTkToplevel(self)
             window.title("Évolution autonome")
-            window.geometry("760x640")
+            self._fit_dialog(window, 760, 640)
             header = ctk.CTkLabel(
                 window,
                 text="",
                 anchor="w",
                 justify="left",
+                wraplength=700,
                 font=(
                     self.settings.ui.font_family,
                     self.settings.ui.font_size + 1,
@@ -1352,12 +1707,13 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             vault = self.bundle.vault
             window = ctk.CTkToplevel(self)
             window.title("Gestionnaire de clés & LLM")
-            window.geometry("900x720")
+            self._fit_dialog(window, 900, 720)
             header = ctk.CTkLabel(
                 window,
                 text="",
                 anchor="w",
                 justify="left",
+                wraplength=840,
                 font=(self.settings.ui.font_family, self.settings.ui.font_size + 1, "bold"),
             )
             header.pack(fill="x", padx=16, pady=(14, 4))
@@ -1402,7 +1758,13 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             keys_input = ctk.CTkTextbox(add_frame, height=80, wrap="none")
             keys_input.grid(row=0, column=1, padx=8, pady=(8, 2), sticky="ew")
             add_frame.grid_columnconfigure(1, weight=1)
-            feedback = ctk.CTkLabel(window, text="", anchor="w", justify="left")
+            feedback = ctk.CTkLabel(
+                window,
+                text="",
+                anchor="w",
+                justify="left",
+                wraplength=840,
+            )
             feedback.pack(fill="x", padx=16)
 
             def add_keys() -> None:
@@ -1490,12 +1852,13 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
 
             window = ctk.CTkToplevel(self)
             window.title("Directive Première")
-            window.geometry("760x620")
+            self._fit_dialog(window, 760, 620)
             header = ctk.CTkLabel(
                 window,
                 text="",
                 anchor="w",
                 justify="left",
+                wraplength=700,
                 font=(
                     self.settings.ui.font_family,
                     self.settings.ui.font_size + 1,
@@ -1535,7 +1898,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             """Fenêtre dédiée : inscrire ou désinscrire la tâche Windows."""
             window = ctk.CTkToplevel(self)
             window.title("Planificateur de tâches Windows")
-            window.geometry("560x300")
+            dialog_width, _ = self._fit_dialog(window, 560, 300)
             ctk.CTkLabel(
                 window,
                 text=(
@@ -1548,7 +1911,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                     "fenêtre déjà honorée n'est jamais relancée."
                 ),
                 justify="left",
-                wraplength=520,
+                wraplength=max(280, dialog_width - 32),
                 anchor="w",
             ).pack(fill="x", padx=16, pady=(16, 10))
             buttons = ctk.CTkFrame(window)
@@ -1673,7 +2036,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             ).tail(50)
             window = ctk.CTkToplevel(self)
             window.title("Journal d'autonomie")
-            window.geometry("780x520")
+            dialog_width, _ = self._fit_dialog(window, 780, 520)
             window.transient(self)
             frame = ctk.CTkScrollableFrame(window, label_text=str(path))
             frame.pack(fill="both", expand=True, padx=10, pady=10)
@@ -1682,7 +2045,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 text=format_autonomy_journal(records),
                 justify="left",
                 anchor="w",
-                wraplength=700,
+                wraplength=max(280, dialog_width - 70),
                 font=(self.settings.ui.font_family, self.settings.ui.font_size - 1),
             ).pack(fill="x", padx=6, pady=6)
 
@@ -1697,7 +2060,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
 
             window = ctk.CTkToplevel(self)
             window.title("Propositions autonomes")
-            window.geometry("780x460")
+            dialog_width, _ = self._fit_dialog(window, 780, 460)
             window.transient(self)
             frame = ctk.CTkScrollableFrame(window, label_text="En attente d'approbation")
             frame.pack(fill="both", expand=True, padx=10, pady=10)
@@ -1714,7 +2077,11 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 if record.get("tools"):
                     detail += f"\n    outils : {', '.join(record['tools'])}"
                 ctk.CTkLabel(
-                    row, text=detail, anchor="w", justify="left", wraplength=540
+                    row,
+                    text=detail,
+                    anchor="w",
+                    justify="left",
+                    wraplength=max(260, dialog_width - 280),
                 ).pack(side="left", padx=8, fill="x", expand=True)
 
                 def approve(proposal_id: str = str(record.get("id"))) -> None:
@@ -1770,12 +2137,16 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             directory = self.settings.paths.log_dir / "runs"
             window = ctk.CTkToplevel(self)
             window.title("Traces d'exécution")
-            window.geometry("760x480")
+            dialog_width, _ = self._fit_dialog(window, 760, 480)
             window.transient(self)
             toolbar = ctk.CTkFrame(window)
             toolbar.pack(fill="x", padx=10, pady=(10, 0))
             report_label = ctk.CTkLabel(
-                toolbar, text="", anchor="w", justify="left", wraplength=700
+                toolbar,
+                text="",
+                anchor="w",
+                justify="left",
+                wraplength=max(280, dialog_width - 40),
             )
 
             def run_maintenance(*, rebuild: bool) -> None:

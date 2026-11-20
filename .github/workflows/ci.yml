@@ -3,12 +3,15 @@ name: CI Windows
 # Vérifie chaque poussée et chaque pull request : style/lint, suite de tests,
 # puis construction des deux paquets et contrôles de fumée.
 #
-# Les contrôles lancés ici ne dépendent d'AUCUNE fenêtre affichée : un runner
-# GitHub windows-latest peut démarrer sans session interactive, et le smoke qui
-# attend une fenêtre visible (smoke_exe.py sans option) y échouerait sans que
-# l'application soit en cause. La construction utilise donc --no-smoke et la CI
-# appelle explicitement les auto-contrôles : navigateur système, indexation
-# d'un PDF et OCR en processus.
+# Les jobs `tests` et `build` ne dépendent d'AUCUNE fenêtre affichée : le smoke
+# qui attend une fenêtre visible (smoke_exe.py sans option) peut échouer sur un
+# runner sans bureau utilisable, sans que l'application soit en cause. La
+# construction utilise donc --no-smoke et la CI appelle explicitement les
+# auto-contrôles : navigateur système, indexation d'un PDF et OCR en processus.
+#
+# Seul le job `ui-tk` a besoin d'un bureau : il ouvre de vraies fenêtres Tk et
+# capture l'écran. Il est isolé pour que ce besoin ne ralentisse ni ne fragilise
+# la matrice Python ni la fabrication des paquets.
 
 on:
   push:
@@ -85,6 +88,89 @@ jobs:
         run: >-
           python tools/benchmark_traces.py --runs 100000 --traces 2000
           --max-seconds 60
+
+  ui-tk:
+    # Bureau Windows réel : les tests Tk et les snapshots ouvrent une fenêtre et
+    # capturent l'écran. Le runner GitHub fournit un bureau sans écran physique
+    # en 1024x768 ; les captures 1280x860 déborderaient, donc le job tente de
+    # passer en 1920x1080 avant de lancer les snapshots.
+    #
+    # Les références visuelles du runner vivent dans artifacts/ui/ci : le rendu
+    # (DPI, police, thème) diffère d'un poste de travail, et comparer aux images
+    # locales donnerait un écart permanent sans rapport avec le code. Tant que
+    # ce dossier est vide, l'étape snapshots ÉCHOUE après avoir enregistré les
+    # captures dans l'artefact : télécharger ui-snapshots-windows, committer
+    # artifacts/ui/ci, et les exécutions suivantes comparent réellement
+    # (tolérance moyenne de 1/255). La CI ne peut donc jamais être verte sans
+    # comparaison effective. En cas d'écart, la capture réelle et l'image de
+    # différence sont publiées dans le même artefact (artifacts/ui/actual).
+    name: Tk et snapshots (bureau Windows)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+            requirements-ci.txt
+
+      - name: Installer les dépendances (versions figées)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt -r requirements-ci.txt
+
+      - name: Préparer l'affichage
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.Windows.Forms
+          try {
+            Set-DisplayResolution -Width 1920 -Height 1080 -Force -ErrorAction Stop
+          } catch {
+            Write-Warning "Resolution non modifiable : $($_.Exception.Message)"
+          }
+          $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $session = (Get-Process -Id $PID).SessionId
+          Write-Host "session=$session ecran=$($bounds.Width)x$($bounds.Height)"
+
+      - name: Tests Tk (fenêtre réelle)
+        env:
+          OMNIAGENT_UI_TESTS: "1"
+        run: >-
+          python -m pytest tests/test_ui_responsive.py tests/test_ui_layout.py -q
+
+      - name: Vérifier que l'écran accueille les snapshots
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.Windows.Forms
+          $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          if ($bounds.Width -lt 1280 -or $bounds.Height -lt 860) {
+            throw "Ecran trop petit pour 1280x860 : $($bounds.Width)x$($bounds.Height)"
+          }
+
+      # Une référence manquante ou un écart échoue explicitement. Les captures
+      # écrites avant l'échec restent publiées par l'upload ci-dessous.
+      - name: Snapshots (comparaison obligatoire)
+        env:
+          OMNIAGENT_UI_SNAPSHOTS: "1"
+          OMNIAGENT_UI_SNAPSHOT_DIR: artifacts/ui/ci
+          OMNIAGENT_UI_SNAPSHOT_ACTUALS: artifacts/ui/actual
+        run: python -m pytest tests/test_ui_snapshots.py -q
+
+      - name: Conserver les captures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-snapshots-windows
+          path: |
+            artifacts/ui/ci/
+            artifacts/ui/actual/
+          if-no-files-found: warn
+          retention-days: 7
 
   build:
     name: build.bat --all et contrôles de fumée

@@ -78,12 +78,16 @@ class ApprovalDialog(tk.Toplevel):
             text=dialog_title(str(getattr(request, "tool", "outil"))),
             font=("Segoe UI", 12, "bold"),
             anchor="w",
+            justify="left",
+            wraplength=560,
         )
         heading.pack(fill="x", padx=18, pady=(16, 4))
         tk.Label(
             self,
             text="Choisissez explicitement l'action à appliquer :",
             anchor="w",
+            justify="left",
+            wraplength=560,
         ).pack(fill="x", padx=18, pady=(0, 8))
 
         preview_frame = tk.Frame(self)

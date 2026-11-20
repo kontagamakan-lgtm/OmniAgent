@@ -241,6 +241,8 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 text="Bienvenue : quatre réglages avant de commencer",
                 font=title_font,
                 anchor="w",
+                justify="left",
+                wraplength=580,
             ).pack(fill="x", padx=18, pady=(16, 2))
             ctk.CTkLabel(
                 self,
@@ -250,6 +252,8 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 ),
                 text_color="#9CA3AF",
                 anchor="w",
+                justify="left",
+                wraplength=580,
             ).pack(fill="x", padx=18, pady=(0, 10))
 
             form = ctk.CTkFrame(self)
