@@ -608,6 +608,31 @@ def test_authenticode_accepts_an_exact_obsidian_subject(monkeypatch) -> None:
         assert ok and "signature valide" in detail
 
 
+def test_authenticode_parses_quoted_cn_and_o_and_rejects_a_quoted_lookalike(
+    monkeypatch,
+) -> None:
+    with tmpdir("obsidian-quoted-subject") as tmp:
+        installer = Path(tmp) / "Obsidian-1.15.1.exe"
+        installer.write_bytes(b"MZ" + b"0" * 64)
+        monkeypatch.setattr(obsidian.shutil, "which", _which_with_powershell)
+
+        def verdict(subject: str):
+            def runner(command, **kwargs):
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout=_signature_json(subject=subject),
+                    stderr="",
+                )
+
+            return verify_authenticode(installer, runner=runner)
+
+        ok, detail = verdict('CN="Dynalist Inc", O="Obsidian", C=CA')
+        assert ok and "signature valide" in detail
+
+        ok, detail = verdict('CN="Evil Obsidian Ltd", O="Dynalist Inc", C=CA')
+        assert not ok and "signataire inattendu" in detail
+
+
 def test_authenticode_verification_fails_closed_without_powershell(monkeypatch) -> None:
     with tmpdir("obsidian-no-powershell") as tmp:
         installer = Path(tmp) / "Obsidian-1.15.1.exe"
