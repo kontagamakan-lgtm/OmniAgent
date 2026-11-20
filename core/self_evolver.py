@@ -308,6 +308,10 @@ def format_evolution_journal(
     return "\n".join(blocks) if blocks else "Aucun cycle d'auto-évolution enregistré."
 
 
+class _CycleAborted(Exception):
+    """Le cycle a été interrompu par `stop()` entre deux phases."""
+
+
 class SelfEvolver:
     """Boucle d'auto-amélioration, sans effet si elle est désactivée."""
 
@@ -343,6 +347,7 @@ class SelfEvolver:
         self._cycle_guard = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._manual_thread: threading.Thread | None = None
         self._unsubscribe: Any = None
         self._last_activity = self._clock()
         self._started = self._clock()
@@ -404,7 +409,10 @@ class SelfEvolver:
             ),
             "last_refusal": self._last_refusal,
             "skills": self.loader.specs(),
-            "running": bool(self._thread and self._thread.is_alive()),
+            "running": bool(
+                (self._thread and self._thread.is_alive())
+                or (self._manual_thread and self._manual_thread.is_alive())
+            ),
             "idle_seconds": round(max(0.0, now - self._last_activity), 1),
             "next_in_seconds": round(max(0.0, self._next_cycle - now), 1),
             "last_cycle": dict(self._last_cycle),
@@ -441,11 +449,25 @@ class SelfEvolver:
         return True
 
     def stop(self) -> None:
+        """Arrête la boucle et joint aussi le cycle manuel éventuel."""
         self._stop.set()
-        thread = self._thread
-        if thread is not None and thread.is_alive():
-            thread.join(timeout=5.0)
+        automatic = self._thread
+        manual = self._manual_thread
         self._thread = None
+        self._manual_thread = None
+        current = threading.current_thread()
+        # La boucle automatique est réveillée par l'événement. Le cycle manuel,
+        # lui, doit être joint sans délai : sinon il pourrait encore écrire
+        # après que le bundle a été fermé.
+        for thread, timeout in ((automatic, 5.0), (manual, None)):
+            if thread is None or thread is current or not thread.is_alive():
+                continue
+            if timeout is None:
+                thread.join()
+                continue
+            thread.join(timeout=timeout)
+            if thread.is_alive():
+                logger.warning("thread d'évolution non joint : %s", thread.name)
         if self._unsubscribe is not None:
             try:
                 self._unsubscribe()
@@ -455,7 +477,7 @@ class SelfEvolver:
 
     def force_cycle(self) -> bool:
         """Lance un cycle immédiat, refusé au-delà du plafond ou du budget."""
-        if not self.enabled:
+        if not self.enabled or self._stop.is_set():
             return False
         if self._cycle_guard.locked():
             return False
@@ -465,12 +487,14 @@ class SelfEvolver:
             self._refuse_cycle(reason="manuel", error=refusal)
             return False
         self._last_refusal = ""
-        threading.Thread(
+        thread = threading.Thread(
             target=self._guarded_cycle,
             kwargs={"reason": "manuel"},
             name="omniagent-evolution-manual",
             daemon=True,
-        ).start()
+        )
+        self._manual_thread = thread
+        thread.start()
         return True
 
     def _loop(self) -> None:
@@ -481,6 +505,11 @@ class SelfEvolver:
                 self._guarded_cycle(reason="inactivité")
             except Exception:  # noqa: BLE001 - la boucle survit à un cycle raté
                 logger.exception("boucle d'auto-évolution interrompue")
+
+    def _check_stop(self) -> None:
+        """Point d'arrêt entre les phases, avant toute écriture suivante."""
+        if self._stop.is_set():
+            raise _CycleAborted("arrêt demandé")
 
     def _guarded_cycle(self, *, reason: str) -> dict[str, Any]:
         try:
@@ -506,6 +535,9 @@ class SelfEvolver:
         """Exécute un cycle complet : diagnostic, veille, forge, leçons."""
         if not self._cycle_guard.acquire(blocking=False):
             return {"ok": False, "error": "cycle déjà en cours"}
+        if self._stop.is_set():
+            self._cycle_guard.release()
+            return {"ok": False, "error": "cycle annulé (arrêt demandé)"}
         started = self._clock()
         self._mark_day()
         refusal = self._cap_refusal(reason) or self._budget_refusal()
@@ -529,6 +561,7 @@ class SelfEvolver:
         try:
             diagnosis = self._diagnose()
             self._journal.append({"type": "diagnosis", **diagnosis})
+            self._check_stop()
             research = self._research(diagnosis)
             self._journal.append(
                 {
@@ -537,6 +570,7 @@ class SelfEvolver:
                     "queries": [item.get("query") for item in research],
                 }
             )
+            self._check_stop()
             if diagnosis.get("needs_forge"):
                 skill = self._forge_skill(diagnosis, research)
             else:
@@ -547,7 +581,9 @@ class SelfEvolver:
                         "reason": "diagnostic sans signal (aucun outil lent ou en échec)",
                     }
                 )
+            self._check_stop()
             lessons = self._optimize_knowledge(diagnosis, skill)
+            self._check_stop()
             self._refresh_llm_ranking()
             self._state.cycles += 1
             # La version ne monte que sur un changement validé : une compétence
@@ -563,6 +599,8 @@ class SelfEvolver:
                 "changed": changed,
                 "lessons_chars": len(lessons),
             }
+        except _CycleAborted as exc:
+            result = {"ok": False, "error": f"cycle annulé : {exc}"}
         except Exception as exc:  # noqa: BLE001 - un cycle raté est documenté
             logger.exception("cycle d'auto-évolution en échec")
             result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
@@ -726,6 +764,9 @@ class SelfEvolver:
         )
         try:
             payload = self._json_object(self._ask(prompt))
+            self._check_stop()
+        except _CycleAborted:
+            raise
         except Exception as exc:  # noqa: BLE001 - pas de compétence cette fois
             self._journal.append(
                 {"type": "skill_forged", "ok": False, "error": f"réponse inutilisable : {exc}"}
@@ -950,6 +991,7 @@ class SelfEvolver:
             .replace("```", "")
             .split()
         )
+        self._check_stop()
         lessons = lessons[:1200]
         if not lessons:
             raise RuntimeError("leçons vides")

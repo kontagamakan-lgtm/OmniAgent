@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sys
 import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -413,6 +414,62 @@ def test_bundle_close_leaves_no_evolution_thread_alive() -> None:
             )
         finally:
             bundle.close()
+
+
+def test_forced_cycle_is_joined_when_bundle_closes() -> None:
+    with tmpdir("evolution-manual-close") as tmp:
+        settings = make_settings(tmp)
+        settings.evolution.enabled = True
+        settings.evolution.allow_network = False
+        settings.evolution.core_dir = str(Path(tmp) / "evolution_core")
+        bundle = build_agent(
+            settings, llm=_FakeLLM(), with_web=False, with_browser=False
+        )
+        evolver = bundle.evolver
+        assert evolver is not None
+
+        entered = threading.Event()
+        release = threading.Event()
+        closed = threading.Event()
+        thread = None
+        closer = None
+
+        def blocked_diagnosis() -> dict[str, object]:
+            entered.set()
+            release.wait(5)
+            return {"needs_forge": False}
+
+        evolver._diagnose = blocked_diagnosis  # type: ignore[method-assign]
+        try:
+            assert evolver.force_cycle() is True
+            thread = evolver._manual_thread
+            assert thread is not None and thread.is_alive()
+            assert entered.wait(5), "le cycle manuel doit avoir commencé"
+
+            def close() -> None:
+                try:
+                    bundle.close()
+                finally:
+                    closed.set()
+
+            closer = threading.Thread(target=close, name="test-bundle-close")
+            closer.start()
+            assert evolver._stop.wait(2), "close doit demander l'arrêt"
+            time.sleep(0.2)
+            assert closer.is_alive(), "close doit joindre le cycle manuel"
+        finally:
+            release.set()
+            if closer is not None:
+                closer.join(10)
+            bundle.close()
+
+        assert closed.is_set()
+        assert thread is not None and not thread.is_alive()
+        assert evolver._manual_thread is None
+        assert not any(
+            item.name == "omniagent-evolution-manual" and item.is_alive()
+            for item in threading.enumerate()
+        )
 
 
 def test_lessons_are_written_to_obsidian() -> None:
