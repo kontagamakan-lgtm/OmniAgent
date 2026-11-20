@@ -140,6 +140,83 @@ def _tool_call(name: str, **arguments) -> LLMResponse:
     )
 
 
+def test_agent_core_writes_an_obsidian_subfolder_and_keeps_existing_notes() -> None:
+    """La boucle ReAct écrit une note réelle sans réécrire les notes du vault."""
+    with tmpdir("int-obsidian-note") as tmp:
+        settings = make_settings(tmp)
+        settings.obsidian.enabled = True
+        settings.obsidian.auto_install = False
+        # Isole l'écriture demandée : ni note automatique ni journal de fin.
+        settings.obsidian.auto_memory = False
+        settings.obsidian.auto_journal = False
+        settings.agent.max_steps = 3
+        settings.agent.parallel_tool_calls = 1
+
+        llm = _ScriptedLLM(
+            [
+                _tool_call(
+                    "obsidian_remember",
+                    title="Projet Atlas",
+                    content="Le fournisseur Atlas livre le 12.",
+                    folder="02_Knowledge/Projets/Atlas",
+                    tags=["projet", "atlas"],
+                    links=["00_CORTEX_INDEX", "Note existante"],
+                    source="https://example.test/atlas",
+                ),
+                LLMResponse(text="note enregistrée", finish_reason="stop"),
+            ]
+        )
+        bundle = build_agent(settings, llm=llm, with_web=False, with_browser=False)
+        assert bundle.brain is not None
+
+        existing_folder = bundle.brain.root / "02_Knowledge" / "Projets" / "Atlas"
+        existing_folder.mkdir(parents=True, exist_ok=True)
+        existing = existing_folder / "note-existante.md"
+        existing.write_text(
+            "---\ntitle: \"Note existante\"\n---\n\n"
+            "# Note existante\n\nContenu à conserver.\n",
+            encoding="utf-8",
+        )
+        existing_before = existing.read_bytes()
+
+        reply = None
+        try:
+            reply = bundle.agent.run("mémorise le fournisseur Atlas")
+        finally:
+            bundle.close()
+
+        assert reply is not None, "run() n'a rien retourné"
+        assert reply.ok and reply.stop_reason == "final", reply.to_dict()
+        assert reply.tool_calls == 1, reply.to_dict()
+        assert reply.steps[0].calls[0].name == "obsidian_remember"
+        assert reply.steps[0].calls[0].ok, reply.transcript()
+
+        note = existing_folder / "projet-atlas.md"
+        assert note.is_file(), note
+        note_text = note.read_text(encoding="utf-8")
+        assert "Le fournisseur Atlas livre le 12." in note_text
+        assert "#projet" in note_text and "#atlas" in note_text
+        assert "[[00_CORTEX_INDEX]]" in note_text
+        assert "[[Note existante]]" in note_text
+
+        # La note déjà présente n'est ni réécrite ni supprimée.
+        assert existing.read_bytes() == existing_before
+
+        index = (bundle.brain.root / "00_CORTEX_INDEX.md").read_text(encoding="utf-8")
+        assert "Notes indexées : 2" in index, index
+        assert "[[Projet Atlas]]" in index
+        assert "`02_Knowledge/Projets/Atlas/projet-atlas.md`" in index
+        assert "[[Note existante]]" in index
+        assert "`02_Knowledge/Projets/Atlas/note-existante.md`" in index
+
+        # L'outil a bien reçu l'appel ReAct et renvoyé son chemin relatif.
+        schemas = {schema["function"]["name"] for schema in (llm.calls[0]["tools"] or [])}
+        assert "obsidian_remember" in schemas
+        observations = llm.last_tool_contents()
+        assert len(observations) == 1, observations
+        assert "02_Knowledge/Projets/Atlas/projet-atlas.md" in observations[0]
+
+
 def test_agent_core_drives_every_real_tool_family() -> None:
     """Boucle ReAct sur les vrais outils : schémas, dispatch et masquage ensemble.
 
