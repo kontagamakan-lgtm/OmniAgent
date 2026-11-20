@@ -32,6 +32,20 @@ __all__ = ["OmniAgentWindow", "available", "run_gui"]
 
 logger = logging.getLogger(f"{APP_ID}.ui")
 
+# Palette de la maquette : fonds presque noirs, surfaces vert-gris et accent
+# menthe. Les widgets de la fenêtre principale la reprennent explicitement,
+# pour que le thème reste cohérent même si CustomTkinter change ses défauts.
+_UI_BG = "#101313"
+_UI_SIDEBAR = "#131717"
+_UI_SURFACE = "#191D1D"
+_UI_SURFACE_2 = "#1E2322"
+_UI_FIELD = "#111612"
+_UI_LINE = "#2A302E"
+_UI_TEXT = "#ECF0ED"
+_UI_MUTED = "#8C9691"
+_UI_ACCENT_DARK = "#263B29"
+_UI_RED = "#ED8F89"
+
 _TOOL_LABELS = {
     "fs_read_text": "lecture d'un fichier",
     "fs_write_text": "écriture d'un fichier",
@@ -145,6 +159,9 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                     logger.debug("icône de fenêtre non chargée", exc_info=True)
 
             self.settings = settings
+            # L'accent vient de la configuration : `ui.accent` n'est plus une
+            # valeur morte, tout en gardant le vert menthe par défaut.
+            self._accent = settings.ui.accent
             self.bundle = bundle
             self.controller = AgentController(bundle.agent)
             self._pump_id: str | None = None
@@ -206,116 +223,823 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
 
         # -- construction ---------------------------------------------------
 
-        def _build_widgets(self) -> None:
-            self.grid_columnconfigure(0, weight=1)
-            self.grid_rowconfigure(1, weight=1)
+        # -- style ---------------------------------------------------------
 
-            header = ctk.CTkFrame(self)
-            header.grid(row=0, column=0, sticky="ew", padx=12, pady=(12, 6))
-            header.grid_columnconfigure(0, weight=1)
+        def _font(self, delta: int = 0, weight: str = "normal") -> tuple:
+            """Police de l'interface, dimensionnée depuis les réglages."""
+            return (
+                self.settings.ui.font_family,
+                max(9, int(self.settings.ui.font_size) + delta),
+                weight,
+            )
+
+        def _button(
+            self,
+            parent: Any,
+            text: str,
+            command: Any,
+            *,
+            primary: bool = False,
+            danger: bool = False,
+            ghost: bool = False,
+            width: int = 120,
+            height: int = 34,
+            anchor: str = "center",
+            font_delta: int = -1,
+        ) -> Any:
+            """Bouton cohérent avec la maquette, sans perdre les actions existantes."""
+            options: dict[str, Any] = {
+                "text": text,
+                "command": command,
+                "width": width,
+                "height": height,
+                "anchor": anchor,
+                "corner_radius": 7,
+                "font": self._font(font_delta, "bold" if primary else "normal"),
+            }
+            if primary:
+                options.update(
+                    fg_color=self._accent,
+                    hover_color="#C9F7C5",
+                    text_color="#1C301E",
+                    border_width=0,
+                )
+            elif danger:
+                options.update(
+                    fg_color="#2A1D1B",
+                    hover_color="#3A2522",
+                    text_color=_UI_RED,
+                    border_width=1,
+                    border_color="#4A302E",
+                )
+            elif ghost:
+                options.update(
+                    fg_color="transparent",
+                    hover_color=_UI_SURFACE_2,
+                    text_color=_UI_MUTED,
+                    border_width=0,
+                )
+            else:
+                options.update(
+                    fg_color=_UI_SURFACE_2,
+                    hover_color="#273027",
+                    text_color=_UI_TEXT,
+                    border_width=1,
+                    border_color=_UI_LINE,
+                )
+            return ctk.CTkButton(parent, **options)
+
+        def _nav(
+            self,
+            parent: Any,
+            text: str,
+            command: Any,
+            *,
+            active: bool = False,
+            glyph: str = "·",
+        ) -> Any:
+            """Entrée de la barre latérale, avec l'état actif de la maquette."""
+            button = self._button(
+                parent,
+                f"{glyph}   {text}",
+                command,
+                ghost=True,
+                width=190,
+                height=38,
+                anchor="w",
+                font_delta=-1,
+            )
+            if active:
+                button.configure(
+                    fg_color=_UI_ACCENT_DARK,
+                    hover_color="#2E4032",
+                    text_color=self._accent,
+                )
+            button.pack(fill="x", pady=2)
+            return button
+
+        def _card(self, parent: Any) -> Any:
+            return ctk.CTkFrame(
+                parent,
+                fg_color=_UI_SURFACE,
+                border_width=1,
+                border_color=_UI_LINE,
+                corner_radius=10,
+            )
+
+        def _panel_title(self, parent: Any, title: str) -> Any:
+            header = ctk.CTkFrame(parent, fg_color="transparent", height=44)
+            header.pack(fill="x", padx=16)
+            header.pack_propagate(False)
             ctk.CTkLabel(
                 header,
-                text=f"{APP_NAME} — assistant autonome Windows",
-                font=(self.settings.ui.font_family, self.settings.ui.font_size + 3, "bold"),
+                text=title,
+                font=self._font(-2, "bold"),
+                text_color=_UI_TEXT,
                 anchor="w",
-            ).grid(row=0, column=0, sticky="ew", padx=10, pady=(8, 0))
-            self.status = ctk.CTkLabel(
-                header, text="prêt", anchor="w", text_color="#9CA3AF"
-            )
-            self.status.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 8))
-            # Jauge du budget persistant (jour/semaine/mois), rafraîchie lentement.
-            self.budget_label = ctk.CTkLabel(
-                header, text="budget : …", anchor="w", text_color="#9CA3AF"
-            )
-            self.budget_label.grid(
-                row=2, column=0, columnspan=2, sticky="ew", padx=10, pady=(0, 8)
-            )
-            ctk.CTkButton(
-                header, text="Assistant", width=110, command=self._open_assistant
-            ).grid(row=0, column=1, rowspan=2, padx=10, pady=8)
+            ).pack(side="left", fill="y")
+            return header
 
-            self.transcript = ctk.CTkTextbox(self, wrap="word", state="disabled")
-            self.transcript.grid(row=1, column=0, sticky="nsew", padx=12, pady=6)
+        def _focus_composer(self) -> None:
+            """Cliquer sur « Assistant » ramène au composeur sans effacer la session."""
+            self.prompt.focus_set()
+
+        def _new_session(self) -> None:
+            """Vide la conversation affichée sans toucher aux traces sur disque."""
+            if getattr(self.controller, "busy", False):
+                self._set_status("une tâche est déjà en cours")
+                return
+            thread = vars(self).get("_autonomy_thread")
+            if thread is not None and thread.is_alive():
+                self._set_status("session autonome en cours : arrêtez-la d'abord")
+                return
+            self.transcript.configure(state="normal")
+            self.transcript.delete("1.0", "end")
+            self.transcript.configure(state="disabled")
+            self.transcript.grid_remove()
+            welcome = vars(self).get("welcome_frame")
+            if welcome is not None:
+                welcome.grid()
+            self._tasks_done = 0
+            count = vars(self).get("task_count_label")
+            if count is not None:
+                count.configure(text="0")
+            self.prompt.delete("1.0", "end")
+            self._set_status("prêt")
+            self.prompt.focus_set()
+
+        def _build_widgets(self) -> None:
+            self.configure(fg_color=_UI_BG)
+            self.grid_columnconfigure(1, weight=1)
+            self.grid_rowconfigure(0, weight=1)
+            self._tasks_done = 0
+
+            # -- barre latérale ------------------------------------------------
+            side = ctk.CTkFrame(
+                self, width=226, corner_radius=0, fg_color=_UI_SIDEBAR
+            )
+            side.grid(row=0, column=0, sticky="ns")
+
+            brand = ctk.CTkFrame(side, fg_color="transparent")
+            brand.pack(fill="x", padx=16, pady=(28, 0))
+            ctk.CTkLabel(
+                brand,
+                text="◆",
+                width=34,
+                font=self._font(8, "bold"),
+                text_color=self._accent,
+            ).pack(side="left")
+            ctk.CTkLabel(
+                brand, text="Omni", font=self._font(8, "bold"), text_color=_UI_TEXT
+            ).pack(side="left")
+            ctk.CTkLabel(
+                brand,
+                text="Agent",
+                font=self._font(8, "bold"),
+                text_color=self._accent,
+            ).pack(side="left")
+
+            workspace_switch = ctk.CTkFrame(
+                side,
+                fg_color=_UI_SURFACE,
+                border_width=1,
+                border_color=_UI_LINE,
+                corner_radius=8,
+            )
+            workspace_switch.pack(fill="x", padx=16, pady=(28, 22))
+            ctk.CTkLabel(
+                workspace_switch,
+                text="▦",
+                width=28,
+                font=self._font(2),
+                text_color=self._accent,
+            ).pack(side="left", padx=(10, 8), pady=10)
+            workspace_text = ctk.CTkFrame(workspace_switch, fg_color="transparent")
+            workspace_text.pack(side="left", pady=9)
+            ctk.CTkLabel(
+                workspace_text,
+                text="Espace personnel",
+                font=self._font(-1, "bold"),
+                text_color=_UI_TEXT,
+                anchor="w",
+            ).pack(fill="x")
+            ctk.CTkLabel(
+                workspace_text,
+                text="Windows · Local",
+                font=self._font(-3),
+                text_color=_UI_MUTED,
+                anchor="w",
+            ).pack(fill="x")
+
+            ctk.CTkLabel(
+                side,
+                text="ESPACE DE TRAVAIL",
+                font=self._font(-3, "bold"),
+                text_color="#68746D",
+                anchor="w",
+            ).pack(fill="x", padx=24, pady=(0, 8))
+            primary_nav = ctk.CTkFrame(side, fg_color="transparent")
+            primary_nav.pack(fill="x", padx=12)
+            self._nav(
+                primary_nav,
+                "Assistant",
+                self._focus_composer,
+                active=True,
+                glyph="◆",
+            )
+            self._nav(
+                primary_nav, "Historique", self._open_journal, glyph="◷"
+            )
+            self._nav(
+                primary_nav, "Planificateur", self._open_scheduler, glyph="↻"
+            )
+            self._nav(
+                primary_nav, "Propositions", self._open_proposals, glyph="✦"
+            )
+
+            ctk.CTkLabel(
+                side,
+                text="CONFIGURATION",
+                font=self._font(-3, "bold"),
+                text_color="#68746D",
+                anchor="w",
+            ).pack(fill="x", padx=24, pady=(24, 8))
+            config_nav = ctk.CTkFrame(side, fg_color="transparent")
+            config_nav.pack(fill="x", padx=12)
+            self._nav(
+                config_nav, "Autonomie", self._toggle_autonomy, glyph="⌁"
+            )
+            self._nav(
+                config_nav, "Évolution", self._open_evolution, glyph="⚡"
+            )
+            self._nav(
+                config_nav, "Clés & modèles", self._open_keys, glyph="⌘"
+            )
+            self._nav(
+                config_nav,
+                "Directives",
+                self._open_prime_directive,
+                glyph="▤",
+            )
+            self._nav(
+                config_nav,
+                "Configuration initiale",
+                self._open_assistant,
+                glyph="⚙",
+            )
+
+            sidebar_bottom = ctk.CTkFrame(side, fg_color="transparent")
+            sidebar_bottom.pack(side="bottom", fill="x", padx=16, pady=16)
+            ctk.CTkFrame(
+                sidebar_bottom, height=1, fg_color=_UI_LINE
+            ).pack(fill="x", pady=(0, 12))
+            profile = ctk.CTkFrame(sidebar_bottom, fg_color="transparent")
+            profile.pack(fill="x")
+            ctk.CTkLabel(
+                profile,
+                text="OA",
+                width=32,
+                height=32,
+                corner_radius=16,
+                fg_color="#38382F",
+                text_color="#D4D5B6",
+                font=self._font(-2, "bold"),
+            ).pack(side="left")
+            profile_text = ctk.CTkFrame(profile, fg_color="transparent")
+            profile_text.pack(side="left", padx=9)
+            ctk.CTkLabel(
+                profile_text,
+                text="OmniAgent",
+                font=self._font(-2),
+                text_color=_UI_TEXT,
+                anchor="w",
+            ).pack(fill="x")
+            ctk.CTkLabel(
+                profile_text,
+                text="Session locale",
+                font=self._font(-3),
+                text_color=_UI_MUTED,
+                anchor="w",
+            ).pack(fill="x")
+
+            # -- zone principale ----------------------------------------------
+            main = ctk.CTkFrame(self, fg_color=_UI_BG, corner_radius=0)
+            main.grid(row=0, column=1, sticky="nsew")
+            main.grid_columnconfigure(0, weight=1)
+            main.grid_rowconfigure(1, weight=1)
+
+            topbar = ctk.CTkFrame(
+                main, height=75, fg_color=_UI_BG, corner_radius=0
+            )
+            topbar.grid(row=0, column=0, sticky="ew", padx=34)
+            topbar.grid_propagate(False)
+            topbar.grid_columnconfigure(1, weight=1)
+
+            crumbs = ctk.CTkFrame(topbar, fg_color="transparent")
+            crumbs.grid(row=0, column=0, sticky="w")
+            ctk.CTkLabel(
+                crumbs,
+                text="▦  Espace de travail",
+                font=self._font(-2),
+                text_color="#89958D",
+            ).pack(side="left")
+            ctk.CTkLabel(
+                crumbs,
+                text="/",
+                font=self._font(-2),
+                text_color="#48514B",
+            ).pack(side="left", padx=9)
+            ctk.CTkLabel(
+                crumbs,
+                text="Assistant",
+                font=self._font(-1),
+                text_color="#D6DDD7",
+            ).pack(side="left")
+
+            top_actions = ctk.CTkFrame(topbar, fg_color="transparent")
+            top_actions.grid(row=0, column=2, sticky="e")
+            version = ctk.CTkFrame(
+                top_actions,
+                fg_color="transparent",
+                border_width=1,
+                border_color=_UI_LINE,
+                corner_radius=4,
+            )
+            version.pack(side="left", padx=(0, 10))
+            ctk.CTkLabel(
+                version,
+                text=f"v{APP_VERSION}",
+                font=self._font(-3),
+                text_color=_UI_MUTED,
+            ).pack(padx=7, pady=3)
+            self._button(
+                top_actions,
+                "?",
+                self._support_bundle,
+                ghost=True,
+                width=30,
+                height=30,
+                font_delta=1,
+            ).pack(side="left")
+
+            content = ctk.CTkFrame(main, fg_color=_UI_BG, corner_radius=0)
+            content.grid(
+                row=1, column=0, sticky="nsew", padx=34, pady=(12, 20)
+            )
+            content.grid_columnconfigure(0, weight=1)
+            content.grid_rowconfigure(2, weight=1)
+
+            heading = ctk.CTkFrame(content, fg_color="transparent")
+            heading.grid(row=0, column=0, sticky="ew", pady=(6, 22))
+            heading.grid_columnconfigure(0, weight=1)
+            heading_text = ctk.CTkFrame(heading, fg_color="transparent")
+            heading_text.grid(row=0, column=0, sticky="w")
+            ctk.CTkLabel(
+                heading_text,
+                text="VOTRE COPILOTE AU QUOTIDIEN",
+                font=self._font(-3, "bold"),
+                text_color=self._accent,
+                anchor="w",
+            ).pack(fill="x", pady=(0, 8))
+            ctk.CTkLabel(
+                heading_text,
+                text="À vous de donner le cap.",
+                font=self._font(9, "bold"),
+                text_color=_UI_TEXT,
+                anchor="w",
+            ).pack(fill="x")
+            ctk.CTkLabel(
+                heading_text,
+                text="Une tâche en tête ? Votre agent s'occupe de la suite.",
+                font=self._font(-1),
+                text_color=_UI_MUTED,
+                anchor="w",
+            ).pack(fill="x", pady=(6, 0))
+            heading_actions = ctk.CTkFrame(heading, fg_color="transparent")
+            heading_actions.grid(row=0, column=1, sticky="e")
+            self._button(
+                heading_actions,
+                "Voir l'historique",
+                self._open_journal,
+                ghost=True,
+                width=130,
+            ).pack(side="left", padx=(0, 8))
+            self._button(
+                heading_actions,
+                "+  Nouvelle session",
+                self._new_session,
+                primary=True,
+                width=145,
+            ).pack(side="left")
+
+            summary = ctk.CTkFrame(content, fg_color="transparent")
+            summary.grid(row=1, column=0, sticky="ew", pady=(0, 20))
+            for column in range(3):
+                summary.grid_columnconfigure(column, weight=1, uniform="stat")
+
+            stat_agent = self._card(summary)
+            stat_agent.grid(row=0, column=0, sticky="nsew", padx=(0, 7))
+            stat_agent.grid_columnconfigure(1, weight=1)
+            ctk.CTkLabel(
+                stat_agent,
+                text="◆",
+                width=38,
+                height=38,
+                corner_radius=8,
+                fg_color="#232B24",
+                text_color="#A6BBA5",
+                font=self._font(2, "bold"),
+            ).grid(row=0, column=0, rowspan=2, padx=(14, 11), pady=14)
+            ctk.CTkLabel(
+                stat_agent,
+                text="Statut de l'agent",
+                font=self._font(-3),
+                text_color="#96A197",
+                anchor="w",
+            ).grid(row=0, column=1, sticky="sw", pady=(14, 0))
+            self.status = ctk.CTkLabel(
+                stat_agent,
+                text="Prêt à travailler",
+                font=self._font(1, "bold"),
+                text_color=_UI_TEXT,
+                anchor="w",
+            )
+            self.status.grid(row=1, column=1, sticky="nw", pady=(2, 14))
+
+            stat_tasks = self._card(summary)
+            stat_tasks.grid(row=0, column=1, sticky="nsew", padx=7)
+            stat_tasks.grid_columnconfigure(1, weight=1)
+            ctk.CTkLabel(
+                stat_tasks,
+                text="✓",
+                width=38,
+                height=38,
+                corner_radius=8,
+                fg_color="#232B24",
+                text_color="#A6BBA5",
+                font=self._font(4, "bold"),
+            ).grid(row=0, column=0, rowspan=2, padx=(14, 11), pady=14)
+            ctk.CTkLabel(
+                stat_tasks,
+                text="Tâches effectuées",
+                font=self._font(-3),
+                text_color="#96A197",
+                anchor="w",
+            ).grid(row=0, column=1, sticky="sw", pady=(14, 0))
+            self.task_count_label = ctk.CTkLabel(
+                stat_tasks,
+                text="0",
+                font=self._font(1, "bold"),
+                text_color=_UI_TEXT,
+                anchor="w",
+            )
+            self.task_count_label.grid(row=1, column=1, sticky="nw", pady=(2, 14))
+
+            stat_budget = self._card(summary)
+            stat_budget.grid(row=0, column=2, sticky="nsew", padx=(7, 0))
+            stat_budget.grid_columnconfigure(1, weight=1)
+            ctk.CTkLabel(
+                stat_budget,
+                text="$",
+                width=38,
+                height=38,
+                corner_radius=8,
+                fg_color="#232B24",
+                text_color="#A6BBA5",
+                font=self._font(3, "bold"),
+            ).grid(row=0, column=0, rowspan=2, padx=(14, 11), pady=14)
+            ctk.CTkLabel(
+                stat_budget,
+                text="Budget utilisé aujourd'hui",
+                font=self._font(-3),
+                text_color="#96A197",
+                anchor="w",
+            ).grid(row=0, column=1, sticky="sw", pady=(14, 0))
+            self.budget_card_label = ctk.CTkLabel(
+                stat_budget,
+                text="0,00 $",
+                font=self._font(1, "bold"),
+                text_color=_UI_TEXT,
+                anchor="w",
+            )
+            self.budget_card_label.grid(row=1, column=1, sticky="nw", pady=(2, 14))
+            ctk.CTkLabel(
+                stat_budget,
+                text="USD",
+                font=self._font(-3, "bold"),
+                text_color="#B4D6AB",
+                fg_color="#28392B",
+                corner_radius=4,
+                width=30,
+            ).grid(row=1, column=2, sticky="e", padx=(0, 12))
+
+            workspace = ctk.CTkFrame(content, fg_color="transparent")
+            workspace.grid(row=2, column=0, sticky="nsew")
+            workspace.grid_columnconfigure(0, weight=1)
+            workspace.grid_columnconfigure(1, minsize=290)
+            workspace.grid_rowconfigure(0, weight=1)
+
+            assistant = self._card(workspace)
+            assistant.grid(row=0, column=0, sticky="nsew")
+            assistant.grid_columnconfigure(0, weight=1)
+            assistant.grid_rowconfigure(1, weight=1)
+
+            panel_header = ctk.CTkFrame(
+                assistant, fg_color="transparent", height=60
+            )
+            panel_header.grid(row=0, column=0, sticky="ew")
+            panel_header.grid_propagate(False)
+            panel_header.grid_columnconfigure(0, weight=1)
+            ctk.CTkLabel(
+                panel_header,
+                text="✦  Votre assistant",
+                font=self._font(-2, "bold"),
+                text_color=_UI_TEXT,
+                anchor="w",
+            ).grid(row=0, column=0, sticky="w", padx=20, pady=20)
+            self.session_status = ctk.CTkLabel(
+                panel_header,
+                text="● En ligne",
+                font=self._font(-3, "bold"),
+                text_color="#ABC6A6",
+                fg_color="#243027",
+                corner_radius=20,
+                padx=9,
+                pady=4,
+            )
+            self.session_status.grid(row=0, column=1, sticky="e", padx=18)
+
+            conversation = ctk.CTkFrame(assistant, fg_color=_UI_SURFACE)
+            conversation.grid(row=1, column=0, sticky="nsew")
+            conversation.grid_columnconfigure(0, weight=1)
+            conversation.grid_rowconfigure(0, weight=1)
+
+            self.welcome_frame = ctk.CTkFrame(conversation, fg_color=_UI_SURFACE)
+            self.welcome_frame.grid(row=0, column=0, sticky="nsew")
+            welcome_center = ctk.CTkFrame(
+                self.welcome_frame, fg_color="transparent"
+            )
+            welcome_center.pack(expand=True, pady=(22, 12))
+            ctk.CTkLabel(
+                welcome_center,
+                text="◆",
+                width=58,
+                height=58,
+                corner_radius=17,
+                fg_color="#29382A",
+                text_color=self._accent,
+                font=self._font(12, "bold"),
+            ).pack()
+            ctk.CTkLabel(
+                welcome_center,
+                text="Moins de tâches. Plus de possibilités.",
+                font=self._font(5, "bold"),
+                text_color=_UI_TEXT,
+            ).pack(pady=(15, 5))
+            ctk.CTkLabel(
+                welcome_center,
+                text=(
+                    "Décrivez ce que vous souhaitez accomplir.\n"
+                    "Je planifie, j'exécute, vous gardez le contrôle."
+                ),
+                font=self._font(-1),
+                text_color=_UI_MUTED,
+                justify="center",
+            ).pack(pady=(0, 17))
+
+            self.transcript = ctk.CTkTextbox(
+                conversation,
+                wrap="word",
+                state="disabled",
+                fg_color=_UI_SURFACE,
+                border_width=0,
+                corner_radius=0,
+                text_color=_UI_TEXT,
+                font=self._font(-1),
+                scrollbar_button_color="#3A4739",
+                scrollbar_button_hover_color="#4B5A42",
+            )
+            self.transcript.grid(row=0, column=0, sticky="nsew", padx=18, pady=12)
+            self.transcript.grid_remove()
             self._buffer = TranscriptBuffer(self.transcript)
 
-            bottom = ctk.CTkFrame(self)
-            bottom.grid(row=2, column=0, sticky="ew", padx=12, pady=(6, 12))
-            bottom.grid_columnconfigure(0, weight=1)
-            self.prompt = ctk.CTkTextbox(bottom, height=90, wrap="word")
-            self.prompt.grid(row=0, column=0, sticky="ew", padx=(0, 8), pady=6)
+            composer_wrap = ctk.CTkFrame(assistant, fg_color=_UI_SURFACE)
+            composer_wrap.grid(row=2, column=0, sticky="ew", padx=17, pady=(2, 13))
+            composer = ctk.CTkFrame(
+                composer_wrap,
+                fg_color=_UI_FIELD,
+                border_width=1,
+                border_color="#3A4739",
+                corner_radius=9,
+            )
+            composer.pack(fill="x")
+            self.prompt = ctk.CTkTextbox(
+                composer,
+                height=62,
+                wrap="word",
+                fg_color=_UI_FIELD,
+                border_width=0,
+                text_color=_UI_TEXT,
+                font=self._font(-1),
+            )
+            self.prompt.pack(fill="x", padx=11, pady=(8, 0))
             self.prompt.bind("<Control-Return>", lambda _event: self._send())
 
-            actions = ctk.CTkFrame(bottom)
-            actions.grid(row=0, column=1, sticky="ns", pady=6)
-            self.send_button = ctk.CTkButton(actions, text="Envoyer", command=self._send)
-            self.send_button.pack(fill="x", pady=(0, 6))
-            self.cancel_button = ctk.CTkButton(
-                actions, text="Annuler", command=self._cancel, state="disabled"
+            composer_bottom = ctk.CTkFrame(composer, fg_color="transparent")
+            composer_bottom.pack(fill="x", padx=9, pady=(2, 8))
+            composer_tools = ctk.CTkFrame(
+                composer_bottom, fg_color="transparent"
             )
-            self.cancel_button.pack(fill="x")
-            # Retour arrière d'un run : aperçu du journal puis application.
-            self.undo_button = ctk.CTkButton(
-                actions, text="Annuler ce run", width=110, command=self._undo_last_run
+            composer_tools.pack(side="left")
+            self._button(
+                composer_tools,
+                "Traces",
+                self._open_traces,
+                ghost=True,
+                width=64,
+                height=26,
+                font_delta=-3,
+            ).pack(side="left")
+            self.undo_button = self._button(
+                composer_tools,
+                "Annuler ce run",
+                self._undo_last_run,
+                ghost=True,
+                width=105,
+                height=26,
+                font_delta=-3,
             )
-            self.undo_button.pack(fill="x", pady=(6, 0))
-            ctk.CTkButton(
-                actions, text="Traces", width=110, command=self._open_traces
-            ).pack(fill="x", pady=(6, 0))
-            self.autonomy_button = ctk.CTkButton(
-                actions, text="Autonomie", width=110, command=self._toggle_autonomy
+            self.undo_button.pack(side="left", padx=2)
+            self._button(
+                composer_tools,
+                "Journal",
+                self._open_journal,
+                ghost=True,
+                width=64,
+                height=26,
+                font_delta=-3,
+            ).pack(side="left")
+            self.send_button = self._button(
+                composer_bottom,
+                "Envoyer  →",
+                self._send,
+                primary=True,
+                width=105,
+                height=30,
+                font_delta=-2,
             )
-            self.autonomy_button.pack(fill="x", pady=(6, 0))
-            self.evolution_button = ctk.CTkButton(
-                actions, text="Évolution", width=110, command=self._open_evolution
+            self.send_button.pack(side="right")
+            self.cancel_button = self._button(
+                composer_bottom,
+                "Annuler",
+                self._cancel,
+                ghost=True,
+                width=66,
+                height=30,
+                font_delta=-2,
             )
-            self.evolution_button.pack(fill="x", pady=(6, 0))
-            self.keys_button = ctk.CTkButton(
-                actions, text="Clés & LLM", width=110, command=self._open_keys
+            self.cancel_button.configure(state="disabled")
+            self.cancel_button.pack(side="right", padx=(0, 4))
+
+            composer_note = ctk.CTkFrame(assistant, fg_color=_UI_SURFACE)
+            composer_note.grid(row=3, column=0, sticky="ew", padx=20, pady=(0, 12))
+            ctk.CTkLabel(
+                composer_note,
+                text="Ctrl + Entrée pour envoyer  ·  Entrée pour une nouvelle ligne",
+                font=self._font(-4),
+                text_color="#68736A",
+                anchor="w",
+            ).pack(side="left")
+
+            # -- colonne de droite ---------------------------------------------
+            right = ctk.CTkFrame(workspace, fg_color=_UI_BG)
+            right.grid(row=0, column=1, sticky="nsew", padx=(20, 0))
+            right.grid_columnconfigure(0, weight=1)
+            right.grid_rowconfigure(0, weight=1)
+
+            session = self._card(right)
+            session.grid(row=0, column=0, sticky="new")
+            self._panel_title(session, "Contrôle de la session")
+            session_body = ctk.CTkFrame(session, fg_color="transparent")
+            session_body.pack(fill="x", padx=16, pady=(2, 10))
+
+            mode_row = ctk.CTkFrame(session_body, fg_color="transparent")
+            mode_row.pack(fill="x", pady=3)
+            ctk.CTkLabel(
+                mode_row,
+                text="Mode d'exécution",
+                font=self._font(-3),
+                text_color="#99A498",
+            ).pack(side="left")
+            self.mode_label = ctk.CTkLabel(
+                mode_row,
+                text="● Supervisé",
+                font=self._font(-3, "bold"),
+                text_color="#B4C5A8",
             )
-            self.keys_button.pack(fill="x", pady=(6, 0))
-            self.prime_button = ctk.CTkButton(
-                actions, text="Directive", width=110, command=self._open_prime_directive
+            self.mode_label.pack(side="right")
+
+            autonomy_row = ctk.CTkFrame(session_body, fg_color="transparent")
+            autonomy_row.pack(fill="x", pady=3)
+            ctk.CTkLabel(
+                autonomy_row,
+                text="Session autonome",
+                font=self._font(-3),
+                text_color="#99A498",
+            ).pack(side="left")
+            self.autonomy_button = self._button(
+                autonomy_row,
+                "Lancer",
+                self._toggle_autonomy,
+                ghost=False,
+                width=76,
+                height=26,
+                font_delta=-3,
             )
-            self.prime_button.pack(fill="x", pady=(6, 0))
-            # Enregistrement optionnel dans le Planificateur de tâches
-            # Windows : la fenêtre permet d'inscrire et de désinscrire.
-            self.schedule_button = ctk.CTkButton(
-                actions, text="Planificateur", width=110, command=self._open_scheduler
-            )
-            self.schedule_button.pack(fill="x", pady=(6, 0))
-            # Toujours visible, y compris quand une fenêtre modale a le focus :
-            # l'arrêt ne doit pas dépendre du bouton « Autonomie » masqué.
-            self.emergency_button = ctk.CTkButton(
-                actions,
-                text="Arrêt d'urgence",
-                width=110,
-                fg_color="#B91C1C",
-                hover_color="#991B1B",
-                command=self._emergency_stop,
-            )
-            self.emergency_button.pack(fill="x", pady=(6, 0))
-            self.journal_button = ctk.CTkButton(
-                actions, text="Journal", width=110, command=self._open_journal
-            )
-            self.journal_button.pack(fill="x", pady=(6, 0))
-            self.proposals_button = ctk.CTkButton(
-                actions, text="Propositions", width=110, command=self._open_proposals
-            )
-            self.proposals_button.pack(fill="x", pady=(6, 0))
-            self.support_button = ctk.CTkButton(
-                actions, text="Support", width=110, command=self._support_bundle
-            )
-            self.support_button.pack(fill="x", pady=(6, 0))
-            # Trace sur disque : l'utilisateur doit pouvoir refuser qu'une
-            # session laisse la tâche et les réponses en clair sur la machine.
+            self.autonomy_button.pack(side="right")
+
+            trace_row = ctk.CTkFrame(session_body, fg_color="transparent")
+            trace_row.pack(fill="x", pady=3)
+            ctk.CTkLabel(
+                trace_row,
+                text="Traces détaillées",
+                font=self._font(-3),
+                text_color="#99A498",
+            ).pack(side="left")
             self.trace_switch = ctk.CTkSwitch(
-                actions, text="trace", command=self._toggle_trace
+                trace_row,
+                text="",
+                width=38,
+                height=18,
+                fg_color="#414A40",
+                progress_color=self._accent,
+                button_color="#182218",
+                button_hover_color="#101810",
+                command=self._toggle_trace,
             )
-            self.trace_switch.pack(fill="x", pady=(6, 0))
+            self.trace_switch.pack(side="right")
             if self.controller.tracing:
                 self.trace_switch.select()
             else:
                 self.trace_switch.deselect()
+
+            ctk.CTkFrame(session_body, height=1, fg_color=_UI_LINE).pack(
+                fill="x", pady=(8, 6)
+            )
+            budget_row = ctk.CTkFrame(session_body, fg_color="transparent")
+            budget_row.pack(fill="x")
+            ctk.CTkLabel(
+                budget_row,
+                text="Budget quotidien",
+                font=self._font(-3),
+                text_color=_UI_MUTED,
+            ).pack(side="left")
+            self.budget_label = ctk.CTkLabel(
+                budget_row,
+                text="0,00 $ · sans plafond",
+                font=self._font(-3, "bold"),
+                text_color="#DBE3D5",
+            )
+            self.budget_label.pack(side="right")
+            self.budget_progress = ctk.CTkProgressBar(
+                session_body,
+                height=4,
+                corner_radius=4,
+                fg_color="#2E362B",
+                progress_color=self._accent,
+            )
+            self.budget_progress.pack(fill="x", pady=(10, 5))
+            self.budget_progress.set(0)
+            ctk.CTkLabel(
+                session_body,
+                text="Réinitialisation à minuit",
+                font=self._font(-4),
+                text_color="#71806F",
+                anchor="w",
+            ).pack(fill="x")
+
+            self.emergency_button = self._button(
+                right,
+                "Arrêt d'urgence   Ctrl + Alt + S",
+                self._emergency_stop,
+                danger=True,
+                width=290,
+                height=34,
+                font_delta=-3,
+            )
+            self.emergency_button.grid(
+                row=1, column=0, sticky="ew", pady=(12, 0)
+            )
+
+            footer = ctk.CTkFrame(content, fg_color="transparent")
+            footer.grid(row=3, column=0, sticky="ew", pady=(16, 0))
+            ctk.CTkLabel(
+                footer,
+                text="◇  Vos données restent sur votre machine. Votre confiance, notre priorité.",
+                font=self._font(-4),
+                text_color="#5E6C60",
+                anchor="w",
+            ).pack(side="left")
             self.bind_all("<Control-Alt-s>", lambda _event: self._emergency_stop())
 
         # -- affichage ------------------------------------------------------
@@ -332,9 +1056,30 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 "système": "•",
             }.get(kind, "")
             self._buffer.write(f"{prefix} {body}\n\n" if prefix else f"{body}\n")
+            # Les messages de l'utilisateur et de l'agent remplacent l'accueil :
+            # le transcript reste la source de vérité, la carte d'accueil ne
+            # sert qu'avant la première interaction.
+            if kind in {"vous", "agent", "outil", "erreur"}:
+                welcome = vars(self).get("welcome_frame")
+                if welcome is not None:
+                    welcome.grid_remove()
+                transcript = vars(self).get("transcript")
+                if transcript is not None:
+                    transcript.grid()
 
         def _set_status(self, text: str) -> None:
             self.status.configure(text=text)
+            session = vars(self).get("session_status")
+            if session is not None:
+                session.configure(text=f"● {text}")
+
+        def _record_task_done(self) -> None:
+            """Compteur de la carte « Tâches effectuées » (session courante)."""
+            count = int(vars(self).get("_tasks_done", 0)) + 1
+            self._tasks_done = count
+            label = vars(self).get("task_count_label")
+            if label is not None:
+                label.configure(text=str(count))
 
         def _close_stream(self, reason: str = "fragment interrompu") -> None:
             """Clôt explicitement la tentative en cours.
@@ -1302,6 +2047,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             if reply is not None and not self.controller.busy and not self._reported:
                 self._reported = True
                 if reply.ok:
+                    self._record_task_done()
                     if self._streaming:
                         # Le texte est déjà affiché fragment par fragment.
                         self._buffer.write("\n")
@@ -1410,8 +2156,22 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             if not state.allowed:
                 text += " · plafond atteint"
             label = local.get("budget_label")
+            card = local.get("budget_card_label")
+            if card is not None:
+                card.configure(text=f"{state.usage.day_cost:.2f} $")
+            limit = float(getattr(state, "limits", {}).get("day") or 0.0)
             if label is not None:
-                label.configure(text=text)
+                if limit > 0:
+                    label.configure(
+                        text=f"{state.usage.day_cost:.2f} / {limit:.2f} $"
+                    )
+                else:
+                    label.configure(text=f"{state.usage.day_cost:.2f} $ · sans plafond")
+            progress = local.get("budget_progress")
+            if progress is not None:
+                progress.set(
+                    min(1.0, state.usage.day_cost / limit) if limit > 0 else 0.0
+                )
 
         def _render(self, event: Event) -> None:
             payload: dict[str, Any] = event.payload if isinstance(event.payload, dict) else {}

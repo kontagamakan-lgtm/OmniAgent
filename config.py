@@ -595,7 +595,7 @@ class UIConfig:
     """Apparence et comportement de l'interface CustomTkinter."""
 
     appearance: Literal["dark", "light", "system"] = "dark"
-    accent: str = "#3B82F6"
+    accent: str = "#B7EDB2"
     font_family: str = "Segoe UI"
     font_size: int = 13
     window_width: int = 1280
