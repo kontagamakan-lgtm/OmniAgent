@@ -50,6 +50,7 @@ __all__ = [
     "install_obsidian",
     "resolve_obsidian_installer",
     "vault_path",
+    "verify_authenticode",
 ]
 
 logger = logging.getLogger(f"{APP_ID}.obsidian")
@@ -64,6 +65,8 @@ OBSIDIAN_RELEASES_API = (
 OBSIDIAN_INSTALLER_ENV = "OBSIDIAN_INSTALLER_URL"
 MAX_INSTALLER_BYTES = 512 * 1024 * 1024
 _MIN_INSTALLER_BYTES = 1024
+#: L'installateur Windows est signé par la société d'Obsidian (`Dynalist Inc`).
+OBSIDIAN_PUBLISHERS = ("dynalist", "obsidian")
 FOLDERS = (
     "00_CORTEX",
     "01_Sources",
@@ -693,6 +696,59 @@ def resolve_obsidian_installer(*, opener: Any = None) -> tuple[str, str]:
     raise RuntimeError("aucun installateur Windows dans la dernière version")
 
 
+def verify_authenticode(
+    path: str | Path, *, runner: Any = None
+) -> tuple[bool, str]:
+    """Vérifie la signature Authenticode et l'éditeur avant exécution.
+
+    Échoue fermé : sans PowerShell ou sans réponse lisible, le fichier est
+    refusé. Le statut doit être `Valid` et le certificat signataire doit
+    appartenir à Obsidian (`Dynalist Inc` ou `Obsidian`).
+    """
+    candidate = Path(path)
+    if not candidate.is_file():
+        return False, f"fichier absent : {candidate}"
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if not powershell:
+        return False, "PowerShell introuvable : signature non vérifiable"
+    script = (
+        "$s = Get-AuthenticodeSignature -LiteralPath $env:OMNIAGENT_SIGN_PATH; "
+        "$c = $s.SignerCertificate; $subject = ''; "
+        "if ($c) { $subject = [string]$c.Subject }; "
+        "[pscustomobject]@{ status = [string]$s.Status; subject = $subject } | "
+        "ConvertTo-Json -Compress"
+    )
+    run = runner or subprocess.run
+    try:
+        completed = run(
+            [powershell, "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+            env={**os.environ, "OMNIAGENT_SIGN_PATH": str(candidate)},
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            if os.name == "nt"
+            else 0,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, f"vérification Authenticode impossible : {type(exc).__name__}: {exc}"
+    try:
+        payload = json.loads(str(getattr(completed, "stdout", "") or "").strip())
+    except ValueError:
+        payload = None
+    if not isinstance(payload, dict):
+        return False, "réponse Authenticode illisible"
+    status = str(payload.get("status") or "").strip()
+    subject = str(payload.get("subject") or "").strip()
+    if status != "Valid":
+        return False, f"signature absente ou invalide (statut {status or 'inconnu'})"
+    lowered = subject.casefold()
+    if not any(publisher in lowered for publisher in OBSIDIAN_PUBLISHERS):
+        return False, f"signataire inattendu : {subject or 'aucun'}"
+    return True, f"signature valide ({subject})"
+
+
 def download_obsidian_installer(
     settings: Settings,
     *,
@@ -833,6 +889,13 @@ def install_obsidian(
                 False,
                 f"installateur officiel introuvable : {installer}. "
                 f"Téléchargez-le depuis {OBSIDIAN_DOWNLOAD_URL}.",
+            )
+        signed, signature = verify_authenticode(installer, runner=runner)
+        if not signed:
+            return (
+                False,
+                "; ".join([*problems, f"installateur refusé : {signature}"])
+                + f". Téléchargez l'installateur officiel : {OBSIDIAN_DOWNLOAD_URL}",
             )
         detail = _run_installer(
             [str(installer), "/S", "/currentuser"],

@@ -24,6 +24,7 @@ from tools.obsidian import (  # noqa: E402
     ensure_obsidian,
     install_obsidian,
     resolve_obsidian_installer,
+    verify_authenticode,
 )
 
 
@@ -332,6 +333,24 @@ def _opener(routes: dict[str, bytes]):
     return _open
 
 
+def _signature_json(
+    status: str = "Valid", subject: str = "CN=Dynalist Inc, O=Dynalist Inc, C=CA"
+) -> str:
+    return json.dumps({"status": status, "subject": subject})
+
+
+def _is_signature_call(command: list[str]) -> bool:
+    return any("Get-AuthenticodeSignature" in str(part) for part in command)
+
+
+def _which_with_powershell(name: str, *, winget: str | None = None) -> str | None:
+    if name == "winget":
+        return winget
+    if name in {"powershell", "powershell.exe", "pwsh"}:
+        return r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+    return None
+
+
 def _release_payload() -> bytes:
     return json.dumps(
         {
@@ -391,13 +410,15 @@ def test_install_falls_back_to_the_official_installer_without_winget(monkeypatch
         settings = _enabled(make_settings(tmp))
         installed = [False]
         monkeypatch.setattr(obsidian, "find_obsidian", lambda: Path(r"C:\Obsidian\Obsidian.exe") if installed[0] else None)
-        monkeypatch.setattr(obsidian.shutil, "which", lambda name: None)
+        monkeypatch.setattr(obsidian.shutil, "which", _which_with_powershell)
         installer = Path(tmp) / "Obsidian-1.15.1.exe"
         installer.write_bytes(b"MZ" + b"0" * 64)
         calls: list[list[str]] = []
 
         def runner(command, **kwargs):
             calls.append(command)
+            if _is_signature_call(command):
+                return SimpleNamespace(returncode=0, stdout=_signature_json(), stderr="")
             installed[0] = True
             return SimpleNamespace(returncode=0, stdout="", stderr="")
 
@@ -405,7 +426,8 @@ def test_install_falls_back_to_the_official_installer_without_winget(monkeypatch
             settings, runner=runner, downloader=lambda _settings: installer
         )
         assert ok and "installateur officiel" in detail
-        assert calls == [[str(installer), "/S", "/currentuser"]]
+        install_calls = [call for call in calls if not _is_signature_call(call)]
+        assert install_calls == [[str(installer), "/S", "/currentuser"]]
 
 
 def test_install_falls_back_when_winget_fails(monkeypatch) -> None:
@@ -413,13 +435,19 @@ def test_install_falls_back_when_winget_fails(monkeypatch) -> None:
         settings = _enabled(make_settings(tmp))
         installed = [False]
         monkeypatch.setattr(obsidian, "find_obsidian", lambda: Path(r"C:\Obsidian\Obsidian.exe") if installed[0] else None)
-        monkeypatch.setattr(obsidian.shutil, "which", lambda name: r"C:\winget.exe")
+        monkeypatch.setattr(
+            obsidian.shutil,
+            "which",
+            lambda name: _which_with_powershell(name, winget=r"C:\winget.exe"),
+        )
         installer = Path(tmp) / "Obsidian-1.15.1.exe"
         installer.write_bytes(b"MZ" + b"0" * 64)
         calls: list[list[str]] = []
 
         def runner(command, **kwargs):
             calls.append(command)
+            if _is_signature_call(command):
+                return SimpleNamespace(returncode=0, stdout=_signature_json(), stderr="")
             if command[0].endswith("winget.exe"):
                 return SimpleNamespace(returncode=1, stdout="", stderr="échec winget")
             installed[0] = True
@@ -429,8 +457,9 @@ def test_install_falls_back_when_winget_fails(monkeypatch) -> None:
             settings, runner=runner, downloader=lambda _settings: installer
         )
         assert ok and "installateur officiel" in detail
-        assert calls[0][:3] == [r"C:\winget.exe", "install", "--id"]
-        assert calls[1] == [str(installer), "/S", "/currentuser"]
+        used = [call for call in calls if not _is_signature_call(call)]
+        assert used[0][:3] == [r"C:\winget.exe", "install", "--id"]
+        assert used[1] == [str(installer), "/S", "/currentuser"]
 
 
 def test_install_reports_both_winget_and_download_failures(monkeypatch) -> None:
@@ -453,19 +482,82 @@ def test_install_requires_the_executable_after_running_the_installer(monkeypatch
     with tmpdir("obsidian-fallback-noverify") as tmp:
         settings = _enabled(make_settings(tmp))
         monkeypatch.setattr(obsidian, "find_obsidian", lambda: None)
-        monkeypatch.setattr(obsidian.shutil, "which", lambda name: None)
+        monkeypatch.setattr(obsidian.shutil, "which", _which_with_powershell)
         installer = Path(tmp) / "Obsidian-1.15.1.exe"
         installer.write_bytes(b"MZ" + b"0" * 64)
 
+        def runner(command, **kwargs):
+            stdout = _signature_json() if _is_signature_call(command) else ""
+            return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
         ok, detail = install_obsidian(
-            settings,
-            runner=lambda command, **kwargs: SimpleNamespace(
-                returncode=0, stdout="", stderr=""
-            ),
-            downloader=lambda _settings: installer,
+            settings, runner=runner, downloader=lambda _settings: installer
         )
         assert not ok
         assert "n'a pas confirmé l'installation" in detail
+
+
+def test_install_refuses_an_unsigned_installer(monkeypatch) -> None:
+    with tmpdir("obsidian-unsigned") as tmp:
+        settings = _enabled(make_settings(tmp))
+        monkeypatch.setattr(obsidian, "find_obsidian", lambda: None)
+        monkeypatch.setattr(obsidian.shutil, "which", _which_with_powershell)
+        installer = Path(tmp) / "Obsidian-1.15.1.exe"
+        installer.write_bytes(b"MZ" + b"0" * 64)
+        calls: list[list[str]] = []
+
+        def runner(command, **kwargs):
+            calls.append(command)
+            if _is_signature_call(command):
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout=_signature_json(status="NotSigned", subject=""),
+                    stderr="",
+                )
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        ok, detail = install_obsidian(
+            settings, runner=runner, downloader=lambda _settings: installer
+        )
+        assert not ok
+        assert "installateur refusé" in detail and "absente ou invalide" in detail
+        assert not [call for call in calls if not _is_signature_call(call)]
+
+
+def test_install_refuses_an_installer_signed_by_another_publisher(monkeypatch) -> None:
+    with tmpdir("obsidian-foreign-signer") as tmp:
+        settings = _enabled(make_settings(tmp))
+        monkeypatch.setattr(obsidian, "find_obsidian", lambda: None)
+        monkeypatch.setattr(obsidian.shutil, "which", _which_with_powershell)
+        installer = Path(tmp) / "Obsidian-1.15.1.exe"
+        installer.write_bytes(b"MZ" + b"0" * 64)
+        calls: list[list[str]] = []
+
+        def runner(command, **kwargs):
+            calls.append(command)
+            if _is_signature_call(command):
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout=_signature_json(subject="CN=Evil Corp, O=Evil Corp, C=XX"),
+                    stderr="",
+                )
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        ok, detail = install_obsidian(
+            settings, runner=runner, downloader=lambda _settings: installer
+        )
+        assert not ok
+        assert "signataire inattendu" in detail
+        assert not [call for call in calls if not _is_signature_call(call)]
+
+
+def test_authenticode_verification_fails_closed_without_powershell(monkeypatch) -> None:
+    with tmpdir("obsidian-no-powershell") as tmp:
+        installer = Path(tmp) / "Obsidian-1.15.1.exe"
+        installer.write_bytes(b"MZ" + b"0" * 64)
+        monkeypatch.setattr(obsidian.shutil, "which", lambda name: None)
+        ok, detail = verify_authenticode(installer)
+        assert not ok and "PowerShell" in detail
 
 
 def test_install_is_not_attempted_when_auto_install_is_off(monkeypatch) -> None:

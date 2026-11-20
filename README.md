@@ -130,8 +130,10 @@ lance si nécessaire `winget install --id Obsidian.Obsidian --exact --silent`.
 Si winget est absent ou échoue, l'agent télécharge l'installateur officiel de
 la dernière version (`Obsidian-<version>.exe`, release GitHub
 `obsidianmd/obsidian-releases`), vérifie que le fichier est bien un exécutable
-Windows, le lance en silencieux (`/S /currentuser`) puis confirme l'installation
-en retrouvant `Obsidian.exe`. En cas d'échec, le vault Markdown reste
+Windows et contrôle sa signature Authenticode (statut `Valid`, signataire
+`Dynalist Inc`/`Obsidian`) ; un installateur non signé, modifié ou signé par un
+autre éditeur est refusé. Il le lance ensuite en silencieux (`/S /currentuser`)
+puis confirme l'installation en retrouvant `Obsidian.exe`. En cas d'échec, le vault Markdown reste
 utilisable, et `python app.py --install-obsidian` permet de relancer le
 bootstrap explicitement. `OBSIDIAN_INSTALLER_URL` impose une URL https
 d'installateur à la place de l'API GitHub. Le vault est créé sous

@@ -287,8 +287,11 @@ Au premier lancement graphique, `obsidian.auto_install` lance si nécessaire
 ou échoue, l'installateur officiel de la dernière version est téléchargé depuis
 la release GitHub `obsidianmd/obsidian-releases` (asset `Obsidian-<version>.exe`),
 contrôlé (en-tête `MZ`, taille bornée à 512 Mio, lecture https uniquement),
-exécuté avec `/S /currentuser`, puis l'installation n'est déclarée réussie que
-si `Obsidian.exe` est retrouvé. `OBSIDIAN_INSTALLER_URL` remplace l'API GitHub
+puis sa signature Authenticode est vérifiée via PowerShell : statut `Valid` et
+signataire `Dynalist Inc`/`Obsidian` exigés, refus sinon (y compris si
+PowerShell manque). L'installateur n'est exécuté avec `/S /currentuser`
+qu'après cette vérification, et l'installation n'est déclarée réussie que si
+`Obsidian.exe` est retrouvé. `OBSIDIAN_INSTALLER_URL` remplace l'API GitHub
 par une URL https directe, notamment derrière un proxy. Si tout échoue, le
 vault reste utilisable et l'application continue ; `python app.py
 --install-obsidian` relance explicitement le bootstrap. Le `--check` affiche le
