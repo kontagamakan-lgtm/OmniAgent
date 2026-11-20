@@ -416,6 +416,42 @@ def test_bundle_close_leaves_no_evolution_thread_alive() -> None:
             bundle.close()
 
 
+def test_stop_joins_an_automatic_cycle_in_progress() -> None:
+    """Un délai borné laisserait l'auto-cycle écrire après l'arrêt."""
+    with tmpdir("evolution-auto-close") as tmp:
+        evolver, _loader, _llm = _evolver(tmp, ["- une leçon"])
+        evolver.settings.evolution.idle_minutes = 0.01
+        evolver._started = evolver._clock() - 60
+        evolver._last_activity = evolver._started
+        evolver._next_cycle = 0.0
+
+        entered = threading.Event()
+        release = threading.Event()
+
+        def blocked_diagnosis() -> dict[str, object]:
+            entered.set()
+            release.wait(5)
+            return {"needs_forge": False}
+
+        evolver._diagnose = blocked_diagnosis  # type: ignore[method-assign]
+        evolver.start()
+        assert entered.wait(10), "l'auto-cycle doit avoir commencé"
+
+        closer = threading.Thread(target=evolver.stop, name="test-evolution-stop")
+        closer.start()
+        assert evolver._stop.wait(2), "stop doit demander l'arrêt"
+        time.sleep(0.2)
+        assert closer.is_alive(), "stop doit joindre l'auto-cycle"
+
+        release.set()
+        closer.join(10)
+        assert not closer.is_alive()
+        assert not any(
+            item.name.startswith("omniagent-evolution") and item.is_alive()
+            for item in threading.enumerate()
+        )
+
+
 def test_forced_cycle_is_joined_when_bundle_closes() -> None:
     with tmpdir("evolution-manual-close") as tmp:
         settings = make_settings(tmp)

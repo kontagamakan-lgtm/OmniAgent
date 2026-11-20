@@ -347,6 +347,7 @@ class SelfEvolver:
         )
         self._state = self._load_state()
         self._cycle_guard = threading.Lock()
+        self._thread_lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._manual_thread: threading.Thread | None = None
@@ -455,25 +456,22 @@ class SelfEvolver:
         return True
 
     def stop(self) -> None:
-        """Arrête la boucle et joint aussi le cycle manuel éventuel."""
+        """Arrête la boucle et joint tous les cycles avant de rendre la main."""
         self._stop.set()
-        automatic = self._thread
-        manual = self._manual_thread
-        self._thread = None
-        self._manual_thread = None
+        # La référence est retirée sous verrou pour qu'un `force_cycle()`
+        # concurrent ne puisse pas démarrer un thread après cette lecture.
+        with self._thread_lock:
+            automatic = self._thread
+            manual = self._manual_thread
+            self._thread = None
+            self._manual_thread = None
         current = threading.current_thread()
-        # La boucle automatique est réveillée par l'événement. Le cycle manuel,
-        # lui, doit être joint sans délai : sinon il pourrait encore écrire
-        # après que le bundle a été fermé.
-        for thread, timeout in ((automatic, 5.0), (manual, None)):
+        # Un délai borné laisserait un cycle en cours écrire après la fermeture
+        # du bundle, notamment pendant un appel LLM ou un test de compétence.
+        for thread in (automatic, manual):
             if thread is None or thread is current or not thread.is_alive():
                 continue
-            if timeout is None:
-                thread.join()
-                continue
-            thread.join(timeout=timeout)
-            if thread.is_alive():
-                logger.warning("thread d'évolution non joint : %s", thread.name)
+            thread.join()
         if self._unsubscribe is not None:
             try:
                 self._unsubscribe()
@@ -483,25 +481,30 @@ class SelfEvolver:
 
     def force_cycle(self) -> bool:
         """Lance un cycle immédiat, refusé au-delà du plafond ou du budget."""
-        if not self.enabled or self._stop.is_set():
-            return False
-        if self._cycle_guard.locked():
-            return False
-        self._mark_day()
-        refusal = self._cap_refusal("manuel") or self._budget_refusal()
-        if refusal:
-            self._refuse_cycle(reason="manuel", error=refusal)
-            return False
-        self._last_refusal = ""
-        thread = threading.Thread(
-            target=self._guarded_cycle,
-            kwargs={"reason": "manuel"},
-            name="omniagent-evolution-manual",
-            daemon=True,
-        )
-        self._manual_thread = thread
-        thread.start()
-        return True
+        # Sérialise le démarrage avec `stop()` : sans ce verrou, deux clics
+        # pouvaient remplacer `_manual_thread` et laisser le premier orphelin.
+        with self._thread_lock:
+            if not self.enabled or self._stop.is_set():
+                return False
+            if self._cycle_guard.locked():
+                return False
+            if self._manual_thread is not None and self._manual_thread.is_alive():
+                return False
+            self._mark_day()
+            refusal = self._cap_refusal("manuel") or self._budget_refusal()
+            if refusal:
+                self._refuse_cycle(reason="manuel", error=refusal)
+                return False
+            self._last_refusal = ""
+            thread = threading.Thread(
+                target=self._guarded_cycle,
+                kwargs={"reason": "manuel"},
+                name="omniagent-evolution-manual",
+                daemon=True,
+            )
+            self._manual_thread = thread
+            thread.start()
+            return True
 
     def _loop(self) -> None:
         while not self._stop.wait(5.0):
