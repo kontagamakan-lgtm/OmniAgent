@@ -551,6 +551,63 @@ def test_install_refuses_an_installer_signed_by_another_publisher(monkeypatch) -
         assert not [call for call in calls if not _is_signature_call(call)]
 
 
+def test_authenticode_refuses_a_lookalike_publisher(monkeypatch) -> None:
+    with tmpdir("obsidian-lookalike-signer") as tmp:
+        installer = Path(tmp) / "Obsidian-1.15.1.exe"
+        installer.write_bytes(b"MZ" + b"0" * 64)
+        monkeypatch.setattr(obsidian.shutil, "which", _which_with_powershell)
+
+        def runner(command, **kwargs):
+            return SimpleNamespace(
+                returncode=0,
+                stdout=_signature_json(
+                    subject="CN=Evil Obsidian Ltd, O=Evil Obsidian Ltd, C=FR"
+                ),
+                stderr="",
+            )
+
+        ok, detail = verify_authenticode(installer, runner=runner)
+        assert not ok
+        assert "signataire inattendu" in detail
+
+
+def test_authenticode_ignores_obsidian_outside_cn_and_o(monkeypatch) -> None:
+    with tmpdir("obsidian-subject-lookalike") as tmp:
+        installer = Path(tmp) / "Obsidian-1.15.1.exe"
+        installer.write_bytes(b"MZ" + b"0" * 64)
+        monkeypatch.setattr(obsidian.shutil, "which", _which_with_powershell)
+
+        def runner(command, **kwargs):
+            return SimpleNamespace(
+                returncode=0,
+                stdout=_signature_json(
+                    subject="CN=Evil Corp, O=Evil Corp, L=Obsidian, C=FR"
+                ),
+                stderr="",
+            )
+
+        ok, detail = verify_authenticode(installer, runner=runner)
+        assert not ok
+        assert "signataire inattendu" in detail
+
+
+def test_authenticode_accepts_an_exact_obsidian_subject(monkeypatch) -> None:
+    with tmpdir("obsidian-exact-signer") as tmp:
+        installer = Path(tmp) / "Obsidian-1.15.1.exe"
+        installer.write_bytes(b"MZ" + b"0" * 64)
+        monkeypatch.setattr(obsidian.shutil, "which", _which_with_powershell)
+
+        def runner(command, **kwargs):
+            return SimpleNamespace(
+                returncode=0,
+                stdout=_signature_json(subject="CN=Obsidian, O=Obsidian, C=US"),
+                stderr="",
+            )
+
+        ok, detail = verify_authenticode(installer, runner=runner)
+        assert ok and "signature valide" in detail
+
+
 def test_authenticode_verification_fails_closed_without_powershell(monkeypatch) -> None:
     with tmpdir("obsidian-no-powershell") as tmp:
         installer = Path(tmp) / "Obsidian-1.15.1.exe"

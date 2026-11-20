@@ -65,8 +65,8 @@ OBSIDIAN_RELEASES_API = (
 OBSIDIAN_INSTALLER_ENV = "OBSIDIAN_INSTALLER_URL"
 MAX_INSTALLER_BYTES = 512 * 1024 * 1024
 _MIN_INSTALLER_BYTES = 1024
-#: L'installateur Windows est signé par la société d'Obsidian (`Dynalist Inc`).
-OBSIDIAN_PUBLISHERS = ("dynalist", "obsidian")
+#: Noms exacts acceptés dans CN et O (comparaison insensible à la casse).
+OBSIDIAN_PUBLISHERS = ("Dynalist Inc", "Obsidian")
 FOLDERS = (
     "00_CORTEX",
     "01_Sources",
@@ -696,14 +696,70 @@ def resolve_obsidian_installer(*, opener: Any = None) -> tuple[str, str]:
     raise RuntimeError("aucun installateur Windows dans la dernière version")
 
 
+def _subject_fields(subject: str) -> dict[str, list[str]]:
+    """Extrait les valeurs CN et O d'un sujet X.500, guillemets et échappements compris."""
+    parts: list[str] = []
+    current: list[str] = []
+    quoted = False
+    index = 0
+    text = str(subject or "")
+    while index < len(text):
+        char = text[index]
+        if char == "\\" and index + 1 < len(text):
+            current.append(text[index + 1])
+            index += 2
+            continue
+        if char == '"':
+            quoted = not quoted
+            index += 1
+            continue
+        if char == "," and not quoted:
+            parts.append("".join(current))
+            current = []
+            index += 1
+            continue
+        current.append(char)
+        index += 1
+    parts.append("".join(current))
+
+    fields: dict[str, list[str]] = {}
+    for part in parts:
+        key, separator, value = part.partition("=")
+        if not separator:
+            continue
+        name = key.strip().upper()
+        if name in {"CN", "O"}:
+            fields.setdefault(name, []).append(value.strip())
+    return fields
+
+
+def _is_obsidian_publisher(subject: str) -> bool:
+    """Vrai si CN **et** O sont exactement un nom d'éditeur autorisé.
+
+    Une comparaison par sous-chaîne laisserait passer « Evil Obsidian Ltd » ou
+    un `L=Obsidian`; on ne lit donc que les RDN CN/O et on compare la valeur
+    entière, sans préfixe ni suffixe.
+    """
+    fields = _subject_fields(subject)
+    common_names = fields.get("CN") or []
+    organizations = fields.get("O") or []
+    if not common_names or not organizations:
+        return False
+    allowed = {" ".join(name.split()).casefold() for name in OBSIDIAN_PUBLISHERS}
+    return all(
+        " ".join(value.split()).casefold() in allowed
+        for value in [*common_names, *organizations]
+    )
+
+
 def verify_authenticode(
     path: str | Path, *, runner: Any = None
 ) -> tuple[bool, str]:
     """Vérifie la signature Authenticode et l'éditeur avant exécution.
 
     Échoue fermé : sans PowerShell ou sans réponse lisible, le fichier est
-    refusé. Le statut doit être `Valid` et le certificat signataire doit
-    appartenir à Obsidian (`Dynalist Inc` ou `Obsidian`).
+    refusé. Le statut doit être `Valid` et le certificat doit porter un CN et un
+    O **exactement** égaux à `Dynalist Inc` ou `Obsidian` (casse ignorée).
     """
     candidate = Path(path)
     if not candidate.is_file():
@@ -743,8 +799,7 @@ def verify_authenticode(
     subject = str(payload.get("subject") or "").strip()
     if status != "Valid":
         return False, f"signature absente ou invalide (statut {status or 'inconnu'})"
-    lowered = subject.casefold()
-    if not any(publisher in lowered for publisher in OBSIDIAN_PUBLISHERS):
+    if not _is_obsidian_publisher(subject):
         return False, f"signataire inattendu : {subject or 'aucun'}"
     return True, f"signature valide ({subject})"
 
