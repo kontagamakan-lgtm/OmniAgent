@@ -62,6 +62,9 @@ def test_legal_filter_blocks_any_positive_risk_and_accepts_zero() -> None:
         assert blocked.allowed is False
         assert blocked.score == 0
         assert "bouclier légal" in blocked.reason
+        assert blocked.legal_alternative
+        assert "cadre déclaré" in blocked.legal_alternative
+        assert blocked.to_dict()["legal_alternative"] == blocked.legal_alternative
 
         missing = prime.evaluate_action_score(
             expected_gain_usd=5000,
@@ -75,6 +78,8 @@ def test_legal_filter_blocks_any_positive_risk_and_accepts_zero() -> None:
         )
         assert marker.allowed is False
         assert marker.legal_risk == 100
+        assert "expert-comptable" in marker.legal_alternative
+        assert "fraude" not in marker.legal_alternative.casefold()
 
         allowed = prime.evaluate_action_score(
             description="Automatiser la facturation",
@@ -87,6 +92,7 @@ def test_legal_filter_blocks_any_positive_risk_and_accepts_zero() -> None:
         assert allowed.allowed is True
         assert allowed.score > 0
         assert allowed.legal_risk == 0
+        assert allowed.legal_alternative == ""
 
 
 def test_scan_writes_only_legal_opportunities_to_obsidian_and_dashboard() -> None:
@@ -126,6 +132,16 @@ def test_scan_writes_only_legal_opportunities_to_obsidian_and_dashboard() -> Non
         assert result["ok"] is True
         assert result["added"] == 1
         assert result["rejected"] == 1
+        assert len(result["alternatives"]) == 1
+        alternative = result["alternatives"][0]
+        assert alternative["legal_risk"] == 100
+        assert alternative["legal_alternative"]
+        alternative_note = brain.root / alternative["note"]
+        assert alternative_note.is_file()
+        alternative_text = alternative_note.read_text(encoding="utf-8")
+        assert "Action bloquée : **Schéma à risque**" in alternative_text
+        assert "## Alternative légale proposée" in alternative_text
+        assert alternative["legal_alternative"] in alternative_text
         note = brain.root / result["opportunities"][0]["note"]
         assert note.is_file()
         assert note.parent.name == OPPORTUNITIES_FOLDER
@@ -138,6 +154,7 @@ def test_scan_writes_only_legal_opportunities_to_obsidian_and_dashboard() -> Non
         assert (brain.root / PROFILE_NOTE).is_file()
         index = (brain.root / "00_CORTEX_INDEX.md").read_text(encoding="utf-8")
         assert "Automatisation factures" in index
+        assert "Alternative légale - Schéma à risque" in index
         assert OPPORTUNITIES_FOLDER in index
 
         dashboard = prime.dashboard()

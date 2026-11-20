@@ -4,8 +4,9 @@ Le module ne simule aucune émotion et ne remplace pas un conseil juridique,
 fiscal ou financier professionnel. Il fournit une politique exécutable :
 
 * trois objectifs absolus (richesse, temps/bien-être, épanouissement) ;
-* un filtre conservateur qui refuse toute action dont le risque légal declaré
-  est supérieur à zéro, ou dont le texte contient un marqueur illégal ;
+* un filtre conservateur qui refuse toute action dont le risque légal déclaré
+  est supérieur à zéro, ou dont le texte contient un marqueur illégal, et
+  produit une alternative légale à risque déclaré nul ;
 * un score tri-piliers explicable et borné ;
 * une veille qui transforme des propositions vérifiées en notes Obsidian ;
 * un état de tableau de bord, sans exposer de secret.
@@ -157,6 +158,7 @@ class ActionEvaluation:
     time_score: float
     wellbeing_score: float
     reason: str
+    legal_alternative: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -167,6 +169,7 @@ class ActionEvaluation:
             "time_score": self.time_score,
             "wellbeing_score": self.wellbeing_score,
             "reason": self.reason,
+            "legal_alternative": self.legal_alternative,
         }
 
 
@@ -282,11 +285,15 @@ tags: [profil, directive-premiere]
         del time_required_hours  # conservé dans l'API pour l'appelant
         risk = self._legal_risk(legal_risk, description)
         if risk > 0:
+            alternative = self._legal_alternative(description)
             reason = (
                 f"bloqué par le bouclier légal : risque {risk:g}/100 "
-                "(seuil autorisé : 0)"
+                f"(seuil autorisé : 0) ; alternative légale à risque déclaré 0 : "
+                f"{alternative}"
             )
-            return ActionEvaluation(False, 0.0, risk, 0.0, 0.0, 0.0, reason)
+            return ActionEvaluation(
+                False, 0.0, risk, 0.0, 0.0, 0.0, reason, alternative
+            )
 
         gain = max(0.0, _number(expected_gain_usd))
         capital = max(0.0, _number(capital_required_usd))
@@ -317,6 +324,107 @@ tags: [profil, directive-premiere]
             round(time_score, 1),
             round(wellbeing_score, 1),
             reason,
+        )
+
+    def _legal_alternative(self, description: str) -> str:
+        """Construit une orientation légale de remplacement, sans garantie.
+
+        Le texte est déterministe et ne reprend aucun marqueur illégal. Il doit
+        être validé par un professionnel avant toute exécution ; la valeur 0
+        est une politique interne, pas une certification juridique.
+        """
+        lowered = str(description or "").casefold()
+        if any(
+            term in lowered
+            for term in ("fisc", "impot", "impôt", "tva", "taxe", "urssaf")
+        ):
+            return (
+                "Faire valider une optimisation fiscale déclarative par un "
+                "expert-comptable, facturer les revenus et conserver tous les "
+                "justificatifs ; n'utiliser que les dispositifs prévus par la loi."
+            )
+        if any(
+            term in lowered
+            for term in (
+                "contrefa",
+                "pirat",
+                "licence",
+                "logiciel",
+                "oeuvre",
+                "œuvre",
+            )
+        ):
+            return (
+                "Obtenir une licence ou une autorisation écrite, créer une œuvre "
+                "originale et formaliser les droits de chaque partie dans un contrat."
+            )
+        if any(
+            term in lowered
+            for term in (
+                "donnée",
+                "donnees",
+                "rgpd",
+                "sécurité",
+                "securite",
+                "accès",
+                "acces",
+            )
+        ):
+            return (
+                "Réaliser un audit de sécurité autorisé sur des systèmes possédés, "
+                "minimiser les données, documenter les accès et appliquer les règles "
+                "de protection des données applicables."
+            )
+        if any(
+            term in lowered
+            for term in (
+                "blanchiment",
+                "espèces",
+                "especes",
+                "offshore",
+                "compte non déclaré",
+                "compte non declare",
+            )
+        ):
+            return (
+                "Mettre en place une traçabilité complète des flux, vérifier "
+                "l'origine des fonds, déclarer les comptes requis et faire valider "
+                "le montage par un professionnel."
+            )
+        if any(
+            term in lowered
+            for term in (
+                "corruption",
+                "pot-de-vin",
+                "pots-de-vin",
+                "commission occulte",
+                "marché public",
+                "marche public",
+            )
+        ):
+            return (
+                "Remplacer tout avantage occulte par une procédure transparente : "
+                "appel d'offres, contrat écrit, due diligence et validation par le "
+                "service juridique."
+            )
+        if any(
+            term in lowered
+            for term in (
+                "travail dissimulé",
+                "travail dissimule",
+                "sans déclaration",
+                "sans declaration",
+                "sans licence",
+            )
+        ):
+            return (
+                "Formaliser l'activité par un contrat de travail ou de prestation "
+                "déclaré, payer les cotisations et facturer avec les mentions légales."
+            )
+        return (
+            "Conserver la finalité économique dans un cadre déclaré : contrat écrit, "
+            "facturation, assurance, traçabilité et validation préalable par un "
+            "professionnel compétent."
         )
 
     def _legal_risk(
@@ -363,7 +471,8 @@ tags: [profil, directive-premiere]
 
         `ask` est injecté pour rester testable et pour utiliser le même LLM que
         le cycle d'auto-évolution. Une proposition dont le risque légal n'est
-        pas explicitement zéro est rejetée et n'écrit aucune note.
+        pas explicitement zéro est rejetée : une alternative légale est jointe
+        à la décision et une note de remplacement est écrite dans Obsidian.
         """
         self.ensure_profile()
         profile = self.profile_text()
@@ -374,9 +483,16 @@ tags: [profil, directive-premiere]
             payload = self._parse_opportunities(ask(prompt))
         except Exception as exc:  # noqa: BLE001 - une réponse invalide ne casse rien
             logger.warning("veille Directive Première inexploitable", exc_info=True)
-            return {"ok": False, "error": f"{type(exc).__name__}: {exc}", "added": 0}
+            return {
+                "ok": False,
+                "error": f"{type(exc).__name__}: {exc}",
+                "added": 0,
+                "rejected": 0,
+                "alternatives": [],
+            }
 
         accepted: list[dict[str, Any]] = []
+        alternatives: list[dict[str, Any]] = []
         rejected = 0
         for item in payload[:3]:
             if not isinstance(item, Mapping):
@@ -398,6 +514,15 @@ tags: [profil, directive-premiere]
             )
             if not evaluation.allowed:
                 rejected += 1
+                alternative = {
+                    "title": title,
+                    "summary": summary,
+                    "legal_risk": evaluation.legal_risk,
+                    "reason": evaluation.reason,
+                    "legal_alternative": evaluation.legal_alternative,
+                }
+                alternative["note"] = self._write_alternative(alternative)
+                alternatives.append(alternative)
                 continue
             opportunity = {
                 "title": title,
@@ -448,6 +573,7 @@ tags: [profil, directive-premiere]
             "added": len(accepted),
             "rejected": rejected,
             "opportunities": accepted,
+            "alternatives": alternatives,
         }
 
     def _scan_prompt(
@@ -464,9 +590,10 @@ Réponds UNIQUEMENT par un tableau JSON. Chaque objet doit contenir :
 title, summary, pillar (wealth|time|wellbeing), capital_required_usd,
 time_required_hours, time_saved_hours, estimated_gain_usd, legal_risk
 (nombre de 0 à 100), legal_basis, automation, sources (tableau d'URL).
-Toute proposition dont legal_risk n'est pas 0 sera ignorée. N'invente pas de
-revenu garanti, de client, de prix ou de source. Si les données manquent,
-baisse l'estimation et indique l'hypothèse dans summary.
+Toute proposition dont legal_risk n'est pas 0 sera écartée et remplacée par
+une alternative légale à risque déclaré 0, à valider par un professionnel.
+N'invente pas de revenu garanti, de client, de prix ou de source. Si les
+données manquent, baisse l'estimation et indique l'hypothèse dans summary.
 
 Profil utilisateur :
 {profile[:MAX_PROMPT_PROFILE_CHARS] or "(profil non renseigné)"}
@@ -527,6 +654,38 @@ Fichiers/projets locaux (noms seulement) :
             )
         except (OSError, ValueError):
             logger.warning("opportunité non écrite dans Obsidian", exc_info=True)
+            return ""
+        return str(note.get("relative") or "")
+
+    def _write_alternative(self, item: Mapping[str, Any]) -> str:
+        """Conserve la décision bloquée et son alternative légale dans Obsidian."""
+        brain = self.brain
+        if brain is None:
+            return ""
+        title = _text(item.get("title"), 120)
+        body = (
+            "## Décision\n"
+            f"Action bloquée : **{title}**\n\n"
+            f"- Risque légal estimé : {_number(item.get('legal_risk')):g}/100\n"
+            f"- Motif : {_text(item.get('reason'), 1200)}\n"
+            f"- Résumé de l'action écartée : {_text(item.get('summary'), 1600)}\n\n"
+            "## Alternative légale proposée\n"
+            f"{_text(item.get('legal_alternative'), 1600)}\n\n"
+            "## Garde-fous\n"
+            "- Risque déclaré de l'alternative : 0/100 (filtre conservateur).\n"
+            "- Validation par un professionnel compétent requise avant exécution.\n"
+            "- OmniAgent ne fournit aucune garantie juridique.\n"
+        )
+        try:
+            note = brain.remember(
+                f"Alternative légale - {title}",
+                body,
+                folder=OPPORTUNITIES_FOLDER,
+                tags=["directive-premiere", "alternative-legale"],
+                links=["00_CORTEX_INDEX", PROFILE_NOTE[:-3]],
+            )
+        except (OSError, ValueError):
+            logger.warning("alternative légale non écrite dans Obsidian", exc_info=True)
             return ""
         return str(note.get("relative") or "")
 

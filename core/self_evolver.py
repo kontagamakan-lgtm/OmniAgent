@@ -775,6 +775,7 @@ class SelfEvolver:
             "ok": bool(result.get("ok")),
             "added": int(result.get("added") or 0),
             "rejected": int(result.get("rejected") or 0),
+            "alternatives": len(result.get("alternatives") or []),
         }
 
     def _research(self, diagnosis: Mapping[str, Any]) -> list[dict[str, str]]:
