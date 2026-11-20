@@ -357,6 +357,30 @@ Panneau **Évolution** : version, compétences, journal, bouton « Forcer un cyc
 maintenant » (l'outil `evolution_force_cycle` est `dangerous`, donc soumis à
 approbation hors panneau).
 
+## Préflight des clés DeepSeek
+
+Quand le backend est `deepseek`, une clé est refusée avant tout appel réseau
+si elle est absente, mal formée ou manifestement factice. Le contrôle est
+partagé par `LLMConfig.api_key_problem()` et `LLMRouter.add_key()` : il
+s'applique donc au client unique, à l'assistant de démarrage, au panneau de
+diagnostics et aux clés ajoutées au routeur multi-LLM.
+
+Règles :
+
+- la clé doit commencer par `sk-` ;
+- elle doit contenir au moins **20 caractères** au total, préfixe compris ;
+- les valeurs d'exemple sont refusées : les marqueurs `test`, `fake`, `dummy`,
+  `example`, `placeholder`, `change-me`, `changeme`, `your-key`, `votre-cle`
+  et `xxx` sont détectés sans tenir compte de la casse ;
+- un corps composé d'un seul caractère répété après `sk-` est refusé, par
+  exemple `sk-00000000000000000000` ou `sk-aaaaaaaaaaaaaaaaaaaa`.
+
+Un échec de préflight rend `needs_setup()` vrai et le contrôle « clé du
+fournisseur » bloquant dans `app.diagnostics()`. Le routeur refuse la clé avant
+de l'écrire dans le coffre. Les messages d'erreur indiquent la variable ou le
+composant concerné et la raison du refus, mais **n'affichent jamais la valeur
+de la clé**, ni dans l'interface, ni dans les erreurs, ni dans les journaux.
+
 ## Routeur multi-LLM
 
 `llm_router.enabled = true` fait construire `core/llm_router.py` par la
