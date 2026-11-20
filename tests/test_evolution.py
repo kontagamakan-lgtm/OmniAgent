@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from support import make_settings, tmpdir  # noqa: E402
 
+from core.errors import ConfigError  # noqa: E402
 from core.factory import build_agent  # noqa: E402
 from core.self_evolver import (  # noqa: E402
     SelfEvolver,
@@ -813,6 +814,25 @@ def test_factory_starts_evolution_when_enabled() -> None:
             item.name == "omniagent-evolution" and item.is_alive()
             for item in threading.enumerate()
         )
+
+
+def test_factory_fails_loudly_when_enabled_evolution_cannot_initialize() -> None:
+    """Une activation explicite ne retombe pas sur un agent sans évolution."""
+    with tmpdir("evolution-factory-init-failure") as tmp:
+        settings = make_settings(tmp)
+        settings.evolution.enabled = True
+        settings.evolution.allow_network = False
+        blocked = Path(tmp) / "evolution_core"
+        blocked.write_text("ce chemin est un fichier, pas un dossier", encoding="utf-8")
+        settings.evolution.core_dir = str(blocked)
+
+        with pytest.raises(ConfigError, match="auto-évolution activée.*initialisation impossible"):
+            build_agent(
+                settings, llm=_FakeLLM(), with_web=False, with_browser=False
+            )
+
+        assert blocked.is_file()
+        assert not (blocked / "skills").exists()
 
 
 def test_config_validates_evolution_bounds() -> None:
