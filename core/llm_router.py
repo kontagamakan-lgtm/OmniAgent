@@ -745,7 +745,7 @@ class LLMRouter:
                 elif failure.kind == "exhausted":
                     record.status = EXHAUSTED
                     record.exhausted_until = now + self.settings.llm_router.exhausted_hours * 3600
-                else:
+                elif failure.kind == "cooldown":
                     record.status = COOLDOWN
                     delay = failure.retry_after_s
                     if delay is None or delay <= 0:

@@ -380,9 +380,11 @@ secrets ne sont jamais écrits dans ce fichier. États :
 
 Sélection : modèles triés par score effectif (base ± ajustement mesuré), puis
 clés actives triées par taux de réussite. Une bascule consomme au plus
-`llm_router.max_attempts` essais. Les erreurs 400 (requête invalide) ne font pas
-tourner les clés : elles remontent immédiatement. Les 5xx, délais et erreurs de
-transport mettent la clé en pause courte. Enfin, Ollama local
+`llm_router.max_attempts` essais. Les erreurs fatales de requête, notamment
+400 (requête invalide), remontent immédiatement sans faire tourner les clés et
+sans mettre la clé en `COOLDOWN` : seule une erreur de disponibilité doit
+suspendre une clé. Les 5xx, délais et erreurs de transport mettent la clé en
+pause courte. Enfin, Ollama local
 (`llm_router.ollama_model`) est tenté même sans clé.
 
 Le routeur n'expose pas de flux (`supports_stream = False`) : la bascule

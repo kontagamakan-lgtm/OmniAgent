@@ -7,11 +7,13 @@ import sys
 from pathlib import Path
 
 import httpx
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from support import make_settings, tmpdir  # noqa: E402
 
+from core.errors import LLMError  # noqa: E402
 from core.llm_router import (  # noqa: E402
     ACTIVE,
     COOLDOWN,
@@ -171,6 +173,19 @@ def test_dead_key_falls_back_to_ollama_when_no_cloud_key_remains() -> None:
         assert response.text == "réponse locale"
         assert router.current_provider == "ollama"
         assert router.key_statuses()[0]["status"] == DEAD
+
+
+def test_a_fatal_request_does_not_cool_down_the_key() -> None:
+    """Une requête invalide ne doit pas mettre la clé en pause pour autant."""
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json={"error": {"message": "requête invalide"}})
+
+    with tmpdir("router-fatal") as tmp:
+        router, _vault = _router(tmp, [("openai", KEY_OPENAI_1)], handler)
+        with pytest.raises(LLMError):
+            router.complete([{"role": "user", "content": "salut"}])
+        assert router.key_statuses()[0]["status"] == ACTIVE
 
 
 def test_status_and_secrets_never_write_the_raw_key_on_disk() -> None:
