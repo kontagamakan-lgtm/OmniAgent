@@ -71,6 +71,9 @@ _MAX_HELP_NOTES = (
 _SKILL_NAME = re.compile(r"^[a-z][a-z0-9_]{2,39}$")
 _SAFE_LABEL = re.compile(r"[^A-Za-z0-9_.-]+")
 _PACKAGE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{1,79}$")
+# Un appel isolé peut dépasser quelques centaines de ms ; seule une moyenne
+# réellement lente doit justifier une forge.
+SLOW_TOOL_THRESHOLD_MS: float = 1000.0
 
 _SKILL_PROMPT = """Tu améliores un agent Python local. Réponds UNIQUEMENT par un objet JSON.
 
@@ -713,9 +716,9 @@ class SelfEvolver:
             calls = int(data.get("calls") or 0)
             failures = int(data.get("failures") or 0)
             if calls:
-                slow.append(
-                    {"tool": name, "avg_ms": round(float(data.get("total_ms") or 0) / calls, 1)}
-                )
+                avg_ms = round(float(data.get("total_ms") or 0) / calls, 1)
+                if avg_ms >= SLOW_TOOL_THRESHOLD_MS:
+                    slow.append({"tool": name, "avg_ms": avg_ms})
             if failures:
                 failing.append({"tool": name, "failures": failures})
         slow.sort(key=lambda item: float(item["avg_ms"]), reverse=True)

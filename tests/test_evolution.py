@@ -109,10 +109,10 @@ def _evolver(
         agent=SimpleNamespace(llm=llm),
         registry=registry
         if registry is not None
-        # Un outil lent et instable : c'est ce que le diagnostic doit signaler.
+        # Un outil réellement lent et instable : 2 s de moyenne par appel.
         else SimpleNamespace(
             stats=lambda: {
-                "web_search": {"calls": 3, "failures": 1, "total_ms": 900}
+                "web_search": {"calls": 3, "failures": 1, "total_ms": 6000}
             }
         ),
         core_dir=Path(tmp) / "evolution_core",
@@ -261,6 +261,34 @@ def test_failed_test_does_not_bump_the_version() -> None:
         assert evolver.status()["cycles"] == 1
         assert evolver.journal()[-1]["type"] == "cycle_finished"
         assert evolver.journal()[-1]["changed"] is False
+
+
+def test_fast_tool_does_not_trigger_a_forge() -> None:
+    with tmpdir("evolution-fast-tool") as tmp:
+        fast = SimpleNamespace(
+            stats=lambda: {
+                "echo": {"calls": 5, "failures": 0, "total_ms": 250}
+            }
+        )
+        evolver, _loader, llm = _evolver(tmp, ["- une leçon"], registry=fast)
+
+        diagnosis = evolver._diagnose()
+        assert diagnosis["slow_tools"] == []
+        assert diagnosis["needs_forge"] is False
+
+        result = evolver.run_cycle()
+        assert result["ok"]
+        assert result["skill"] is None
+        assert result["changed"] is False
+        assert len(llm.messages) == 1
+        assert not any(
+            record.get("type") == "skill_forged"
+            for record in evolver.journal()
+        )
+        assert any(
+            record.get("type") == "forge_skipped"
+            for record in evolver.journal()
+        )
 
 
 def test_cycle_without_diagnostic_signal_skips_the_forge() -> None:
@@ -557,6 +585,73 @@ def test_forced_cycles_are_capped_per_day_and_journaled() -> None:
         ]
         assert len(records) >= 2
         assert all("forcé" in record.get("error", "") for record in records)
+
+
+def test_force_cycle_is_refused_after_the_daily_cap_without_extra_llm() -> None:
+    """Un second clic après le premier cycle ne doit ni forger ni appeler le LLM."""
+    with tmpdir("evolution-force-once") as tmp:
+        evolver, _loader, llm = _evolver(tmp, [_payload(), "- une leçon"])
+        evolver.settings.evolution.max_forced_cycles_per_day = 1
+
+        assert evolver.force_cycle() is True
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if any(
+                record.get("type") == "cycle_finished"
+                for record in evolver.journal(limit=50)
+            ):
+                break
+            time.sleep(0.02)
+        else:
+            pytest.fail("le premier cycle forcé n'a pas terminé")
+        thread = evolver._manual_thread
+        if thread is not None:
+            thread.join(5)
+            assert not thread.is_alive()
+
+        calls_after_first = len(llm.messages)
+        assert calls_after_first > 0
+        assert evolver.status()["forced_today"] == 1
+
+        assert evolver.force_cycle() is False
+        assert "forcé" in evolver.status()["last_refusal"]
+        time.sleep(0.2)
+        assert len(llm.messages) == calls_after_first
+        assert evolver.status()["forced_today"] == 1
+        assert any(
+            record.get("type") == "cycle_refused"
+            and "forcé" in record.get("error", "")
+            for record in evolver.journal()
+        )
+        evolver.stop()
+
+
+def test_force_cycle_is_refused_before_any_llm_when_budget_is_exhausted() -> None:
+    with tmpdir("evolution-force-budget") as tmp:
+        evolver, _loader, llm = _evolver(tmp, [_payload(), "- une leçon"])
+        settings = evolver.settings
+        settings.budget.daily_tokens = 10
+        from core.budget import record_run
+
+        assert record_run(
+            settings,
+            run_id="seed-force-over-budget",
+            model=str(settings.llm.model),
+            prompt_tokens=20,
+            completion_tokens=0,
+        )
+
+        assert evolver.force_cycle() is False
+        assert llm.messages == [], "aucun token ne doit être dépensé"
+        assert evolver.status()["cycles"] == 0
+        assert evolver.status()["forced_today"] == 0
+        assert any(
+            record.get("type") == "cycle_refused"
+            and record.get("reason") == "manuel"
+            and "budget" in record.get("error", "")
+            for record in evolver.journal()
+        )
+        evolver.stop()
 
 
 def test_cycle_is_refused_when_the_global_budget_is_exhausted() -> None:
