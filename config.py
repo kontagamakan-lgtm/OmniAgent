@@ -322,6 +322,21 @@ def default_allowed_roots() -> list[str]:
 # ---------------------------------------------------------------------------
 
 
+_MIN_DEEPSEEK_KEY_LENGTH = 20
+_FAKE_API_KEY_MARKERS = (
+    "test",
+    "fake",
+    "dummy",
+    "example",
+    "placeholder",
+    "change-me",
+    "changeme",
+    "your-key",
+    "votre-cle",
+    "xxx",
+)
+
+
 @dataclass(slots=True)
 class LLMConfig:
     """Backend de génération (DeepSeek, endpoint compatible OpenAI, Ollama)."""
@@ -349,6 +364,37 @@ class LLMConfig:
 
     def api_key(self) -> str:
         return os.environ.get(self.api_key_env, "").strip()
+
+    def api_key_problem(self) -> str:
+        """Préflight de la clé, sans jamais renvoyer sa valeur.
+
+        DeepSeek refuse les clés absentes, tronquées ou laissées à un exemple.
+        Mieux vaut le dire avant de construire un agent et d'envoyer une
+        requête vouée à un HTTP 401. Les autres backends compatibles OpenAI
+        peuvent utiliser d'autres formats : seul le vide y est contrôlé.
+        """
+        key = self.api_key()
+        if not key:
+            return f"clé d'API absente : renseignez la variable {self.api_key_env}"
+        if self.backend != "deepseek":
+            return ""
+        if not key.startswith("sk-"):
+            return (
+                f"clé d'API invalide dans {self.api_key_env} : le préfixe « sk- » "
+                "attendu pour DeepSeek est absent"
+            )
+        if len(key) < _MIN_DEEPSEEK_KEY_LENGTH:
+            return (
+                f"clé d'API trop courte dans {self.api_key_env} "
+                f"({len(key)} caractères) : copiez la clé complète fournie par DeepSeek"
+            )
+        lowered = key.casefold()
+        if any(marker in lowered for marker in _FAKE_API_KEY_MARKERS):
+            return (
+                f"clé d'API manifestement factice dans {self.api_key_env} : "
+                "remplacez-la par une clé DeepSeek réelle"
+            )
+        return ""
 
     def has_credentials(self) -> bool:
         if self.backend == "ollama":

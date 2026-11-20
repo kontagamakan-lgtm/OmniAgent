@@ -300,7 +300,7 @@ def _module_present(name: str) -> bool:
 def diagnostics(settings: Settings) -> list[tuple[bool, str]]:
     """Contrôles d'installation ; le booléen indique si le point est bloquant."""
     config_file = settings.paths.config_file
-    key = (os.environ.get(settings.llm.api_key_env) or "").strip()
+    key_problem = settings.llm.api_key_problem()
     checks: list[tuple[bool, str]] = [
         (True, f"Python {platform.python_version()} sur {platform.system()} {platform.release()}"),
         (
@@ -309,9 +309,9 @@ def diagnostics(settings: Settings) -> list[tuple[bool, str]]:
             + ("" if config_file.is_file() else " (absente, valeurs par défaut utilisées)"),
         ),
         (
-            bool(key),
+            not key_problem,
             f"clé du fournisseur ({settings.llm.api_key_env}) : "
-            + ("présente" if key else "absente de l'environnement"),
+            + ("valide" if not key_problem else key_problem),
         ),
         (
             _module_present("playwright"),

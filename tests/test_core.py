@@ -1108,6 +1108,9 @@ def test_react_parser_rejects_bad_names() -> None:
 # ---------------------------------------------------------------------------
 
 
+VALID_TEST_KEY = "sk-a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6"
+
+
 def _client(handler, *, backend="deepseek", **cfg_overrides) -> LLMClient:
     cfg = config.LLMConfig()
     cfg.backend = backend
@@ -1120,7 +1123,7 @@ def _client(handler, *, backend="deepseek", **cfg_overrides) -> LLMClient:
 
 
 def test_llm_client_stream_complete_feeds_chunks_and_tool_calls(monkeypatch) -> None:
-    monkeypatch.setenv("TEST_LLM_KEY", "test-key")
+    monkeypatch.setenv("TEST_LLM_KEY", VALID_TEST_KEY)
     captured: list[dict] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -1210,7 +1213,7 @@ class _SlowStream:
 
 def test_abort_closes_the_stream_without_waiting_for_the_provider(monkeypatch) -> None:
     """Sans `on_token`, seule la fermeture du flux peut rendre la main tôt."""
-    monkeypatch.setenv("TEST_LLM_KEY", "test-key")
+    monkeypatch.setenv("TEST_LLM_KEY", VALID_TEST_KEY)
     with _SlowStream(chunks=40, delay_s=0.1) as server:
         cfg = config.LLMConfig()
         cfg.backend = "deepseek"
@@ -1240,7 +1243,7 @@ def test_abort_closes_the_stream_without_waiting_for_the_provider(monkeypatch) -
 
 def test_cancel_interrupts_the_in_flight_stream(monkeypatch) -> None:
     """Annuler pendant la génération ferme le flux au lieu d'attendre sa fin."""
-    monkeypatch.setenv("TEST_LLM_KEY", "test-key")
+    monkeypatch.setenv("TEST_LLM_KEY", VALID_TEST_KEY)
     # 40 fragments à 0,1 s : ~4 s si l'on attendait la requête complète.
     with tmpdir("core") as tmp, _SlowStream(chunks=40, delay_s=0.1) as server:
         settings = _settings(tmp)
@@ -1277,7 +1280,7 @@ def test_cancel_interrupts_the_in_flight_stream(monkeypatch) -> None:
 
 
 def test_llm_client_parses_openai_tool_calls(monkeypatch) -> None:
-    monkeypatch.setenv("TEST_LLM_KEY", "test-key")
+    monkeypatch.setenv("TEST_LLM_KEY", VALID_TEST_KEY)
     captured: list[dict] = []
     authorizations: list[str] = []
 
@@ -1324,8 +1327,8 @@ def test_llm_client_parses_openai_tool_calls(monkeypatch) -> None:
     assert response.tool_calls[0].arguments == {"path": "C:/temp"}
     assert response.usage == {"total_tokens": 42}
     assert captured[0]["tool_choice"] == "auto"
-    assert "test-key" not in json.dumps(captured[0]), "la clé ne doit jamais figurer dans le corps"
-    assert authorizations == ["Bearer test-key"]
+    assert VALID_TEST_KEY not in json.dumps(captured[0]), "la clé ne doit jamais figurer dans le corps"
+    assert authorizations == [f"Bearer {VALID_TEST_KEY}"]
 
 
 def test_llm_client_parses_ollama_message(monkeypatch) -> None:
@@ -1356,7 +1359,7 @@ def test_llm_client_parses_ollama_message(monkeypatch) -> None:
 
 
 def test_tool_messages_follow_the_provider_protocol(monkeypatch) -> None:
-    monkeypatch.setenv("TEST_LLM_KEY", "test-key")
+    monkeypatch.setenv("TEST_LLM_KEY", VALID_TEST_KEY)
     payloads: list[dict] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -1391,7 +1394,7 @@ def test_tool_messages_follow_the_provider_protocol(monkeypatch) -> None:
 
 
 def test_llm_client_maps_http_errors(monkeypatch) -> None:
-    monkeypatch.setenv("TEST_LLM_KEY", "test-key")
+    monkeypatch.setenv("TEST_LLM_KEY", VALID_TEST_KEY)
 
     def unauthorized(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(401, text="bad key")
@@ -1423,7 +1426,7 @@ def test_llm_client_maps_http_errors(monkeypatch) -> None:
 
 
 def test_llm_client_retries_rate_limit_then_succeeds(monkeypatch) -> None:
-    monkeypatch.setenv("TEST_LLM_KEY", "test-key")
+    monkeypatch.setenv("TEST_LLM_KEY", VALID_TEST_KEY)
     attempts = {"count": 0}
     delays: list[float] = []
 
@@ -1449,7 +1452,7 @@ def test_llm_client_retries_rate_limit_then_succeeds(monkeypatch) -> None:
 
 
 def test_llm_client_streams_text(monkeypatch) -> None:
-    monkeypatch.setenv("TEST_LLM_KEY", "test-key")
+    monkeypatch.setenv("TEST_LLM_KEY", VALID_TEST_KEY)
 
     def handler(_request: httpx.Request) -> httpx.Response:
         body = (
@@ -1497,6 +1500,44 @@ def test_llm_client_streams_text_with_ollama(monkeypatch) -> None:
     assert requested[0]["stream"] is True
     assert requested[0]["model"] == "deepseek-chat"
     assert requested[0]["messages"] == [{"role": "user", "content": "salut"}]
+
+
+def test_llm_preflight_rejects_empty_short_and_fake_keys_without_network(monkeypatch) -> None:
+    requested: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested.append(request)
+        return httpx.Response(
+            200, json={"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}]}
+        )
+
+    cases = [
+        (None, "llm_missing_key", "absente"),
+        ("sk-court", "llm_invalid_key", "trop courte"),
+        ("sk-" + "test" + "x" * 30, "llm_invalid_key", "factice"),
+    ]
+    for value, expected_code, expected_text in cases:
+        if value is None:
+            monkeypatch.delenv("TEST_LLM_KEY", raising=False)
+        else:
+            monkeypatch.setenv("TEST_LLM_KEY", value)
+        client = _client(handler)
+        try:
+            try:
+                client.complete([{"role": "user", "content": "x"}])
+            except LLMAuthError as exc:
+                assert exc.code == expected_code, exc.code
+                rendered = str(exc)
+                assert expected_text in rendered, rendered
+                assert "TEST_LLM_KEY" in rendered, rendered
+                if value is not None:
+                    assert value not in rendered, "la clé ne doit jamais apparaître"
+            else:
+                raise AssertionError(f"la clé {value!r} aurait dû être refusée")
+        finally:
+            client.close()
+
+    assert requested == [], "le préflight doit refuser avant tout appel réseau"
 
 
 def test_missing_api_key_is_reported(monkeypatch) -> None:

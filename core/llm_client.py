@@ -150,10 +150,11 @@ class LLMClient:
             if not self.cfg.ollama_base_url.strip():
                 raise ConfigError("ollama_base_url est vide", code="missing_ollama_url")
             return
-        if not self.cfg.api_key():
+        problem = self.cfg.api_key_problem()
+        if problem:
             raise LLMAuthError(
-                f"clé d'API absente : renseignez la variable {self.cfg.api_key_env}",
-                code="llm_missing_key",
+                problem,
+                code="llm_missing_key" if not self.cfg.api_key() else "llm_invalid_key",
             )
 
     # -- requêtes -----------------------------------------------------------
