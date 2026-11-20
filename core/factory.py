@@ -31,6 +31,7 @@ from core.llm_router import LLMRouter
 from core.approval import build_approval_gate, decision_from_confirm
 from core.budget import build_budget_recorder
 from core.metrics import build_metrics
+from core.prime_directive import PrimeDirective
 from core.profile import apply_profile, build_network_guard, resolve_profile
 from core.self_evolver import SelfEvolver, build_evolution_tools, evolution_core_path
 from core.skill_loader import SkillLoader
@@ -66,6 +67,7 @@ class AgentBundle:
     ocr: Ocr | None = None
     shell: ShellRunner | None = None
     brain: Any = None
+    prime: Any = None
     evolver: Any = None
     skills: Any = None
     router: Any = None
@@ -185,6 +187,7 @@ def build_agent(
         except (OSError, ValueError):
             logger.warning("vault Obsidian indisponible", exc_info=True)
 
+    prime = PrimeDirective(settings, brain)
     tools: list[Tool] = []
     tools.extend(build_file_tools(files))
     tools.extend(build_vault_tools(vault))
@@ -207,7 +210,7 @@ def build_agent(
                 max_chars=int(settings.evolution.max_skill_chars),
             )
             skills.load_all()
-            evolver = SelfEvolver(settings, skills)
+            evolver = SelfEvolver(settings, skills, prime_directive=prime)
             tools.extend(build_evolution_tools(evolver))
         except (OSError, ValueError) as exc:
             # Une activation explicite ne doit jamais retomber silencieusement
@@ -266,7 +269,9 @@ def build_agent(
     # panneau de gestion des clés puisse lire l'état sans créer de doublon.
     router = LLMRouter(settings, vault) if settings.llm_router.enabled else None
     client = llm or router or LLMClient(settings.llm)
-    agent = AgentCore(settings, client, registry, bus=bus)
+    agent = AgentCore(
+        settings, client, registry, bus=bus, prime_directive=prime
+    )
     if evolver is not None:
         evolver.attach(agent, registry, brain)
         if router is not None:
@@ -319,6 +324,7 @@ def build_agent(
         ocr=ocr,
         shell=shell,
         brain=brain,
+        prime=prime,
         evolver=evolver,
         skills=skills,
         router=router,

@@ -273,6 +273,10 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 actions, text="Clés & LLM", width=110, command=self._open_keys
             )
             self.keys_button.pack(fill="x", pady=(6, 0))
+            self.prime_button = ctk.CTkButton(
+                actions, text="Directive", width=110, command=self._open_prime_directive
+            )
+            self.prime_button.pack(fill="x", pady=(6, 0))
             # Enregistrement optionnel dans le Planificateur de tâches
             # Windows : la fenêtre permet d'inscrire et de désinscrire.
             self.schedule_button = ctk.CTkButton(
@@ -726,6 +730,57 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                     window.after(2000, refresh)
                 except Exception:  # noqa: BLE001 - fenêtre refermée pendant le rafraîchissement
                     logger.debug("panneau des clés refermé", exc_info=True)
+
+            refresh()
+
+        # -- Directive Première ---------------------------------------------
+
+        def _open_prime_directive(self) -> None:
+            """Tableau de bord des opportunités et du temps libéré."""
+            prime = getattr(self.bundle, "prime", None)
+            if prime is None:
+                self._append("système", "Directive Première indisponible")
+                self._set_status("Directive Première indisponible")
+                return
+
+            window = ctk.CTkToplevel(self)
+            window.title("Directive Première")
+            window.geometry("760x620")
+            header = ctk.CTkLabel(
+                window,
+                text="",
+                anchor="w",
+                justify="left",
+                font=(
+                    self.settings.ui.font_family,
+                    self.settings.ui.font_size + 1,
+                    "bold",
+                ),
+            )
+            header.pack(fill="x", padx=16, pady=(14, 6))
+            body = ctk.CTkTextbox(window, wrap="word")
+            body.pack(fill="both", expand=True, padx=16, pady=6)
+            body.configure(state="disabled")
+
+            def refresh() -> None:
+                try:
+                    if not window.winfo_exists():
+                        return
+                    data = prime.dashboard()
+                    header.configure(
+                        text=(
+                            "Directive Première · "
+                            f"{len(data.get('opportunities') or [])} opportunité(s) · "
+                            f"{float(data.get('time_saved_hours') or 0):.2f} h libérées"
+                        )
+                    )
+                    body.configure(state="normal")
+                    body.delete("1.0", "end")
+                    body.insert("1.0", prime.format_dashboard())
+                    body.configure(state="disabled")
+                    window.after(3000, refresh)
+                except Exception:  # noqa: BLE001 - fenêtre fermée pendant le rafraîchissement
+                    logger.debug("panneau Directive Première refermé", exc_info=True)
 
             refresh()
 

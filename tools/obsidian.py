@@ -309,6 +309,11 @@ class ObsidianBrain:
         match = re.search(r'^title:\s*["\']?(.*?)["\']?\s*$', head, re.MULTILINE)
         return _safe_title(match.group(1) if match else path.stem)
 
+    def refresh_index(self) -> None:
+        """Régénère l'index public après une écriture hors de `remember()`."""
+        with self._lock:
+            self._refresh_index()
+
     def _refresh_index(self) -> None:
         notes = self._note_files()[: max(1, int(self.settings.obsidian.max_index_links))]
         lines = [

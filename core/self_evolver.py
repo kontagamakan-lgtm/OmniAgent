@@ -326,12 +326,14 @@ class SelfEvolver:
         core_dir: str | Path | None = None,
         data_dir: str | Path | None = None,
         clock: Any = None,
+        prime_directive: Any = None,
     ) -> None:
         self.settings = settings
         self.loader = loader
         self.agent = agent
         self.registry = registry
         self.brain = brain
+        self.prime = prime_directive
         self.core_dir = Path(core_dir).resolve() if core_dir else evolution_core_path(settings)
         self.data_dir = Path(data_dir).resolve() if data_dir else evolution_dir(settings)
         self.backups_dir = self.data_dir / "backups"
@@ -373,6 +375,10 @@ class SelfEvolver:
     def attach_router(self, router: Any) -> None:
         """Raccorde le routeur multi-LLM pour mesurer et classer les modèles."""
         self.router = router
+
+    def attach_prime(self, prime: Any) -> None:
+        """Raccorde la Directive Première à la veille autonome."""
+        self.prime = prime
 
     def _on_event(self, _event: Any) -> None:
         self._last_activity = self._clock()
@@ -571,6 +577,10 @@ class SelfEvolver:
                 }
             )
             self._check_stop()
+            prime_result = self._prime_opportunities(research)
+            if prime_result:
+                self._journal.append({"type": "prime_directive", **prime_result})
+            self._check_stop()
             if diagnosis.get("needs_forge"):
                 skill = self._forge_skill(diagnosis, research)
             else:
@@ -655,12 +665,13 @@ class SelfEvolver:
         """
         from core.budget import check, estimate_run
 
+        calls = 3 if self.prime is not None else 2
         try:
             cost, tokens = estimate_run(self.settings, prompt_tokens=1)
             state = check(
                 self.settings,
-                pending_cost=cost * 2,
-                pending_tokens=tokens * 2,
+                pending_cost=cost * calls,
+                pending_tokens=tokens * calls,
             )
         except Exception as exc:  # noqa: BLE001 - budget illisible = refus
             logger.warning("budget global illisible", exc_info=True)
@@ -724,6 +735,41 @@ class SelfEvolver:
         }
 
     # -- phase 2 : veille ---------------------------------------------------
+
+    def _prime_opportunities(
+        self, research: list[dict[str, str]]
+    ) -> dict[str, Any]:
+        """Veille silencieuse de la Directive Première, sans casser le cycle."""
+        prime = getattr(self, "prime", None)
+        if prime is None:
+            return {}
+        opportunity_research = list(research)
+        if self.settings.evolution.allow_network and self.registry is not None:
+            for query in prime.research_queries()[:2]:
+                try:
+                    result = self.registry.dispatch("web_search", {"query": query})
+                except Exception:  # noqa: BLE001 - la veille est optionnelle
+                    logger.debug("veille Directive Première indisponible", exc_info=True)
+                    continue
+                if getattr(result, "ok", False):
+                    excerpt = result.to_text(max_chars=900)
+                    if excerpt.strip():
+                        opportunity_research.append(
+                            {"query": query, "excerpt": excerpt}
+                        )
+        try:
+            result = prime.scan(
+                self._ask,
+                research=opportunity_research,
+            )
+        except Exception as exc:  # noqa: BLE001 - un cycle reste utile
+            logger.warning("veille Directive Première en échec", exc_info=True)
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        return {
+            "ok": bool(result.get("ok")),
+            "added": int(result.get("added") or 0),
+            "rejected": int(result.get("rejected") or 0),
+        }
 
     def _research(self, diagnosis: Mapping[str, Any]) -> list[dict[str, str]]:
         if not self.settings.evolution.allow_network or self.registry is None:

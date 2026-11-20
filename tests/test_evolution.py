@@ -645,7 +645,9 @@ def test_factory_starts_evolution_when_enabled() -> None:
         settings.evolution.idle_minutes = 1440.0
         settings.evolution.core_dir = str(Path(tmp) / "evolution_core")
         settings.evolution.max_forced_cycles_per_day = 1
-        llm = _FakeLLM(["- leçon issue du cycle de test"])
+        # Le premier appel est la veille Directive Première (aucune opportunité),
+        # le second produit les leçons du cycle.
+        llm = _FakeLLM(["[]", "- leçon issue du cycle de test"])
         bundle = build_agent(
             settings, llm=llm, with_web=False, with_browser=False
         )

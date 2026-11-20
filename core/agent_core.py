@@ -154,10 +154,12 @@ class AgentCore:
         *,
         bus: EventBus | None = None,
         sleep: Callable[[float], None] = time.sleep,
+        prime_directive: Any = None,
     ) -> None:
         self.settings = settings
         self.llm = llm
         self.registry = registry
+        self.prime_directive = prime_directive
         # `bus or …` serait un piège : un bus vide est faux (via __len__).
         self.bus = bus if bus is not None else EventBus()
         self._sleep = sleep
@@ -323,6 +325,17 @@ class AgentCore:
         if dynamic:
             brain_extra = "\n\n".join(
                 part for part in (brain_extra, f"## Adaptations apprises\n{dynamic}") if part
+            )
+        prime_extra = ""
+        if self.prime_directive is not None:
+            try:
+                prime_extra = str(self.prime_directive.system_prompt() or "").strip()
+            except Exception:  # noqa: BLE001 - une politique illisible ne bloque pas le run
+                logger.debug("Directive Première illisible", exc_info=True)
+                prime_extra = ""
+        if prime_extra:
+            brain_extra = "\n\n".join(
+                part for part in (brain_extra, prime_extra) if part
             )
         messages: list[dict[str, Any]] = [
             {
