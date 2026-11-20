@@ -18,7 +18,7 @@ def test_needs_setup_tracks_the_api_key(monkeypatch) -> None:
         monkeypatch.delenv(variable, raising=False)
 
         assert needs_setup(settings) is True
-        monkeypatch.setenv(variable, "sk-test")
+        monkeypatch.setenv(variable, "sk-0123456789abcdef0123456789abcdef")
         assert needs_setup(settings) is False
 
         settings.llm.backend = "ollama"

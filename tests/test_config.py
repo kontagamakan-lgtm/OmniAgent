@@ -42,7 +42,9 @@ def test_defaults_are_valid() -> None:
 
 def test_default_config_raises_no_warning(monkeypatch) -> None:
     defaults = config.Settings()
-    monkeypatch.setenv(defaults.llm.api_key_env, "clé-de-test")
+    monkeypatch.setenv(
+        defaults.llm.api_key_env, "sk-0123456789abcdef0123456789abcdef"
+    )
     warnings = [i for i in defaults.validate() if i.level == "warning"]
     assert warnings == [], f"défauts bruités: {warnings}"
 
