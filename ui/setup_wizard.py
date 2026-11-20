@@ -50,7 +50,7 @@ def needs_setup(settings: Settings) -> bool:
 
     Un backend local (Ollama) n'a pas de clé : l'assistant ne s'impose pas.
     """
-    if settings.llm.backend == "ollama":
+    if settings.llm.backend == "ollama" or settings.llm_router.enabled:
         return False
     return not settings.llm.has_credentials()
 

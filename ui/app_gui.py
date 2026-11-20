@@ -20,6 +20,7 @@ from core.events import Event, EventType
 from core.factory import AgentBundle
 from ui.controller import AgentController
 from ui.hotkey import HotkeyListener
+from ui.key_panel import KeyTable
 
 try:  # pragma: no cover - dépend de l'environnement
     import customtkinter as ctk
@@ -256,6 +257,10 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 actions, text="Autonomie", width=110, command=self._toggle_autonomy
             )
             self.autonomy_button.pack(fill="x", pady=(6, 0))
+            self.keys_button = ctk.CTkButton(
+                actions, text="Clés & LLM", width=110, command=self._open_keys
+            )
+            self.keys_button.pack(fill="x", pady=(6, 0))
             # Enregistrement optionnel dans le Planificateur de tâches
             # Windows : la fenêtre permet d'inscrire et de désinscrire.
             self.schedule_button = ctk.CTkButton(
@@ -509,6 +514,144 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 if enabled
                 else "trace désactivée : rien n'est écrit sur disque"
             )
+
+        # -- Gestionnaire de clés et de modèles -----------------------------
+
+        def _open_keys(self) -> None:
+            """Pool de clés chiffrées, statuts en direct et modèle courant."""
+            from core.llm_router import LLMRouter, PROVIDERS
+
+            router = getattr(self.bundle, "router", None)
+            if router is None:
+                router = LLMRouter(self.settings, self.bundle.vault)
+            vault = self.bundle.vault
+            window = ctk.CTkToplevel(self)
+            window.title("Gestionnaire de clés & LLM")
+            window.geometry("900x720")
+            header = ctk.CTkLabel(
+                window,
+                text="",
+                anchor="w",
+                justify="left",
+                font=(self.settings.ui.font_family, self.settings.ui.font_size + 1, "bold"),
+            )
+            header.pack(fill="x", padx=16, pady=(14, 4))
+
+            vault_frame = ctk.CTkFrame(window)
+            vault_frame.pack(fill="x", padx=16, pady=4)
+            passphrase = ctk.CTkEntry(
+                vault_frame, placeholder_text="phrase secrète du coffre", show="*"
+            )
+            passphrase.pack(side="left", fill="x", expand=True, padx=(8, 6), pady=8)
+
+            def unlock() -> None:
+                secret = passphrase.get().strip()
+                if not secret:
+                    feedback.configure(text="phrase secrète requise")
+                    return
+                try:
+                    if vault.exists:
+                        vault.unlock(secret)
+                    else:
+                        vault.create(secret)
+                except Exception as exc:  # noqa: BLE001 - message lisible à l'écran
+                    feedback.configure(text=f"coffre : {exc}")
+                    return
+                passphrase.delete(0, "end")
+                feedback.configure(text="coffre déverrouillé")
+
+            ctk.CTkButton(vault_frame, text="Déverrouiller", width=120, command=unlock).pack(
+                side="left", padx=(0, 8), pady=8
+            )
+
+            add_frame = ctk.CTkFrame(window)
+            add_frame.pack(fill="x", padx=16, pady=4)
+            provider_var = ctk.StringVar(value="auto")
+            provider_menu = ctk.CTkOptionMenu(
+                add_frame,
+                values=["auto"] + [slug for slug in PROVIDERS if slug != "ollama"],
+                variable=provider_var,
+                width=150,
+            )
+            provider_menu.grid(row=0, column=0, padx=8, pady=(8, 2), sticky="n")
+            keys_input = ctk.CTkTextbox(add_frame, height=80, wrap="none")
+            keys_input.grid(row=0, column=1, padx=8, pady=(8, 2), sticky="ew")
+            add_frame.grid_columnconfigure(1, weight=1)
+            feedback = ctk.CTkLabel(window, text="", anchor="w", justify="left")
+            feedback.pack(fill="x", padx=16)
+
+            def add_keys() -> None:
+                lines = [
+                    line.strip()
+                    for line in keys_input.get("1.0", "end").splitlines()
+                    if line.strip()
+                ]
+                if not lines:
+                    feedback.configure(text="aucune clé à ajouter")
+                    return
+                added = 0
+                errors: list[str] = []
+                for index, key in enumerate(lines, start=1):
+                    try:
+                        router.add_key(key, provider=provider_var.get())
+                        added += 1
+                    except Exception as exc:  # noqa: BLE001 - une clé fautive n'arrête pas le lot
+                        errors.append(f"ligne {index} : {exc}")
+                if added:
+                    keys_input.delete("1.0", "end")
+                feedback.configure(
+                    text=f"{added} clé(s) ajoutée(s)"
+                    + (f" · refus : {' ; '.join(errors[:3])}" if errors else "")
+                )
+
+            ctk.CTkButton(
+                add_frame, text="Ajouter le lot", width=140, command=add_keys
+            ).grid(row=0, column=2, padx=8, pady=(8, 2), sticky="n")
+
+            keys_frame = ctk.CTkScrollableFrame(window, label_text="Clés enregistrées")
+            keys_frame.pack(fill="both", expand=True, padx=16, pady=8)
+            rows_frame = ctk.CTkFrame(keys_frame)
+            rows_frame.pack(fill="x", expand=True)
+
+            def reset(key_id: str) -> None:
+                if router.reset_key(key_id):
+                    feedback.configure(text="clé réactivée")
+                else:
+                    feedback.configure(text="clé introuvable")
+                refresh()
+
+            def remove(key_id: str) -> None:
+                try:
+                    removed = router.remove_key(key_id)
+                except Exception as exc:  # noqa: BLE001 - message lisible à l'écran
+                    feedback.configure(text=f"suppression : {exc}")
+                    return
+                feedback.configure(
+                    text="clé supprimée" if removed else "clé introuvable"
+                )
+                refresh()
+
+            table = KeyTable(
+                rows_frame, ctk, on_reset=reset, on_remove=remove
+            )
+
+            def refresh() -> None:
+                try:
+                    if not window.winfo_exists():
+                        return
+                    vault.check_timeout()
+                    state = "déverrouillé" if vault.unlocked else "verrouillé"
+                    mode = "actif" if self.settings.llm_router.enabled else "désactivé"
+                    current = router.current_model or "aucun appel réussi"
+                    header.configure(
+                        text=f"Modèle courant : {current} · routeur {mode} · coffre {state}"
+                    )
+                    table.render(router.key_statuses())
+                    window.after(2000, refresh)
+                except Exception:  # noqa: BLE001 - fenêtre refermée pendant le rafraîchissement
+                    logger.debug("panneau des clés refermé", exc_info=True)
+
+            refresh()
 
         # -- Planificateur de tâches Windows --------------------------------
 

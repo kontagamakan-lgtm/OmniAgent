@@ -306,6 +306,38 @@ sur une ligne pour ne pas injecter de frontmatter). Les dossiers cachés
 de disque est refusée comme vault. Les fichiers du vault sont des données
 utilisateur : ne les versionnez pas et ne les incluez pas dans un paquet.
 
+## Routeur multi-LLM
+
+`llm_router.enabled = true` fait construire `core/llm_router.py` par la
+factory ; l'agent reçoit ce client à la place de `LLMClient`. Les clés
+s'ajoutent dans le panneau **Clés & LLM** (une par ligne, fournisseur `auto`
+ou imposé) et sont stockées dans le coffre sous le service `llm.<fournisseur>`,
+avec un identifiant aléatoire comme nom d'utilisateur. Le coffre doit être
+déverrouillé : sans cela, aucune clé cloud n'est lisible et seul Ollama peut
+répondre.
+
+État persistant : `data/llm_router/keys.json` (indices masqués, statuts,
+compteurs de tokens, observations par modèle, ajustements de score). Les
+secrets ne sont jamais écrits dans ce fichier. États :
+
+- `ACTIVE` : clé utilisable ;
+- `COOLDOWN` : HTTP 429, réactivation à `cooldown_until` (le `Retry-After`
+  prime) ;
+- `EXHAUSTED` : HTTP 402 ou `insufficient_quota`, réactivation après
+  `llm_router.exhausted_hours` (24 h par défaut) ou via « Réactiver » ;
+- `DEAD` : HTTP 401/403, à supprimer puis réenregistrer.
+
+Sélection : modèles triés par score effectif (base ± ajustement mesuré), puis
+clés actives triées par taux de réussite. Une bascule consomme au plus
+`llm_router.max_attempts` essais. Les erreurs 400 (requête invalide) ne font pas
+tourner les clés : elles remontent immédiatement. Les 5xx, délais et erreurs de
+transport mettent la clé en pause courte. Enfin, Ollama local
+(`llm_router.ollama_model`) est tenté même sans clé.
+
+Le routeur n'expose pas de flux (`supports_stream = False`) : la bascule
+prime avant le streaming. Anthropic utilise son API Messages native ; les
+autres fournisseurs passent par un endpoint OpenAI-compatible.
+
 ## Isolation par run
 
 `isolation.profile` (ou `--profile`) choisit les familles d'outils exposées :

@@ -357,6 +357,25 @@ class LLMConfig:
 
 
 @dataclass(slots=True)
+class LLMRouterConfig:
+    """Pool multi-clés et basculement multi-fournisseurs.
+
+    Désactivé par défaut : le client historique (`llm.*`) reste utilisé. Activé,
+    `build_agent` remplace le client par `core.llm_router.LLMRouter`.
+    """
+
+    enabled: bool = False
+    #: Pause d'une clé après un HTTP 429 (le `Retry-After` prime s'il est fourni).
+    cooldown_s: float = 60.0
+    #: Durée d'épuisement avant réessai (crédits rechargés ou quota réinitialisé).
+    exhausted_hours: float = 24.0
+    #: Nombre maximal de tentatives (clés + modèles) par appel.
+    max_attempts: int = 24
+    #: Modèle local de secours quand toutes les clés cloud échouent.
+    ollama_model: str = "llama3.2"
+
+
+@dataclass(slots=True)
 class EmbeddingConfig:
     """Fournisseur de vecteurs pour l'index sémantique local."""
 
@@ -718,6 +737,7 @@ class Settings:
     schema_version: int = CONFIG_SCHEMA_VERSION
     paths: Paths = field(default_factory=default_paths)
     llm: LLMConfig = field(default_factory=LLMConfig)
+    llm_router: LLMRouterConfig = field(default_factory=LLMRouterConfig)
     embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
     browser: BrowserConfig = field(default_factory=BrowserConfig)
     search: SearchConfig = field(default_factory=SearchConfig)
@@ -842,6 +862,7 @@ class Settings:
                 "model": self.llm.model,
                 "reasoning_model": self.llm.reasoning_model,
                 "credentials_configured": self.llm.has_credentials(),
+                "router_enabled": self.llm_router.enabled,
                 "stream": self.llm.stream,
             },
             "embedding": {
@@ -980,7 +1001,7 @@ class Settings:
         if llm.backend != "ollama":
             if not llm.base_url.startswith(("http://", "https://")):
                 err("llm.base_url", "URL http(s) attendue")
-            if not llm.has_credentials():
+            if not llm.has_credentials() and not self.llm_router.enabled:
                 warn(
                     "llm.api_key_env",
                     f"variable {llm.api_key_env} absente : l'interface démarrera sans génération",
@@ -1239,6 +1260,17 @@ class Settings:
             err("obsidian.max_index_links", "doit etre comprise entre 1 et 10000")
         if not (30 <= obsidian.install_timeout_s <= 3600):
             err("obsidian.install_timeout_s", "doit etre comprise entre 30 et 3600 secondes")
+
+        # --- Routeur multi-LLM
+        router = self.llm_router
+        if not (5.0 <= router.cooldown_s <= 86400.0):
+            err("llm_router.cooldown_s", "doit etre comprise entre 5 et 86400 secondes")
+        if not (1.0 <= router.exhausted_hours <= 720.0):
+            err("llm_router.exhausted_hours", "doit etre comprise entre 1 et 720 heures")
+        if not (1 <= router.max_attempts <= 200):
+            err("llm_router.max_attempts", "doit etre comprise entre 1 et 200")
+        if not router.ollama_model.strip():
+            err("llm_router.ollama_model", "ne peut pas etre vide")
 
         # --- Budget global
         budget = self.budget

@@ -169,6 +169,35 @@ Réglages `config.json` : `obsidian.enabled`, `auto_install`, `vault_name`,
 `max_index_links`. Les variables correspondantes suivent
 `OMNIAGENT_OBSIDIAN_*`.
 
+## Routeur multi-LLM et multi-clés
+
+`llm_router.enabled = true` remplace le client unique par
+`core/llm_router.py` : un pool illimité de clés par fournisseur (DeepSeek,
+OpenAI, Anthropic, Gemini, Groq, OpenRouter, Mistral) et un secours local
+Ollama. Les clés sont ajoutées depuis le panneau **Clés & LLM** et leur secret
+reste dans le coffre chiffré ; `data/llm_router/keys.json` ne contient qu'un
+indice masqué, les états et les compteurs.
+
+Chaque clé est `ACTIVE`, `COOLDOWN` (HTTP 429, réactivation automatique),
+`EXHAUSTED` (HTTP 402 / `insufficient_quota`, réessai après
+`exhausted_hours`) ou `DEAD` (HTTP 401/403, jusqu'à réenregistrement). À chaque
+appel, le routeur classe les modèles par score de puissance puis choisit le
+premier qui possède une clé active ; si cette clé échoue, il passe à la clé
+suivante du même modèle, puis au modèle suivant, et enfin à Ollama. L'historique
+ReAct et les appels d'outils sont convertis au format du fournisseur retenu
+(OpenAI-compatible, API Messages d'Anthropic, API Ollama), sans perdre le
+contexte de la tâche.
+
+Les scores de base (matrice `CATALOGUE`) sont ajustés de ±8 points par les
+mesures réelles de réussite, de latence et de tokens/seconde. Le streaming est désactivé quand le routeur
+est actif : un flux déjà affiché ne peut pas être rejoué sur un autre modèle
+sans dupliquer le texte ; l'agent utilise donc `complete` et conserve la bascule.
+
+Réglages `config.json` : `llm_router.enabled`, `cooldown_s`,
+`exhausted_hours`, `max_attempts`, `ollama_model`. Coffre verrouillé = clés
+cloud indisponibles (seul Ollama reste possible) ; aucune clé n'apparaît dans
+les journaux, les erreurs ou le fichier d'état.
+
 ## Assistant de premier démarrage
 
 Au lancement, si aucune clé n'est disponible pour le fournisseur, la fenêtre

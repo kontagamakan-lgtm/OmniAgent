@@ -26,6 +26,7 @@ from config import APP_ID, Settings
 from core.agent_core import AgentCore
 from core.events import EventBus
 from core.llm_client import LLMClient
+from core.llm_router import LLMRouter
 from core.approval import build_approval_gate, decision_from_confirm
 from core.budget import build_budget_recorder
 from core.metrics import build_metrics
@@ -62,6 +63,7 @@ class AgentBundle:
     ocr: Ocr | None = None
     shell: ShellRunner | None = None
     brain: Any = None
+    router: Any = None
     owns_llm: bool = False
     metrics: Any = None
     _unsubscribe_metrics: Any = field(default=None, repr=False)
@@ -122,6 +124,11 @@ class AgentBundle:
                 self.agent.llm.close()
             except Exception:  # noqa: BLE001
                 logger.debug("fermeture du client LLM impossible", exc_info=True)
+        if self.router is not None and self.agent.llm is not self.router:
+            try:
+                self.router.close()
+            except Exception:  # noqa: BLE001
+                logger.debug("fermeture du routeur LLM impossible", exc_info=True)
         if self.vault.unlocked:
             try:
                 self.vault.lock(reason="fermeture de l'agent")
@@ -222,9 +229,12 @@ def build_agent(
         on_result=brain.remember_tool_result if brain is not None else None,
     )
     owns_llm = llm is None
-    client = llm or LLMClient(settings.llm)
+    # Le routeur multi-clés remplace le client unique quand il est activé ; il
+    # reste construit en mode désactivé si un client est injecté, pour que le
+    # panneau de gestion des clés puisse lire l'état sans créer de doublon.
+    router = LLMRouter(settings, vault) if settings.llm_router.enabled else None
+    client = llm or router or LLMClient(settings.llm)
     agent = AgentCore(settings, client, registry, bus=bus)
-
     logger.debug(
         "agent construit : %s outils (%s)",
         len(registry),
@@ -264,5 +274,6 @@ def build_agent(
         ocr=ocr,
         shell=shell,
         brain=brain,
+        router=router,
         owns_llm=owns_llm,
     )
