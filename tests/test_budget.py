@@ -77,6 +77,34 @@ def test_daily_cap_refuses_before_exceeding() -> None:
         assert blocked.remaining < 0.1
 
 
+def test_unreadable_ledger_refuses_instead_of_reporting_zero() -> None:
+    with tmpdir("budget-illisible") as tmp:
+        settings = make_settings(tmp)
+        settings.budget.enabled = True
+        ledger = ledger_path(settings)
+        ledger.parent.mkdir(parents=True, exist_ok=True)
+        # Un dossier à la place du fichier rend la lecture impossible sans
+        # dépendre des permissions du compte qui exécute les tests.
+        ledger.mkdir()
+
+        state = check(settings)
+        assert not state.allowed
+        assert "budget indisponible" in state.reason
+
+        allowed, reason, reservation = reserve_run(
+            settings, run_id="registre-illisible", cost=0.01, tokens=1
+        )
+        assert not allowed and "budget indisponible" in reason
+        assert reservation == ""
+        assert record_run(
+            settings,
+            run_id="registre-illisible",
+            model=settings.llm.model,
+            prompt_tokens=1,
+            completion_tokens=1,
+        ) is None
+
+
 def test_ledger_survives_a_new_process() -> None:
     with tmpdir("budget-processus") as tmp:
         settings = make_settings(tmp)
