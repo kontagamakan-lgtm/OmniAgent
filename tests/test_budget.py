@@ -83,9 +83,10 @@ def test_unreadable_ledger_refuses_instead_of_reporting_zero() -> None:
         settings.budget.enabled = True
         ledger = ledger_path(settings)
         ledger.parent.mkdir(parents=True, exist_ok=True)
-        # Un dossier à la place du fichier rend la lecture impossible sans
-        # dépendre des permissions du compte qui exécute les tests.
-        ledger.mkdir()
+        # Un vrai ledger.jsonl avec des octets UTF-8 invalides : read_text()
+        # échoue sans dépendre des permissions du compte de test.
+        ledger.write_bytes(b"\xff\xfe{\"run_id\": \"illisible\"}\n")
+        assert ledger.name == "ledger.jsonl"
 
         state = check(settings)
         assert not state.allowed
@@ -99,6 +100,36 @@ def test_unreadable_ledger_refuses_instead_of_reporting_zero() -> None:
         assert record_run(
             settings,
             run_id="registre-illisible",
+            model=settings.llm.model,
+            prompt_tokens=1,
+            completion_tokens=1,
+        ) is None
+
+
+def test_corrupt_json_ledger_refuses_instead_of_reporting_zero() -> None:
+    with tmpdir("budget-json-casse") as tmp:
+        settings = make_settings(tmp)
+        settings.budget.enabled = True
+        settings.budget.daily_cost = 1.0
+        ledger = ledger_path(settings)
+        ledger.parent.mkdir(parents=True, exist_ok=True)
+        # Une ligne JSON invalide ne doit pas être ignorée comme une dépense
+        # nulle : le contrôle autoritaire refuse tout le registre.
+        ledger.write_text("{ceci n'est pas du JSON}\n", encoding="utf-8")
+
+        state = check(settings)
+        assert not state.allowed
+        assert "budget indisponible" in state.reason
+        assert state.usage.runs_today == 0 and state.usage.day_cost == 0.0
+
+        allowed, reason, reservation = reserve_run(
+            settings, run_id="json-casse", cost=0.01, tokens=1
+        )
+        assert not allowed and "budget indisponible" in reason
+        assert reservation == ""
+        assert record_run(
+            settings,
+            run_id="json-casse",
             model=settings.llm.model,
             prompt_tokens=1,
             completion_tokens=1,

@@ -110,10 +110,11 @@ def _parse_at(value: Any) -> datetime | None:
 def _read(settings: Settings, *, strict: bool = False) -> list[dict[str, Any]]:
     """Lit le registre ; un fichier absent vaut zéro, un fichier illisible non.
 
-    En mode strict, une erreur d'accès est propagée pour que les appelants qui
-    décident d'une dépense refusent plutôt que de repartir de zéro. Le mode
-    tolérant ne sert qu'aux estimations, où l'historique est une marge
-    indicative : le contrôle autoritaire reste `check()`/`reserve_run()`.
+    En mode strict, une erreur d'accès ou une ligne JSON invalide est
+    propagée pour que les appelants qui décident d'une dépense refusent plutôt
+    que de repartir de zéro. Le mode tolérant ne sert qu'aux estimations, où
+    l'historique est une marge indicative : le contrôle autoritaire reste
+    `check()`/`reserve_run()`.
     """
     path = ledger_path(settings)
     try:
@@ -132,9 +133,13 @@ def _read(settings: Settings, *, strict: bool = False) -> list[dict[str, Any]]:
         try:
             record = json.loads(line)
         except ValueError:
+            if strict:
+                raise
             continue
         if isinstance(record, dict):
             entries.append(record)
+        elif strict:
+            raise ValueError("entrée de budget non objet")
     return entries
 
 
@@ -207,7 +212,7 @@ def _append(settings: Settings, record: dict[str, Any]) -> bool:
                 ]
             entries.append(record)
             _write(settings, entries)
-    except (OSError, UnicodeError, LockTimeout):
+    except (OSError, UnicodeError, ValueError, LockTimeout):
         logger.warning("budget non enregistre", exc_info=True)
         return False
     return True
@@ -391,7 +396,7 @@ def check(
     strict = cfg is not None and getattr(cfg, "enabled", True)
     try:
         entries = _read(settings, strict=strict)
-    except (OSError, UnicodeError) as exc:
+    except (OSError, UnicodeError, ValueError) as exc:
         logger.warning("budget global illisible", exc_info=True)
         return BudgetState(
             allowed=False,
@@ -491,7 +496,7 @@ def reserve_run(
                 return False, state.reason, ""
             entries.append(record)
             _write(settings, entries)
-    except (OSError, UnicodeError, LockTimeout):
+    except (OSError, UnicodeError, ValueError, LockTimeout):
         logger.warning("budget : reservation impossible", exc_info=True)
         return False, "budget indisponible : registre verrouille", ""
     return True, "", identifier
@@ -521,7 +526,7 @@ def release_run(
             kept, _changed = _prune(kept, moment)
             if len(kept) != before:
                 _write(settings, kept)
-    except (OSError, UnicodeError, LockTimeout):
+    except (OSError, UnicodeError, ValueError, LockTimeout):
         logger.warning("budget : liberation impossible", exc_info=True)
         return False
     return True
