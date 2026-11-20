@@ -636,6 +636,52 @@ def test_factory_wires_evolver_skills_and_dynamic_prompt() -> None:
             bundle.close()
 
 
+def test_factory_starts_evolution_when_enabled() -> None:
+    """`evolution.enabled=true` démarre réellement l'arrière-plan dès la fabrique."""
+    with tmpdir("evolution-factory-active") as tmp:
+        settings = make_settings(tmp)
+        settings.evolution.enabled = True
+        settings.evolution.allow_network = False
+        settings.evolution.idle_minutes = 1440.0
+        settings.evolution.core_dir = str(Path(tmp) / "evolution_core")
+        settings.evolution.max_forced_cycles_per_day = 1
+        llm = _FakeLLM(["- leçon issue du cycle de test"])
+        bundle = build_agent(
+            settings, llm=llm, with_web=False, with_browser=False
+        )
+        evolver = bundle.evolver
+        assert evolver is not None
+        try:
+            assert (Path(tmp) / "evolution_core" / "skills").is_dir()
+            assert evolver.status()["enabled"] is True
+            assert evolver.status()["running"] is True
+            thread = evolver._thread
+            assert thread is not None and thread.is_alive()
+            assert thread.name == "omniagent-evolution"
+
+            assert evolver.force_cycle() is True
+            deadline = time.monotonic() + 15
+            records: list[dict] = []
+            while time.monotonic() < deadline:
+                records = evolver.journal(limit=50)
+                if any(record.get("type") == "cycle_finished" for record in records):
+                    break
+                time.sleep(0.05)
+            assert any(record.get("type") == "cycle_finished" for record in records)
+            assert records[-1].get("ok") is True, records[-1]
+            assert "leçon issue du cycle de test" in (
+                Path(tmp) / "evolution_core" / "prompts" / "adaptations.md"
+            ).read_text(encoding="utf-8")
+        finally:
+            bundle.close()
+
+        assert evolver._thread is None
+        assert not any(
+            item.name == "omniagent-evolution" and item.is_alive()
+            for item in threading.enumerate()
+        )
+
+
 def test_config_validates_evolution_bounds() -> None:
     with tmpdir("evolution-config") as tmp:
         settings = make_settings(tmp)

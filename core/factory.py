@@ -24,6 +24,7 @@ from typing import Any
 
 from config import APP_ID, Settings
 from core.agent_core import AgentCore
+from core.errors import ConfigError
 from core.events import EventBus
 from core.llm_client import LLMClient
 from core.llm_router import LLMRouter
@@ -208,10 +209,13 @@ def build_agent(
             skills.load_all()
             evolver = SelfEvolver(settings, skills)
             tools.extend(build_evolution_tools(evolver))
-        except (OSError, ValueError):
-            logger.warning("cortex évolutif indisponible", exc_info=True)
-            evolver = None
-            skills = None
+        except (OSError, ValueError) as exc:
+            # Une activation explicite ne doit jamais retomber silencieusement
+            # sur un agent sans auto-évolution : l'utilisateur croirait le
+            # réglage appliqué alors que le cortex n'est pas initialisé.
+            raise ConfigError(
+                f"auto-évolution activée mais initialisation impossible : {exc}"
+            ) from exc
 
     searcher: WebSearcher | None = None
     if with_web:
@@ -291,6 +295,13 @@ def build_agent(
         if brain is not None
         else None
     )
+    # `evolution.enabled` doit réellement démarrer la boucle d'arrière-plan.
+    # La faire démarrer uniquement par l'interface graphique laissait `--task`,
+    # l'autonomie et les intégrations avec un évolueur inerte malgré le réglage.
+    if evolver is not None and not evolver.start():
+        raise ConfigError(
+            "auto-évolution activée mais le thread d'arrière-plan n'a pas démarré"
+        )
     return AgentBundle(
         agent=agent,
         registry=registry,
