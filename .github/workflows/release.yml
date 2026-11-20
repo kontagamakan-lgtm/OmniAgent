@@ -49,8 +49,9 @@ jobs:
         env:
           PYTHONUTF8: "1"
         run: |
-          build.bat --all --no-smoke || exit /b 1
-          build.bat --slim --no-smoke || exit /b 1
+          call build.bat --all --no-smoke || exit /b 1
+          call build.bat --slim --no-smoke || exit /b 1
+          if not exist dist\OmniAgent-slim\OmniAgent.exe exit /b 1
 
       - name: Contrôles de fumée sans fenêtre
         shell: cmd
