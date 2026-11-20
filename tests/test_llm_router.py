@@ -175,6 +175,24 @@ def test_dead_key_falls_back_to_ollama_when_no_cloud_key_remains() -> None:
         assert router.key_statuses()[0]["status"] == DEAD
 
 
+def test_router_rejects_a_repeated_character_deepseek_key_before_storage() -> None:
+    with tmpdir("router-deepseek-placeholder") as tmp:
+        router, _vault = _router(
+            tmp,
+            [],
+            lambda _request: httpx.Response(500, json={"error": "unused"}),
+        )
+        invalid = "sk-" + "0" * 30
+
+        with pytest.raises(ValueError) as exc_info:
+            router.add_key(invalid, provider="deepseek")
+
+        message = str(exc_info.value)
+        assert "manifestement factice" in message
+        assert invalid not in message, "la clé ne doit jamais apparaître"
+        assert router.key_statuses() == []
+
+
 def test_a_fatal_request_does_not_cool_down_the_key() -> None:
     """Une requête invalide ne doit pas mettre la clé en pause pour autant."""
 

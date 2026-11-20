@@ -386,3 +386,33 @@ def test_diagnostics_reports_the_ocr_state_without_blocking() -> None:
         assert reason in line, (line, reason)
         # « indisponible » contient « disponible » : on compare le préfixe exact.
         assert line.startswith("OCR : disponible" if ready else "OCR : indisponible"), line
+
+
+def test_diagnostics_marks_invalid_deepseek_keys_as_blocking(monkeypatch) -> None:
+    """Le panneau doit bloquer sur le même préflight que le client."""
+    with tmpdir("app-diagnostics-key") as tmp:
+        settings = make_settings(tmp)
+        settings.llm.backend = "deepseek"
+        variable = settings.llm.api_key_env
+        cases = (
+            (None, "absente"),
+            ("sk-court", "trop courte"),
+            ("sk-" + "0" * 30, "factice"),
+        )
+
+        for value, expected in cases:
+            if value is None:
+                monkeypatch.delenv(variable, raising=False)
+            else:
+                monkeypatch.setenv(variable, value)
+
+            checks = app.diagnostics(settings)
+            key_checks = [
+                (ok, line)
+                for ok, line in checks
+                if line.startswith("clé du fournisseur")
+            ]
+            assert len(key_checks) == 1, "un seul contrôle de clé est attendu"
+            ok, line = key_checks[0]
+            assert ok is False, "une clé absente ou invalide doit bloquer"
+            assert expected in line, line

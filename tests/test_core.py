@@ -1515,6 +1515,7 @@ def test_llm_preflight_rejects_empty_short_and_fake_keys_without_network(monkeyp
         (None, "llm_missing_key", "absente"),
         ("sk-court", "llm_invalid_key", "trop courte"),
         ("sk-" + "test" + "x" * 30, "llm_invalid_key", "factice"),
+        ("sk-" + "0" * 30, "llm_invalid_key", "factice"),
     ]
     for value, expected_code, expected_text in cases:
         if value is None:
@@ -1533,7 +1534,10 @@ def test_llm_preflight_rejects_empty_short_and_fake_keys_without_network(monkeyp
                 if value is not None:
                     assert value not in rendered, "la clé ne doit jamais apparaître"
             else:
-                raise AssertionError(f"la clé {value!r} aurait dû être refusée")
+                raise AssertionError(
+                    "une clé de test invalide aurait dû être refusée "
+                    f"(code attendu : {expected_code})"
+                )
         finally:
             client.close()
 
