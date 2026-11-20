@@ -4,7 +4,8 @@ Les paquets compilés étaient jetés sans trace vérifiable : impossible de sav
 quel binaire un rapport d'erreur concernait, ni de le comparer à un autre build.
 Ce script écrit deux fichiers dans `dist/`, publiés avec les paquets :
 
-* `SHA256SUMS.txt` — une ligne par `OmniAgent.exe`, au format `sha256sum` ;
+* `SHA256SUMS.txt` — une ligne par `OmniAgent.exe` et par installateur
+  `*-Setup.exe`, au format `sha256sum` ;
 * `BUILD-INFO.txt` — Python, PyInstaller, comment et date de construction.
 
 Aucun accès réseau, aucun secret : il ne lit que `dist/`.
@@ -56,11 +57,13 @@ def _commit() -> str:
 def main() -> int:
     root = Path("dist")
     exes = sorted(root.glob("*/OmniAgent.exe"))
-    if not exes:
+    installers = sorted(root.glob("installer/*-Setup.exe"))
+    artefacts = exes + installers
+    if not artefacts:
         print("aucun exécutable sous dist/ : rien à empreindre", file=sys.stderr)
         return 1
 
-    rows = [f"{sha256(exe)}  {exe.as_posix()}" for exe in exes]
+    rows = [f"{sha256(path)}  {path.as_posix()}" for path in artefacts]
     (root / "SHA256SUMS.txt").write_text("\n".join(rows) + "\n", encoding="utf-8")
 
     info = [
@@ -76,7 +79,10 @@ def main() -> int:
 
     for row in rows:
         print(row)
-    print(f"{len(rows)} exécutable(s) empreint(s), versions écrites dans dist/BUILD-INFO.txt")
+    print(
+        f"{len(rows)} exécutable(s)/installateur(s) empreint(s), "
+        "versions écrites dans dist/BUILD-INFO.txt"
+    )
     return 0
 
 
