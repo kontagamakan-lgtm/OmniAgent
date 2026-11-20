@@ -1540,6 +1540,20 @@ def test_llm_preflight_rejects_empty_short_and_fake_keys_without_network(monkeyp
     assert requested == [], "le préflight doit refuser avant tout appel réseau"
 
 
+def test_has_credentials_rejects_a_placeholder_key(monkeypatch) -> None:
+    cfg = config.LLMConfig()
+    cfg.backend = "deepseek"
+    cfg.api_key_env = "TEST_LLM_KEY"
+
+    monkeypatch.setenv("TEST_LLM_KEY", "sk-" + "test" + "x" * 30)
+    assert cfg.api_key_problem()
+    assert cfg.has_credentials() is False
+
+    monkeypatch.setenv("TEST_LLM_KEY", VALID_TEST_KEY)
+    assert cfg.api_key_problem() == ""
+    assert cfg.has_credentials() is True
+
+
 def test_missing_api_key_is_reported(monkeypatch) -> None:
     monkeypatch.delenv("TEST_LLM_KEY", raising=False)
     client = _client(lambda request: httpx.Response(200, json={}))

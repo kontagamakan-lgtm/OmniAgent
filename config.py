@@ -399,7 +399,7 @@ class LLMConfig:
     def has_credentials(self) -> bool:
         if self.backend == "ollama":
             return True
-        return bool(self.api_key())
+        return not self.api_key_problem()
 
 
 @dataclass(slots=True)
