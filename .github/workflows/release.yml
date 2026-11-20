@@ -44,6 +44,9 @@ jobs:
           OMNIAGENT_SLOW_TESTS: "1"
         run: python -m pytest -q
 
+      - name: Smoke test de la boucle ReAct
+        run: python build_smoke/agent_loop_smoke.py
+
       - name: Construire les trois paquets
         shell: cmd
         env:

@@ -12,7 +12,9 @@ from typing import Any, Iterable, Mapping
 __all__ = [
     "FINAL_ANSWER_PREFIX",
     "budget_notice",
+    "critique_prompt",
     "finalization_prompt",
+    "plan_prompt",
     "recovery_notice",
     "system_prompt",
     "tool_catalogue",
@@ -143,4 +145,28 @@ def finalization_prompt() -> str:
         "Conclus maintenant, sans nouvel appel d'outil. "
         "Donne le résultat utile, puis les limites constatées. "
         "Si aucun résultat d'outil ne soutient une affirmation, dis-le au lieu d'inventer."
+    )
+
+
+def plan_prompt() -> str:
+    """Consigne de planification courte, sans exécution d'outil."""
+    return (
+        "Tu prépares le plan d'une tâche pour OmniAgent. "
+        "Ne lance aucun outil et ne rédige pas la réponse finale. "
+        "Découpe la demande en au plus 7 étapes vérifiables, chacune avec un "
+        "objectif unique. Réponds uniquement par un objet JSON de la forme "
+        '{"plan": ["étape 1", "étape 2"]}, sans texte autour.'
+    )
+
+
+def critique_prompt() -> str:
+    """Consigne d'auto-critique d'une réponse finale déjà produite."""
+    return (
+        "Tu relis une réponse finale destinée à l'utilisateur. "
+        "Vérifie qu'elle répond à la demande, qu'elle ne prétend rien sans "
+        "résultat d'outil et qu'elle signale les limites constatées. "
+        "Réponds uniquement par un objet JSON de la forme "
+        '{"ok": true, "fix": ""} si elle est acceptable, ou '
+        '{"ok": false, "fix": "correction courte à ajouter"} sinon. '
+        "Ne réécris pas toute la réponse ; donne seulement la correction utile."
     )

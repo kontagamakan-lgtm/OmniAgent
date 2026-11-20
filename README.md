@@ -43,9 +43,10 @@ OmniAgent/
 ├── OmniAgent-lite.spec        #    variante --lite (sans NumPy, Pillow conservé)
 ├── OmniAgent-slim.spec        #    alias de --lite : même paquet, dossier « slim »
 ├── .env.example / .gitignore / README.md
+├── build_smoke/               # smoke tests des exécutables et de la boucle ReAct
 ├── assets/                    # icon.ico, theme.json, tessdata/
 ├── core/
-│   ├── agent_core.py          # LIVRABLE 4 — boucle ReAct, budget, reprises
+│   ├── agent_core.py          # LIVRABLE 4 — boucle ReAct, budget, approches, plan/critique
 │   ├── llm_client.py          #    client OpenAI-compatible + Ollama (streaming)
 │   ├── prompts.py             #    system prompt action-first + templates
 │   ├── react_parser.py        #    parseur tolérant des appels d'outils
@@ -452,6 +453,21 @@ set OMNIAGENT_FILES_ALLOWED_ROOTS=C:\Docs;D:\Projets
 | 3 | `tools/web_search.py`, `tools/browser_agent.py` | livré |
 | 4 | `core/agent_core.py`, `llm_client.py`, `prompts.py`, `react_parser.py`, `tool_registry.py`, `events.py`, `errors.py` | livré |
 | 5 | `ui/app_gui.py`, `ui/controller.py`, `app.py`, `build.bat`, `OmniAgent.spec` | livré |
+
+### Livrable 4 — vérification de la boucle
+
+En plus de la suite pytest, un smoke test autonome exerce la boucle complète
+sans réseau ni données utilisateur : planification facultative, appel d'outil,
+réponse finale et auto-critique.
+
+```bat
+python build_smoke\agent_loop_smoke.py
+```
+
+Il est exécuté par la CI et par le workflow de publication avant toute
+construction d'installateur. Les options `agent.plan_before_act` et
+`agent.self_critique_passes` restent désactivées par défaut : le plan ajoute
+un appel LLM et chaque passe de critique en ajoute un.
 
 ---
 

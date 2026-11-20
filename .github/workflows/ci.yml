@@ -65,6 +65,9 @@ jobs:
           OMNIAGENT_SLOW_TESTS: "1"
         run: python -m pytest -q
 
+      - name: Smoke test de la boucle ReAct
+        run: python build_smoke/agent_loop_smoke.py
+
       # Golden traces : invariants critiques (reprise sans rejeu d'un effet,
       # approbation, annulation, budget, fenêtre déjà honorée, secret absent
       # du prompt), hors ligne. Lancé aussi par pytest, mais la sortie par

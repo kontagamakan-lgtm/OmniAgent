@@ -14,7 +14,7 @@ import httpx
 from support import make_settings, run, tmpdir  # noqa: I001
 
 import config
-from core.agent_core import AgentCore, AgentReply
+from core.agent_core import AgentCore, AgentReply, _ApproachTracker
 from core.context_manager import (
     SUMMARY_MAX_CHARS,
     messages_tokens,
@@ -598,6 +598,105 @@ def test_loop_guard_stops_repeated_action() -> None:
         # Trois exécutions autorisées, la quatrième est refusée avant d'agir.
         assert seen == ["encore", "encore", "encore"]
         assert reply.tool_calls == 3
+
+
+def test_dead_approach_is_counted_once() -> None:
+    tracker = _ApproachTracker(max_failures=2, max_approaches=4)
+    fingerprint = ("fail", '{"text": "a"}')
+
+    assert tracker.register_failure(fingerprint) is False
+    assert tracker.register_failure(fingerprint) is True
+    assert tracker.distinct_used == 1
+    assert tracker.exhausted is False
+    assert tracker.remaining() == 3
+
+    tracker.register_success(fingerprint)
+    assert tracker.distinct_used == 0
+
+
+def test_distinct_approach_budget_blocks_exploration() -> None:
+    """Des arguments différents qui échouent tous ne doivent pas boucler sans fin."""
+    with tmpdir("core") as tmp:
+        settings = _settings(tmp, max_steps=6, max_distinct_approaches=2)
+        seen: list[str] = []
+
+        def failing(text: str = "") -> str:
+            seen.append(text)
+            raise ValueError("échec contrôlé")
+
+        tool = FunctionTool(
+            "fail",
+            "Échoue toujours.",
+            object_schema({"text": param("string", "Valeur", default="")}),
+            failing,
+        )
+        llm = FakeLLM(
+            [_call("fail", text=value) for value in ("a", "b", "c", "d")]
+        )
+        core = AgentCore(settings, llm, ToolRegistry([tool]))
+
+        reply = core.run("explore des arguments")
+
+        assert reply.stop_reason == "blocked"
+        assert reply.error_code == "approaches_exhausted"
+        assert reply.ok is False
+        assert seen == ["a", "b"], "le troisième échec dépasserait le plafond"
+        assert "approches distinctes" in reply.text
+
+
+def test_plan_before_act_injects_the_plan_before_the_loop() -> None:
+    with tmpdir("core") as tmp:
+        settings = _settings(tmp, plan_before_act=True)
+        llm = FakeLLM(
+            [
+                LLMResponse(text='{"plan": ["lire les fichiers", "conclure"]}'),
+                _text("fini"),
+            ]
+        )
+        bus = EventBus()
+        core = AgentCore(settings, llm, ToolRegistry([_echo_tool([])]), bus=bus)
+
+        reply = core.run("prépare la tâche")
+
+        assert reply.ok, reply.to_dict()
+        assert llm.calls[0]["tools"] is None, "la planification ne doit pas exposer les outils"
+        system = str(llm.calls[1]["messages"][0]["content"])
+        assert "Plan retenu" in system
+        assert "lire les fichiers" in system
+        events = bus.events(event_type=EventType.PLAN)
+        assert events and events[-1].payload["steps"] == ["lire les fichiers", "conclure"]
+
+
+def test_self_critique_completes_the_final_answer() -> None:
+    with tmpdir("core") as tmp:
+        settings = _settings(tmp, self_critique_passes=1)
+        llm = FakeLLM(
+            [
+                _text("brouillon"),
+                LLMResponse(text='{"ok": false, "fix": "préciser la source"}'),
+            ]
+        )
+        bus = EventBus()
+        core = AgentCore(settings, llm, ToolRegistry([]), bus=bus)
+
+        reply = core.run("réponds")
+
+        assert reply.ok
+        assert "brouillon" in reply.text
+        assert "préciser la source" in reply.text
+        assert "[Complément suite à auto-critique" in reply.text
+        assert bus.events(event_type=EventType.CRITIQUE)
+
+
+def test_plan_failure_does_not_block_the_run() -> None:
+    with tmpdir("core") as tmp:
+        settings = _settings(tmp, plan_before_act=True)
+        llm = FakeLLM([LLMError("plan indisponible"), _text("fini")])
+        core = AgentCore(settings, llm, ToolRegistry([]))
+
+        reply = core.run("continue sans plan")
+
+        assert reply.ok, reply.to_dict()
 
 
 def test_cancel_during_run_stops_before_next_step() -> None:

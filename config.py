@@ -575,8 +575,17 @@ class AgentConfig:
     action_first: bool = True
     max_steps: int = 24
     parallel_tool_calls: int = 3
+    #: Une même combinaison outil/arguments est déclarée morte après ce nombre
+    #: d'échecs ; les combinaisons distinctes sont aussi plafonnées pour
+    #: empêcher une exploration infinie d'arguments qui échouent tous.
+    max_tool_failures_per_approach: int = 3
+    max_distinct_approaches: int = 12
     max_recovery_attempts: int = 5
     require_plan_for_multistep: bool = True
+    #: Planification et auto-critique facultatives : un appel LLM supplémentaire
+    #: chacune, donc désactivées par défaut pour ne pas doubler le coût courant.
+    plan_before_act: bool = False
+    self_critique_passes: int = 0
     deep_research_enabled: bool = True
     deep_research_min_queries: int = 4
     deep_research_max_queries: int = 8
@@ -1055,6 +1064,12 @@ class Settings:
                 "action_first": self.agent.action_first,
                 "max_steps": self.agent.max_steps,
                 "max_recovery_attempts": self.agent.max_recovery_attempts,
+                "max_tool_failures_per_approach": (
+                    self.agent.max_tool_failures_per_approach
+                ),
+                "max_distinct_approaches": self.agent.max_distinct_approaches,
+                "plan_before_act": self.agent.plan_before_act,
+                "self_critique_passes": self.agent.self_critique_passes,
                 "deep_research": self.agent.deep_research_enabled,
             },
         }
@@ -1194,6 +1209,18 @@ class Settings:
             err("agent.max_recovery_attempts", "doit être comprise entre 1 et 10")
         if not (1 <= agent.parallel_tool_calls <= 8):
             err("agent.parallel_tool_calls", "doit être comprise entre 1 et 8")
+        if not (1 <= agent.max_tool_failures_per_approach <= 10):
+            err(
+                "agent.max_tool_failures_per_approach",
+                "doit être comprise entre 1 et 10",
+            )
+        if not (1 <= agent.max_distinct_approaches <= 50):
+            err(
+                "agent.max_distinct_approaches",
+                "doit être comprise entre 1 et 50",
+            )
+        if not (0 <= agent.self_critique_passes <= 3):
+            err("agent.self_critique_passes", "doit être comprise entre 0 et 3")
         if agent.deep_research_enabled:
             if agent.deep_research_min_queries < 1:
                 err("agent.deep_research_min_queries", "doit être >= 1")

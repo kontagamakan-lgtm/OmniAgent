@@ -46,8 +46,15 @@ from core.events import EventBus, EventType
 from core.fingerprint import read_fingerprint
 from core.llm_client import LLMClient, LLMResponse
 from core.observability import reset_run_id, set_run_id
-from core.prompts import budget_notice, finalization_prompt, recovery_notice, system_prompt
-from core.react_parser import ParsedToolCall, final_text
+from core.prompts import (
+    budget_notice,
+    critique_prompt,
+    finalization_prompt,
+    plan_prompt,
+    recovery_notice,
+    system_prompt,
+)
+from core.react_parser import ParsedToolCall, final_text, parse_model_json
 from core.tool_registry import ToolRegistry
 from core.trace import workspace_slug
 from tools.base import ToolResult
@@ -57,8 +64,69 @@ __all__ = ["AgentCore", "AgentReply", "AgentStep", "StepCall"]
 logger = logging.getLogger(f"{APP_ID}.agent")
 
 _UNSET = object()
-_SIGNATURE_LIMIT = 3
 _BUDGET_FALLBACK = "Limite d'étapes atteinte sans réponse finale exploitable."
+
+
+class _ApproachTracker:
+    """Compte les approches distinctes et celles qui ont échoué.
+
+    Une approche est une combinaison exacte outil/arguments. Un succès efface
+    ses échecs ; une approche qui atteint le plafond est dite morte. Le nombre
+    d'approches distinctes restantes borne l'exploration, même quand le modèle
+    varie les arguments à chaque tour.
+    """
+
+    def __init__(self, max_failures: int, max_approaches: int) -> None:
+        self.max_failures = max(1, int(max_failures))
+        self.max_approaches = max(1, int(max_approaches))
+        self.failures: dict[tuple[str, str], int] = {}
+        self.dead: set[tuple[str, str]] = set()
+
+    @staticmethod
+    def fingerprint(call: ParsedToolCall) -> tuple[str, str]:
+        return call.signature()
+
+    def register_failure(self, fingerprint: tuple[str, str]) -> bool:
+        """Incrémente et retourne True si l'approche vient de mourir."""
+        count = self.failures.get(fingerprint, 0) + 1
+        self.failures[fingerprint] = count
+        if count >= self.max_failures and fingerprint not in self.dead:
+            self.dead.add(fingerprint)
+            return True
+        return False
+
+    def register_success(self, fingerprint: tuple[str, str]) -> None:
+        self.failures.pop(fingerprint, None)
+        self.dead.discard(fingerprint)
+
+    def is_dead(self, fingerprint: tuple[str, str]) -> bool:
+        return fingerprint in self.dead
+
+    @property
+    def distinct_used(self) -> int:
+        # `dead` est toujours un sous-ensemble de `failures` : additionner les
+        # deux compterait deux fois une approche morte et épuiserait le budget
+        # d'exploration trop tôt.
+        return len(self.failures)
+
+    @property
+    def exhausted(self) -> bool:
+        return self.distinct_used >= self.max_approaches
+
+    def remaining(self) -> int:
+        return max(0, self.max_approaches - self.distinct_used)
+
+    def report(self) -> str:
+        """Bilan lisible sans répéter les arguments, donc sans fuite de secret."""
+        lines = [
+            "Blocage : toutes les approches distinctes ont été consommées.",
+            f"Approches tentées : {self.distinct_used}.",
+        ]
+        for (tool, _arguments), count in sorted(
+            self.failures.items(), key=lambda item: (-item[1], item[0][0])
+        ):
+            lines.append(f"- {tool} ({count} échec(s))")
+        return "\n".join(lines)
 
 
 @dataclass(slots=True)
@@ -352,6 +420,10 @@ class AgentCore:
         ]
         steps: list[AgentStep] = []
         signatures: Counter[tuple[str, str]] = Counter()
+        signature_limit = max(1, int(cfg.max_tool_failures_per_approach))
+        approaches = _ApproachTracker(
+            signature_limit, cfg.max_distinct_approaches
+        )
         recoveries = 0
 
         self._emit(EventType.RUN_STARTED, self._manifest(prompt, limit))
@@ -374,6 +446,20 @@ class AgentCore:
                     error_code="budget_exceeded",
                 )
             )
+
+        if cfg.plan_before_act:
+            try:
+                plan = self._maybe_plan(prompt)
+            except Cancelled:
+                return self._finish(self._cancelled(steps, recoveries))
+            if plan:
+                plan_text = "\n".join(
+                    f"{position}. {step}"
+                    for position, step in enumerate(plan, 1)
+                )
+                messages[0]["content"] = (
+                    f"{messages[0]['content']}\n\n## Plan retenu\n{plan_text}"
+                )
 
         for index in range(1, limit + 1):
             if self.cancelled:
@@ -437,6 +523,10 @@ class AgentCore:
                     return self._finish(self._cancelled(steps, recoveries))
                 answer = final_text(response.text)
                 if answer:
+                    try:
+                        answer = self._maybe_critique(prompt, answer)
+                    except Cancelled:
+                        return self._finish(self._cancelled(steps, recoveries))
                     steps.append(AgentStep(index=index, thought=answer))
                     self._emit(EventType.FINAL, {"step": index, "text": answer[:2000]})
                     return self._finish(
@@ -472,7 +562,7 @@ class AgentCore:
             for position, call in enumerate(requested):
                 if len(selected) >= max(1, int(cfg.parallel_tool_calls)):
                     break
-                if signatures[call.signature()] >= _SIGNATURE_LIMIT:
+                if signatures[call.signature()] >= signature_limit:
                     blocked = call.name
                     break
                 if not call.call_id:
@@ -485,6 +575,21 @@ class AgentCore:
             for call in selected:
                 signatures[call.signature()] += 1
                 record, observation = self._execute(call, index)
+                fingerprint = approaches.fingerprint(call)
+                if record.ok:
+                    approaches.register_success(fingerprint)
+                else:
+                    died = approaches.register_failure(fingerprint)
+                    if died:
+                        self._emit(
+                            EventType.APPROACH_EXHAUSTED,
+                            {
+                                "step": index,
+                                "tool": call.name,
+                                "remaining": approaches.remaining(),
+                                "dead_approach": True,
+                            },
+                        )
                 step.calls.append(record)
                 messages.append(self._tool_message(call, observation))
 
@@ -514,13 +619,38 @@ class AgentCore:
                     },
                 },
             )
+            # L'annulation demandée pendant un outil doit primer sur un
+            # éventuel plafond d'approches atteint au même instant.
+            if self.cancelled:
+                return self._finish(self._cancelled(steps, recoveries))
+            if approaches.exhausted:
+                note = approaches.report()
+                self._emit(
+                    EventType.APPROACH_EXHAUSTED,
+                    {
+                        "step": index,
+                        "remaining": 0,
+                        "distinct": approaches.distinct_used,
+                    },
+                )
+                return self._finish(
+                    AgentReply(
+                        text=note,
+                        steps=steps,
+                        stop_reason="blocked",
+                        ok=False,
+                        error=note,
+                        error_code="approaches_exhausted",
+                        recoveries=recoveries,
+                    )
+                )
             if blocked:
                 messages.append(
                     {
                         "role": "user",
                         "content": (
                             f"[GARDE-FOU] L'action {blocked} a déjà été lancée "
-                            f"{_SIGNATURE_LIMIT} fois à l'identique, elle n'est pas relancée. "
+                            f"{signature_limit} fois à l'identique, elle n'est pas relancée. "
                             "Change d'approche ou réponds avec ce que tu sais."
                         ),
                     }
@@ -540,9 +670,6 @@ class AgentCore:
                         recoveries=recoveries,
                     )
                 )
-            if self.cancelled:
-                return self._finish(self._cancelled(steps, recoveries))
-
         # Budget épuisé : une dernière synthèse sans outil. Comme le reste de la
         # boucle, elle réessaie les erreurs transitoires, avec son propre
         # décompte aligné sur `max_recovery_attempts` : les reprises déjà
@@ -619,6 +746,96 @@ class AgentCore:
         )
 
     # -- étapes internes ----------------------------------------------------
+
+    def _aux_complete(
+        self, messages: Sequence[dict[str, Any]], *, kind: str
+    ) -> LLMResponse:
+        """Appel accessoire (plan/critique), sans flux ni outils.
+
+        Il est compté dans les tokens du run, mais ne publie pas de fragments :
+        l'utilisateur ne doit pas voir un plan interne défiler comme une réponse.
+        """
+        if self.cancelled:
+            raise Cancelled("exécution annulée")
+        self._metrics["requests"] = self._metrics.get("requests", 0) + 1
+        self._metrics["prompt_tokens"] = self._metrics.get(
+            "prompt_tokens", 0
+        ) + messages_tokens(messages)
+        self._emit(
+            EventType.LLM_REQUEST,
+            {"messages": len(messages), "recoveries": 0, "aux": kind},
+        )
+        response = self.llm.complete(messages, tools=None)
+        if self.cancelled:
+            raise Cancelled("exécution annulée")
+        self._count_response(response)
+        return response
+
+    def _maybe_plan(self, task: str) -> list[str]:
+        """Planification facultative : une erreur ne bloque jamais le run."""
+        try:
+            response = self._aux_complete(
+                [
+                    {"role": "system", "content": plan_prompt()},
+                    {"role": "user", "content": task},
+                ],
+                kind="plan",
+            )
+        except Cancelled:
+            raise
+        except AgentError:
+            logger.debug("planification indisponible", exc_info=True)
+            return []
+        parsed = parse_model_json(response.text)
+        plan = parsed.get("plan") if isinstance(parsed, dict) else None
+        if not isinstance(plan, list):
+            return []
+        steps = [str(step).strip() for step in plan if str(step).strip()][:7]
+        if steps:
+            self._emit(EventType.PLAN, {"steps": steps})
+        return steps
+
+    def _maybe_critique(self, task: str, final: str) -> str:
+        """Auto-critique facultative de la réponse finale.
+
+        La réponse d'origine est conservée ; seule une correction courte est
+        ajoutée. Une panne du fournisseur laisse donc la réponse intacte.
+        """
+        passes = max(0, int(self.settings.agent.self_critique_passes))
+        current = final
+        for _ in range(passes):
+            if self.cancelled:
+                raise Cancelled("exécution annulée")
+            try:
+                response = self._aux_complete(
+                    [
+                        {"role": "system", "content": critique_prompt()},
+                        {
+                            "role": "user",
+                            "content": f"DEMANDE :\n{task}\n\nRÉPONSE :\n{current}",
+                        },
+                    ],
+                    kind="critique",
+                )
+            except Cancelled:
+                raise
+            except AgentError:
+                logger.debug("auto-critique indisponible", exc_info=True)
+                break
+            verdict = parse_model_json(response.text)
+            if not isinstance(verdict, dict):
+                break
+            ok = bool(verdict.get("ok"))
+            fix = str(verdict.get("fix") or "").strip()
+            self._emit(EventType.CRITIQUE, {"ok": ok, "fix": fix[:500]})
+            if ok:
+                break
+            if fix:
+                current = (
+                    f"{current}\n\n"
+                    f"[Complément suite à auto-critique : {fix[:800]}]"
+                )
+        return current
 
     def _ask(
         self,
