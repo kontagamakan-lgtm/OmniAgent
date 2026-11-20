@@ -185,6 +185,8 @@ class AgentCore:
         self._reservation_id = ""
         self.run_count = 0
         self.run_id = ""
+        #: Prompt d'adaptation fourni par le moteur d'auto-évolution (borné).
+        self.dynamic_prompt: Callable[[], str] | None = None
 
     # -- pilotage -----------------------------------------------------------
 
@@ -309,6 +311,18 @@ class AgentCore:
                 "l'utilisateur, appelle `obsidian_remember` avec un titre court, "
                 "des tags et des `[[liens]]` vers les notes liées. N'écris jamais "
                 "de secret dans une note."
+            )
+        dynamic = ""
+        provider = self.dynamic_prompt
+        if provider is not None:
+            try:
+                dynamic = str(provider() or "").strip()
+            except Exception:  # noqa: BLE001 - un prompt dynamique illisible est ignoré
+                logger.debug("prompt d'évolution illisible", exc_info=True)
+                dynamic = ""
+        if dynamic:
+            brain_extra = "\n\n".join(
+                part for part in (brain_extra, f"## Adaptations apprises\n{dynamic}") if part
             )
         messages: list[dict[str, Any]] = [
             {

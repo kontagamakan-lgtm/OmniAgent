@@ -694,6 +694,34 @@ class ObsidianConfig:
 
 
 @dataclass(slots=True)
+class EvolutionConfig:
+    """Auto-évolution du cortex : inactive par défaut, bornes strictes."""
+
+    #: Sans activation explicite, aucun thread ni cycle ne démarre.
+    enabled: bool = False
+    #: Cortex évolutif ; vide = `evolution_core/` à côté de l'exe ou du projet.
+    core_dir: str = ""
+    #: Inactivité nécessaire avant le premier cycle d'arrière-plan.
+    idle_minutes: float = 20.0
+    #: Délai minimal entre deux cycles automatiques.
+    interval_minutes: float = 180.0
+    max_cycles_per_day: int = 6
+    #: Plafond séparé des clics « Forcer un cycle » ; 0 les désactive.
+    max_forced_cycles_per_day: int = 3
+    max_skill_chars: int = 20000
+    max_prompt_chars: int = 4000
+    #: Autoriser la veille web pendant les cycles.
+    allow_network: bool = True
+    #: Installation de paquets Python par l'agent (désactivée par défaut).
+    allow_pip: bool = False
+    pip_timeout_s: int = 300
+    test_timeout_s: int = 120
+    backup_limit: int = 20
+    journal_max_entries: int = 500
+    journal_max_bytes: int = 512 * 1024
+
+
+@dataclass(slots=True)
 class IsolationConfig:
     """Profil de capacités par run et liste blanche de domaines."""
 
@@ -753,6 +781,7 @@ class Settings:
     budget: BudgetConfig = field(default_factory=BudgetConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     obsidian: ObsidianConfig = field(default_factory=ObsidianConfig)
+    evolution: EvolutionConfig = field(default_factory=EvolutionConfig)
     isolation: IsolationConfig = field(default_factory=IsolationConfig)
     approvals: ApprovalConfig = field(default_factory=ApprovalConfig)
 
@@ -1260,6 +1289,36 @@ class Settings:
             err("obsidian.max_index_links", "doit etre comprise entre 1 et 10000")
         if not (30 <= obsidian.install_timeout_s <= 3600):
             err("obsidian.install_timeout_s", "doit etre comprise entre 30 et 3600 secondes")
+
+        # --- Auto-évolution
+        evolution = self.evolution
+        if not (1.0 <= evolution.idle_minutes <= 1440.0):
+            err("evolution.idle_minutes", "doit etre comprise entre 1 et 1440 minutes")
+        if not (1.0 <= evolution.interval_minutes <= 10080.0):
+            err("evolution.interval_minutes", "doit etre comprise entre 1 et 10080 minutes")
+        if not (1 <= evolution.max_cycles_per_day <= 100):
+            err("evolution.max_cycles_per_day", "doit etre comprise entre 1 et 100")
+        if not (0 <= evolution.max_forced_cycles_per_day <= 100):
+            err(
+                "evolution.max_forced_cycles_per_day",
+                "doit etre comprise entre 0 et 100 (0 = cycles forces indisponibles)",
+            )
+        if not (1000 <= evolution.max_skill_chars <= 200000):
+            err("evolution.max_skill_chars", "doit etre comprise entre 1000 et 200000")
+        if not (200 <= evolution.max_prompt_chars <= 20000):
+            err("evolution.max_prompt_chars", "doit etre comprise entre 200 et 20000")
+        if not (5 <= evolution.test_timeout_s <= 3600):
+            err("evolution.test_timeout_s", "doit etre comprise entre 5 et 3600 secondes")
+        if not (30 <= evolution.pip_timeout_s <= 3600):
+            err("evolution.pip_timeout_s", "doit etre comprise entre 30 et 3600 secondes")
+        if not (1 <= evolution.backup_limit <= 500):
+            err("evolution.backup_limit", "doit etre comprise entre 1 et 500")
+        if not (10 <= evolution.journal_max_entries <= 100000):
+            err("evolution.journal_max_entries", "doit etre comprise entre 10 et 100000")
+        if evolution.journal_max_bytes < 1024:
+            err("evolution.journal_max_bytes", "doit etre >= 1024 octets")
+        if evolution.core_dir and any(part == ".." for part in Path(evolution.core_dir).parts):
+            err("evolution.core_dir", "chemin avec '..' refuse")
 
         # --- Routeur multi-LLM
         router = self.llm_router

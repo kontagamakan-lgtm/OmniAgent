@@ -18,6 +18,7 @@ from typing import Any
 from config import APP_ID, APP_NAME, APP_VERSION, Settings
 from core.events import Event, EventType
 from core.factory import AgentBundle
+from core.self_evolver import format_evolution_journal, format_evolution_status
 from ui.controller import AgentController
 from ui.hotkey import HotkeyListener
 from ui.key_panel import KeyTable
@@ -179,6 +180,13 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 self._install_approval_gate()
             except Exception:  # noqa: BLE001 - l'interface reste utilisable sans porte
                 logger.debug("porte d'approbation non installée", exc_info=True)
+            evolver = getattr(self.bundle, "evolver", None)
+            if evolver is not None:
+                try:
+                    if evolver.start():
+                        self._append("système", "auto-évolution active en arrière-plan")
+                except Exception:  # noqa: BLE001 - jamais bloquant
+                    logger.debug("démarrage de l'auto-évolution impossible", exc_info=True)
             if self._hotkey.start(self._global_stop_signal):
                 self._append(
                     "système",
@@ -257,6 +265,10 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 actions, text="Autonomie", width=110, command=self._toggle_autonomy
             )
             self.autonomy_button.pack(fill="x", pady=(6, 0))
+            self.evolution_button = ctk.CTkButton(
+                actions, text="Évolution", width=110, command=self._open_evolution
+            )
+            self.evolution_button.pack(fill="x", pady=(6, 0))
             self.keys_button = ctk.CTkButton(
                 actions, text="Clés & LLM", width=110, command=self._open_keys
             )
@@ -514,6 +526,70 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 if enabled
                 else "trace désactivée : rien n'est écrit sur disque"
             )
+
+        # -- Évolution autonome ---------------------------------------------
+
+        def _open_evolution(self) -> None:
+            """Panneau : version, compétences forgées, journal des cycles."""
+            evolver = getattr(self.bundle, "evolver", None)
+            if evolver is None:
+                self._append(
+                    "système",
+                    "auto-évolution désactivée (evolution.enabled = false) : "
+                    "aucun cycle ne tourne en arrière-plan",
+                )
+                self._set_status("auto-évolution désactivée")
+                return
+
+            window = ctk.CTkToplevel(self)
+            window.title("Évolution autonome")
+            window.geometry("760x640")
+            header = ctk.CTkLabel(
+                window,
+                text="",
+                anchor="w",
+                justify="left",
+                font=(
+                    self.settings.ui.font_family,
+                    self.settings.ui.font_size + 1,
+                    "bold",
+                ),
+            )
+            header.pack(fill="x", padx=16, pady=(14, 6))
+            journal = ctk.CTkTextbox(window, wrap="word")
+            journal.pack(fill="both", expand=True, padx=16, pady=6)
+            journal.configure(state="disabled")
+
+            def refresh() -> None:
+                try:
+                    if not window.winfo_exists():
+                        return
+                    header.configure(text=format_evolution_status(evolver.status()))
+                    body = format_evolution_journal(evolver.journal(limit=120))
+                    journal.configure(state="normal")
+                    journal.delete("1.0", "end")
+                    journal.insert("1.0", body)
+                    journal.configure(state="disabled")
+                    window.after(2000, refresh)
+                except Exception:  # noqa: BLE001 - fenêtre fermée pendant le rafraîchissement
+                    logger.debug("panneau d'évolution refermé", exc_info=True)
+
+            def force() -> None:
+                started = evolver.force_cycle()
+                if started:
+                    self._set_status("cycle d'auto-évolution lancé")
+                    return
+                reason = str(evolver.status().get("last_refusal") or "")
+                self._set_status(
+                    f"cycle refusé : {reason}"
+                    if reason
+                    else "cycle déjà en cours (ou auto-évolution désactivée)"
+                )
+
+            ctk.CTkButton(
+                window, text="Forcer un cycle maintenant", command=force
+            ).pack(pady=(0, 12))
+            refresh()
 
         # -- Gestionnaire de clés et de modèles -----------------------------
 
@@ -1345,6 +1421,9 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
         def _on_close(self) -> None:
             try:
                 self._hotkey.stop()
+                evolver = getattr(self.bundle, "evolver", None)
+                if evolver is not None:
+                    evolver.stop()
                 if self._autonomy_session is not None:
                     self._autonomy_session.request_stop()
                 if self.controller.busy:

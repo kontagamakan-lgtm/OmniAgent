@@ -35,7 +35,9 @@ def test_the_tolerant_reader_never_fails_on_arbitrary_lines(
     body = "\n".join(lines) + ("\n" if trailing_newline and lines else "")
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "trace.jsonl"
-        path.write_text(body, encoding="utf-8")
+        # Écrire les octets exacts : `write_text` traduirait `\n` en `\r\n`
+        # sous Windows, et le fichier ne contiendrait plus `body`.
+        path.write_bytes(body.encode("utf-8"))
 
         events = list(read_events(path))
 

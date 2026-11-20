@@ -169,6 +169,45 @@ Réglages `config.json` : `obsidian.enabled`, `auto_install`, `vault_name`,
 `max_index_links`. Les variables correspondantes suivent
 `OMNIAGENT_OBSIDIAN_*`.
 
+## Auto-évolution bornée
+
+Le noyau reste immuable ; tout ce que l'agent améliore vit dans
+`evolution_core/` : `skills/*.py` (compétences rechargées à chaud) et
+`prompts/adaptations.md` (prompt injecté dans le prompt système). Le moteur
+`core/self_evolver.py` est **inactif par défaut** : il ne démarre qu'avec
+`evolution.enabled = true`, après `evolution.idle_minutes` d'inactivité.
+
+Chaque cycle :
+
+1. diagnostique les outils lents ou en échec et les cycles ratés ;
+2. fait une veille via `web_search` (garde réseau et profil respectés) ;
+3. ne demande une compétence au modèle que si le diagnostic signale un outil
+   lent, en échec ou une erreur récente (sinon la forge est ignorée) ;
+4. crée un instantané dans `data/evolution/backups/`, exécute le test dans un
+   sous-processus borné, et restaure l'instantané si le test échoue ; la version
+   `v1.0.N` ne monte **que** si le test passe et que la compétence se charge ;
+5. consigne des leçons dans `prompts/adaptations.md` et dans Obsidian
+   (`[[Erreurs_Corrigées]]`, `[[Stratégies_Optimales]]`).
+
+Garde-fous : aucune écriture hors de `evolution_core/`, imports et appels
+dangereux (`subprocess`, `socket`, `ctypes`, `eval`, `exec`…) refusés avant
+chargement, `pip install` impossible sans `evolution.allow_pip` (noms de
+paquets validés), plafonds `max_cycles_per_day`,
+`max_forced_cycles_per_day`, `interval_minutes`, `test_timeout_s` et
+`backup_limit`. Chaque cycle, forcé compris, vérifie d'abord le budget global
+(`budget.*`) et est refusé si les plafonds de coût ou de tokens sont déjà
+atteints : un clic répété ne peut pas consommer sans limite. Les compétences sont exposées par deux
+outils classés `dangerous` (`evolution_run_skill`, `evolution_force_cycle`) ;
+seul `evolution_status` est une lecture.
+
+Le bouton **Évolution** affiche la version auto-générée, les compétences
+forgées, le journal des cycles et permet de forcer un cycle. Réglages
+`config.json` : `enabled`, `core_dir`, `idle_minutes`, `interval_minutes`,
+`max_cycles_per_day`, `max_forced_cycles_per_day`, `max_skill_chars`,
+`max_prompt_chars`, `allow_network`, `allow_pip`, `pip_timeout_s`,
+`test_timeout_s`, `backup_limit`, `journal_max_entries`,
+`journal_max_bytes`.
+
 ## Routeur multi-LLM et multi-clés
 
 `llm_router.enabled = true` remplace le client unique par
@@ -189,7 +228,9 @@ ReAct et les appels d'outils sont convertis au format du fournisseur retenu
 contexte de la tâche.
 
 Les scores de base (matrice `CATALOGUE`) sont ajustés de ±8 points par les
-mesures réelles de réussite, de latence et de tokens/seconde. Le streaming est désactivé quand le routeur
+mesures réelles de réussite, de latence et de tokens/seconde. Le moteur
+d'auto-évolution recalcule ce classement à chaque cycle et le consigne dans
+Obsidian (`Classement LLM — date`). Le streaming est désactivé quand le routeur
 est actif : un flux déjà affiché ne peut pas être rejoué sur un autre modèle
 sans dupliquer le texte ; l'agent utilise donc `complete` et conserve la bascule.
 

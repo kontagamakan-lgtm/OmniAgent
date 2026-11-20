@@ -306,6 +306,57 @@ sur une ligne pour ne pas injecter de frontmatter). Les dossiers cachés
 de disque est refusée comme vault. Les fichiers du vault sont des données
 utilisateur : ne les versionnez pas et ne les incluez pas dans un paquet.
 
+## Auto-évolution bornée
+
+`evolution.enabled = true` démarre un thread d'arrière-plan qui attend
+`idle_minutes` d'inactivité, puis exécute au plus `max_cycles_per_day` cycles
+par jour, espacés d'au moins `interval_minutes`. Les clics « Forcer un cycle »
+sont plafonnés séparément à `max_forced_cycles_per_day` (3 par défaut, 0 les
+désactive) et comptent aussi dans le total quotidien. Chaque cycle diagnostique
+les outils (`registry.stats()`), cherche des pistes via `web_search`, forge une
+compétence et écrit des leçons. La forge n'est tentée que si le diagnostic
+signale un outil lent, en échec ou une erreur récente ; sans signal, elle est
+ignorée (`forge_skipped`) et seules les leçons sont écrites. La version ne monte
+qu'après un test de compétence réussi et un chargement effectif : un test en
+échec laisse la version et le cortex inchangés.
+
+Avant de démarrer, automatique ou forcé, le moteur appelle `core.budget.check()`
+avide l'estimation de ses deux appels au modèle. Si les plafonds `budget.*`
+(coût ou tokens, jour/semaine/mois) sont déjà atteints, le cycle est refusé,
+journalisé `cycle_refused` et aucun token n'est dépensé. Un registre de budget
+illisible refuse aussi (fail-closed).
+
+Fichiers :
+
+- `evolution_core/skills/*.py` : compétences chargées à chaud par
+  `core/skill_loader.py` (module + `NAME`, `DESCRIPTION`, `PARAMETERS`,
+  `run(**kwargs)`) ;
+- `evolution_core/prompts/adaptations.md` : prompt d'adaptation, borné par
+  `max_prompt_chars` ;
+- `data/evolution/journal.jsonl` : cycle démarré, diagnostic, veille, forge,
+  leçons, fin de cycle ;
+- `data/evolution/state.json` : version (`v1.0.N - Auto-Générée`), cycles du
+  jour et cycles forcés du jour (réinitialisés au changement de date UTC) ;
+- `data/evolution/backups/<horodatage>/` : instantané de `evolution_core/`
+  avant chaque forge ;
+- `data/evolution/tests/` : tests générés, exécutés avec `test_timeout_s`.
+
+Rollback : si le test échoue, le fichier de compétence est restauré depuis
+l'instantané (ou supprimé s'il est nouveau) et l'échec est journalisé ; rien
+n'est chargé. Un cycle raté n'arrête pas la boucle.
+
+Sécurité : les écritures sont confinées à `evolution_core/` ; les imports
+`subprocess`, `socket`, `ctypes`, `winreg`, `multiprocessing` et les appels
+`eval`, `exec`, `compile`, `os.system`, `os.popen` sont refusés avant
+chargement. `pip install` n'est possible qu'avec `allow_pip = true`, sur un nom
+de paquet validé, avec `pip_timeout_s`. Le test en sous-processus isole les
+crashs, pas un code malveillant : ne générez des compétences qu'avec un
+fournisseur de confiance.
+
+Panneau **Évolution** : version, compétences, journal, bouton « Forcer un cycle
+maintenant » (l'outil `evolution_force_cycle` est `dangerous`, donc soumis à
+approbation hors panneau).
+
 ## Routeur multi-LLM
 
 `llm_router.enabled = true` fait construire `core/llm_router.py` par la

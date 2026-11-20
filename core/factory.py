@@ -31,6 +31,8 @@ from core.approval import build_approval_gate, decision_from_confirm
 from core.budget import build_budget_recorder
 from core.metrics import build_metrics
 from core.profile import apply_profile, build_network_guard, resolve_profile
+from core.self_evolver import SelfEvolver, build_evolution_tools, evolution_core_path
+from core.skill_loader import SkillLoader
 from core.tool_registry import ConfirmHandler, ToolRegistry
 from tools.base import Tool
 from tools.browser_agent import BrowserAgent, build_browser_tools
@@ -63,6 +65,8 @@ class AgentBundle:
     ocr: Ocr | None = None
     shell: ShellRunner | None = None
     brain: Any = None
+    evolver: Any = None
+    skills: Any = None
     router: Any = None
     owns_llm: bool = False
     metrics: Any = None
@@ -80,6 +84,11 @@ class AgentBundle:
         if self._closed:
             return
         self._closed = True
+        if self.evolver is not None:
+            try:
+                self.evolver.stop()
+            except Exception:  # noqa: BLE001 - l'arrêt ne bloque pas la fermeture
+                logger.debug("arrêt de l'auto-évolution impossible", exc_info=True)
         if self._unsubscribe_file_tx is not None:
             try:
                 self._unsubscribe_file_tx()
@@ -185,6 +194,25 @@ def build_agent(
     if brain is not None:
         tools.extend(build_obsidian_tools(brain))
 
+    # Cortex évolutif : les compétences forgées ne deviennent jamais des outils
+    # arbitraires ; trois outils fixes et classés les exposent. Le moteur créé
+    # ici est raccordé à l'agent juste après sa construction.
+    evolver: SelfEvolver | None = None
+    skills: SkillLoader | None = None
+    if settings.evolution.enabled:
+        try:
+            skills = SkillLoader(
+                evolution_core_path(settings) / "skills",
+                max_chars=int(settings.evolution.max_skill_chars),
+            )
+            skills.load_all()
+            evolver = SelfEvolver(settings, skills)
+            tools.extend(build_evolution_tools(evolver))
+        except (OSError, ValueError):
+            logger.warning("cortex évolutif indisponible", exc_info=True)
+            evolver = None
+            skills = None
+
     searcher: WebSearcher | None = None
     if with_web:
         searcher = WebSearcher(settings)
@@ -235,6 +263,12 @@ def build_agent(
     router = LLMRouter(settings, vault) if settings.llm_router.enabled else None
     client = llm or router or LLMClient(settings.llm)
     agent = AgentCore(settings, client, registry, bus=bus)
+    if evolver is not None:
+        evolver.attach(agent, registry, brain)
+        if router is not None:
+            evolver.attach_router(router)
+        agent.dynamic_prompt = evolver.prompt_overlay
+
     logger.debug(
         "agent construit : %s outils (%s)",
         len(registry),
@@ -274,6 +308,8 @@ def build_agent(
         ocr=ocr,
         shell=shell,
         brain=brain,
+        evolver=evolver,
+        skills=skills,
         router=router,
         owns_llm=owns_llm,
     )

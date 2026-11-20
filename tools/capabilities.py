@@ -148,6 +148,10 @@ CAPABILITIES: Mapping[str, ToolCapabilities] = MappingProxyType(
         "obsidian_remember": _write(),
         "obsidian_search": _read(replay=True),
         "obsidian_status": _read(replay=True),
+        # -- cortex évolutif
+        "evolution_status": _read(scope="files", replay=True),
+        "evolution_force_cycle": _write(scope="files", dangerous=True),
+        "evolution_run_skill": _write(scope="files", dangerous=True),
         # -- coffre-fort
         "vault_status": _read(scope="vault", replay=True),
         "vault_services": _read(scope="vault", replay=True),

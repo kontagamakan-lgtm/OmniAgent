@@ -107,11 +107,23 @@ def _parse_at(value: Any) -> datetime | None:
     return stamp if stamp.tzinfo else stamp.replace(tzinfo=timezone.utc)
 
 
-def _read(settings: Settings) -> list[dict[str, Any]]:
+def _read(settings: Settings, *, strict: bool = False) -> list[dict[str, Any]]:
+    """Lit le registre ; un fichier absent vaut zéro, un fichier illisible non.
+
+    En mode strict, une erreur d'accès est propagée pour que les appelants qui
+    décident d'une dépense refusent plutôt que de repartir de zéro. Le mode
+    tolérant ne sert qu'aux estimations, où l'historique est une marge
+    indicative : le contrôle autoritaire reste `check()`/`reserve_run()`.
+    """
     path = ledger_path(settings)
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
+    except FileNotFoundError:
+        return []
+    except (OSError, UnicodeError):
+        if strict:
+            raise
+        logger.warning("budget : registre illisible, historique ignore", exc_info=True)
         return []
     entries: list[dict[str, Any]] = []
     for line in lines:
@@ -176,7 +188,7 @@ def _append(settings: Settings, record: dict[str, Any]) -> bool:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with file_lock(path.with_suffix(".lock")):
-            entries = _read(settings)
+            entries = _read(settings, strict=True)
             # Le même run peut déjà avoir été enregistré par le bus : ne pas
             # compter deux fois son coût.
             if run_id and any(
@@ -195,7 +207,7 @@ def _append(settings: Settings, record: dict[str, Any]) -> bool:
                 ]
             entries.append(record)
             _write(settings, entries)
-    except (OSError, LockTimeout):
+    except (OSError, UnicodeError, LockTimeout):
         logger.warning("budget non enregistre", exc_info=True)
         return False
     return True
@@ -375,9 +387,20 @@ def check(
     courant peut être exclue pour ne pas compter deux fois son estimation.
     """
     moment = now or datetime.now(tz=timezone.utc)
+    cfg = getattr(settings, "budget", None)
+    strict = cfg is not None and getattr(cfg, "enabled", True)
+    try:
+        entries = _read(settings, strict=strict)
+    except (OSError, UnicodeError) as exc:
+        logger.warning("budget global illisible", exc_info=True)
+        return BudgetState(
+            allowed=False,
+            reason=f"budget indisponible : registre illisible ({type(exc).__name__})",
+            limits=_limits(settings),
+        )
     return _evaluate(
         settings,
-        _read(settings),
+        entries,
         moment,
         pending_cost=pending_cost,
         pending_tokens=pending_tokens,
@@ -453,7 +476,7 @@ def reserve_run(
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with file_lock(path.with_suffix(".lock")):
-            entries = _read(settings)
+            entries = _read(settings, strict=True)
             entries, changed = _prune(entries, moment)
             state = _evaluate(
                 settings,
@@ -468,7 +491,7 @@ def reserve_run(
                 return False, state.reason, ""
             entries.append(record)
             _write(settings, entries)
-    except (OSError, LockTimeout):
+    except (OSError, UnicodeError, LockTimeout):
         logger.warning("budget : reservation impossible", exc_info=True)
         return False, "budget indisponible : registre verrouille", ""
     return True, "", identifier
@@ -485,7 +508,7 @@ def release_run(
     moment = now or datetime.now(tz=timezone.utc)
     try:
         with file_lock(path.with_suffix(".lock")):
-            entries = _read(settings)
+            entries = _read(settings, strict=True)
             before = len(entries)
             kept = [
                 entry
@@ -498,7 +521,7 @@ def release_run(
             kept, _changed = _prune(kept, moment)
             if len(kept) != before:
                 _write(settings, kept)
-    except (OSError, LockTimeout):
+    except (OSError, UnicodeError, LockTimeout):
         logger.warning("budget : liberation impossible", exc_info=True)
         return False
     return True

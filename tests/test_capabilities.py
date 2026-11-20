@@ -13,6 +13,8 @@ from support import make_settings, tmpdir  # noqa: E402
 
 import core.factory as factory  # noqa: E402
 from core.resume import READ_ONLY_TOOLS  # noqa: E402
+from core.self_evolver import SelfEvolver, build_evolution_tools  # noqa: E402
+from core.skill_loader import SkillLoader  # noqa: E402
 from tools.base import FunctionTool  # noqa: E402
 from tools.browser_agent import BrowserAgent, build_browser_tools  # noqa: E402
 from tools.capabilities import (  # noqa: E402
@@ -37,6 +39,16 @@ from tools.web_search import WebSearcher, build_web_tools  # noqa: E402
 _SCHEMA = {"type": "object", "properties": {}}
 
 
+def _evolution_tools(tmp: Path, settings) -> list:
+    """Outils fixes du cortex évolutif, sans lancer de cycle."""
+    core = tmp / "evolution_core"
+    loader = SkillLoader(core / "skills")
+    evolver = SelfEvolver(
+        settings, loader, core_dir=core, data_dir=tmp / "evolution"
+    )
+    return build_evolution_tools(evolver)
+
+
 def _all_family_tools(tmp: Path) -> list:
     """Toutes les familles réelles, y compris navigateur et OCR."""
     settings = make_settings(tmp)
@@ -53,6 +65,7 @@ def _all_family_tools(tmp: Path) -> list:
         *build_shell_tools(ShellRunner(settings, files)),
         *build_web_tools(WebSearcher(settings)),
         *build_browser_tools(browser),
+        *_evolution_tools(tmp, settings),
     ]
     index.close()
     return tools
@@ -68,7 +81,7 @@ def test_every_built_tool_is_classified_and_matches_the_contract() -> None:
     # Aucune entrée orpheline : un outil renommé ne doit pas rester classé
     # sous son ancien nom pendant que le nouveau passe inaperçu.
     assert names == set(CAPABILITIES)
-    assert len(names) == 56
+    assert len(names) == 59
 
 
 def test_an_unclassified_tool_is_refused() -> None:
@@ -126,7 +139,13 @@ def test_startup_refuses_an_unclassified_tool(monkeypatch) -> None:
 def test_dangerous_and_secret_families_are_the_expected_ones() -> None:
     dangerous = {name for name, caps in CAPABILITIES.items() if caps.dangerous}
     sensitive = {name for name, caps in CAPABILITIES.items() if caps.sensitive}
-    assert dangerous == {"fs_delete", "vault_delete_entry", "shell_run"}
+    assert dangerous == {
+        "fs_delete",
+        "vault_delete_entry",
+        "shell_run",
+        "evolution_force_cycle",
+        "evolution_run_skill",
+    }
     assert sensitive == {
         "vault_create_credential",
         "vault_add_entry",
@@ -156,7 +175,13 @@ def test_replay_whitelist_is_derived_and_has_no_stale_name() -> None:
         assert not CAPABILITIES[name].sensitive, name
     # Un outil d'écriture ne peut pas être rejoué, même s'il se dit sans danger.
     assert not replayable_tools() & {n for n, c in CAPABILITIES.items() if c.writes}
-    assert dangerous_tools() == {"fs_delete", "vault_delete_entry", "shell_run"}
+    assert dangerous_tools() == {
+        "fs_delete",
+        "vault_delete_entry",
+        "shell_run",
+        "evolution_force_cycle",
+        "evolution_run_skill",
+    }
 
 
 def test_scopes_and_network_are_declared_for_every_tool() -> None:
