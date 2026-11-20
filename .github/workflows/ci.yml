@@ -256,14 +256,18 @@ jobs:
           PYTHONUTF8: "1"
         run: python build_smoke\record_build.py || exit /b 1
 
+      # Seuls les exécutables sont publiés : les trois dossiers complets pèsent
+      # ~250 Mio par construction, et deux constructions par jour saturent le
+      # quota d'artefacts du dépôt (500 Mio), ce qui faisait échouer aussi les
+      # captures d'écran du job `ui-tk`. Rétention courte : un paquet de CI sert
+      # à inspecter la construction du jour, pas à archiver les versions.
       - name: Conserver les paquets
         uses: actions/upload-artifact@v4
         with:
           name: omniagent-windows
           path: |
-            dist/OmniAgent/
-            dist/OmniAgent-lite/
-            dist/OmniAgent-slim/
+            dist/OmniAgent/OmniAgent.exe
+            dist/OmniAgent-lite/OmniAgent.exe
+            dist/OmniAgent-slim/OmniAgent.exe
             dist/SHA256SUMS.txt
-            dist/BUILD-INFO.txt
-          retention-days: 7
+          retention-days: 1
