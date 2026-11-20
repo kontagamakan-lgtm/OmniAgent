@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import io
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,7 +17,14 @@ from core.events import Event  # noqa: E402
 from core.factory import build_agent  # noqa: E402
 from core.tool_registry import ToolRegistry  # noqa: E402
 from tools.base import FunctionTool, ToolResult  # noqa: E402
-from tools.obsidian import ObsidianBrain, ensure_obsidian, install_obsidian  # noqa: E402
+from tools.obsidian import (  # noqa: E402
+    ObsidianBrain,
+    build_obsidian_tools,
+    download_obsidian_installer,
+    ensure_obsidian,
+    install_obsidian,
+    resolve_obsidian_installer,
+)
 
 
 class _FakeLLM:
@@ -61,6 +70,130 @@ def test_vault_creates_index_and_interconnected_notes() -> None:
         hits = brain.search("budget")
         assert hits and hits[0]["title"] == "Projet Atlas"
         assert "42 EUR" in hits[0]["excerpt"]
+
+
+def test_remember_accepts_a_custom_subfolder_and_indexes_it() -> None:
+    with tmpdir("obsidian-custom-folder") as tmp:
+        settings = _enabled(make_settings(tmp))
+        brain = ObsidianBrain(settings)
+        note = brain.remember(
+            "Atlas fournisseur",
+            "Le fournisseur Atlas livre le 12.",
+            folder="02_Knowledge/Projets/Atlas",
+        )
+        custom = brain.root / "02_Knowledge" / "Projets" / "Atlas"
+        assert custom.is_dir()
+        assert Path(note["path"]).resolve() == (custom / "atlas-fournisseur.md").resolve()
+        assert note["folder"] == "02_Knowledge/Projets/Atlas"
+        assert "Le fournisseur Atlas livre le 12." in Path(note["path"]).read_text(
+            encoding="utf-8"
+        )
+
+        index = (brain.root / "00_CORTEX_INDEX.md").read_text(encoding="utf-8")
+        assert "[[Atlas fournisseur]]" in index
+        assert "`02_Knowledge/Projets/Atlas/`" in index
+        assert "`02_Knowledge/Projets/Atlas/atlas-fournisseur.md`" in index
+        assert "02_Knowledge/Projets/Atlas" in brain.status()["folders"]
+        assert brain.search("livre le 12")
+
+        backslash = brain.remember(
+            "Atlas plan",
+            "Plan Atlas 2027.",
+            folder="02_Knowledge\\Projets\\Atlas",
+        )
+        assert backslash["folder"] == "02_Knowledge/Projets/Atlas"
+        assert (custom / "atlas-plan.md").is_file()
+
+        tools = {tool.name: tool for tool in build_obsidian_tools(brain)}
+        folder_spec = tools["obsidian_remember"].parameters["properties"]["folder"]
+        assert "enum" not in folder_spec
+
+
+def test_remember_rejects_folder_traversal_and_invalid_paths() -> None:
+    with tmpdir("obsidian-traversal") as tmp:
+        settings = _enabled(make_settings(tmp))
+        brain = ObsidianBrain(settings)
+        invalid = [
+            "..",
+            "../escape",
+            "02_Knowledge/../../escape",
+            "02_Knowledge/./Atlas",
+            "/etc",
+            "C:\\Windows",
+            "\\\\server\\share",
+            ".obsidian",
+            "02_Knowledge/con",
+            "02_Knowledge/at:las",
+            "02_Knowledge/con.md",
+            "02_Knowledge/At las/con",
+            "02_Knowledge/A/B/C/D/E",
+            "00_CORTEX_INDEX",
+        ]
+        for folder in invalid:
+            try:
+                brain.remember("Escape", "contenu", folder=folder)
+            except ValueError:
+                continue
+            raise AssertionError(f"dossier accepté à tort : {folder!r}")
+        assert not (brain.root.parent / "escape").exists()
+        assert not (brain.root / ".obsidian").exists()
+        assert not (brain.root / "00_CORTEX_INDEX").exists()
+
+
+def test_hidden_obsidian_folders_are_neither_indexed_nor_searched() -> None:
+    with tmpdir("obsidian-hidden") as tmp:
+        settings = _enabled(make_settings(tmp))
+        brain = ObsidianBrain(settings)
+        trash = brain.root / ".trash"
+        trash.mkdir()
+        (trash / "supprimee.md").write_text("SECRETANCIEN budget", encoding="utf-8")
+        plugin = brain.root / ".obsidian" / "plugins" / "demo"
+        plugin.mkdir(parents=True)
+        (plugin / "lisezmoi.md").write_text("PLUGIN budget", encoding="utf-8")
+        brain.remember("Note visible", "budget visible")
+
+        index = (brain.root / "00_CORTEX_INDEX.md").read_text(encoding="utf-8")
+        assert "supprimee" not in index and "lisezmoi" not in index
+        assert ".trash" not in index and ".obsidian" not in index
+        assert ".trash" not in brain.status()["folders"]
+        assert brain.search("SECRETANCIEN") == []
+        assert all(
+            ".trash" not in hit["relative"] for hit in brain.search("budget")
+        )
+
+
+def test_titles_and_sources_are_redacted_before_writing() -> None:
+    with tmpdir("obsidian-redaction") as tmp:
+        settings = _enabled(make_settings(tmp))
+        brain = ObsidianBrain(settings)
+        key = "sk-" + "A1b2C3d4E5f6G7h8I9j0"
+        note = brain.remember(
+            f"Clé {key}",
+            f"Utilise {key} pour l'API.",
+            source="https://api.example.com/v1?token=supersecretvalue&x=1",
+        )
+        text = Path(note["path"]).read_text(encoding="utf-8")
+        assert key not in text
+        assert "supersecretvalue" not in text
+        assert "[MASQUÉ" in text
+
+        injected = brain.remember(
+            "Note source", "contenu", source="https://x/\ntags: [pwn]"
+        )
+        frontmatter = Path(injected["path"]).read_text(encoding="utf-8").split("---")[1]
+        assert 'source: "https://x/ tags: [pwn]"' in frontmatter
+        assert "\ntags: [pwn]\n" not in frontmatter
+
+
+def test_vault_root_cannot_be_a_drive_root() -> None:
+    with tmpdir("obsidian-root") as tmp:
+        settings = _enabled(make_settings(tmp))
+        try:
+            ObsidianBrain(settings, path=Path(Path.cwd().anchor), create=False)
+        except ValueError as exc:
+            assert "racine" in str(exc)
+        else:
+            raise AssertionError("une racine de disque a été acceptée comme vault")
 
 
 def test_tool_results_become_notes_but_sensitive_results_are_ignored() -> None:
@@ -173,6 +306,166 @@ def test_install_uses_winget_and_rechecks_the_executable(monkeypatch) -> None:
         assert ok and "installé" in detail
         assert calls and calls[0][:3] == [r"C:\winget.exe", "install", "--id"]
         assert "Obsidian.Obsidian" in calls[0]
+
+
+class _FakeResponse:
+    def __init__(self, payload: bytes) -> None:
+        self._stream = io.BytesIO(payload)
+
+    def read(self, size: int = -1) -> bytes:
+        return self._stream.read(size)
+
+    def __enter__(self) -> "_FakeResponse":
+        return self
+
+    def __exit__(self, *exc: object) -> bool:
+        return False
+
+
+def _opener(routes: dict[str, bytes]):
+    def _open(request, *, timeout=60):
+        for fragment, payload in routes.items():
+            if fragment in request.full_url:
+                return _FakeResponse(payload)
+        raise OSError(f"URL inattendue : {request.full_url}")
+
+    return _open
+
+
+def _release_payload() -> bytes:
+    return json.dumps(
+        {
+            "tag_name": "v1.15.1",
+            "assets": [
+                {
+                    "name": "Obsidian-1.15.1.exe",
+                    "browser_download_url": "https://github.com/obsidianmd/obsidian-releases/download/v1.15.1/Obsidian-1.15.1.exe",
+                },
+                {
+                    "name": "Obsidian-1.15.1.exe.blockmap",
+                    "browser_download_url": "https://example.com/Obsidian-1.15.1.exe.blockmap",
+                },
+            ],
+        }
+    ).encode("utf-8")
+
+
+def test_official_installer_is_resolved_and_downloaded(monkeypatch) -> None:
+    monkeypatch.delenv("OBSIDIAN_INSTALLER_URL", raising=False)
+    with tmpdir("obsidian-download") as tmp:
+        settings = _enabled(make_settings(tmp))
+        opener = _opener(
+            {
+                "api.github.com": _release_payload(),
+                "Obsidian-1.15.1.exe": b"MZ" + b"0" * 2048,
+            }
+        )
+        url, version = resolve_obsidian_installer(opener=opener)
+        assert url.endswith("Obsidian-1.15.1.exe")
+        assert version == "1.15.1"
+        path = download_obsidian_installer(settings, opener=opener)
+        try:
+            assert path.is_file() and path.name == "Obsidian-1.15.1.exe"
+            assert path.read_bytes().startswith(b"MZ")
+        finally:
+            obsidian._cleanup_installer(path)
+
+
+def test_installer_download_rejects_an_inexecutable_payload(monkeypatch) -> None:
+    monkeypatch.delenv("OBSIDIAN_INSTALLER_URL", raising=False)
+    with tmpdir("obsidian-download-bad") as tmp:
+        settings = _enabled(make_settings(tmp))
+        opener = _opener(
+            {"api.github.com": _release_payload(), "Obsidian-1.15.1.exe": b"<html>"}
+        )
+        try:
+            download_obsidian_installer(settings, opener=opener)
+        except RuntimeError as exc:
+            assert "exécutable" in str(exc)
+        else:
+            raise AssertionError("un fichier non exécutable a été accepté")
+
+
+def test_install_falls_back_to_the_official_installer_without_winget(monkeypatch) -> None:
+    with tmpdir("obsidian-fallback") as tmp:
+        settings = _enabled(make_settings(tmp))
+        installed = [False]
+        monkeypatch.setattr(obsidian, "find_obsidian", lambda: Path(r"C:\Obsidian\Obsidian.exe") if installed[0] else None)
+        monkeypatch.setattr(obsidian.shutil, "which", lambda name: None)
+        installer = Path(tmp) / "Obsidian-1.15.1.exe"
+        installer.write_bytes(b"MZ" + b"0" * 64)
+        calls: list[list[str]] = []
+
+        def runner(command, **kwargs):
+            calls.append(command)
+            installed[0] = True
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        ok, detail = install_obsidian(
+            settings, runner=runner, downloader=lambda _settings: installer
+        )
+        assert ok and "installateur officiel" in detail
+        assert calls == [[str(installer), "/S", "/currentuser"]]
+
+
+def test_install_falls_back_when_winget_fails(monkeypatch) -> None:
+    with tmpdir("obsidian-fallback-winget") as tmp:
+        settings = _enabled(make_settings(tmp))
+        installed = [False]
+        monkeypatch.setattr(obsidian, "find_obsidian", lambda: Path(r"C:\Obsidian\Obsidian.exe") if installed[0] else None)
+        monkeypatch.setattr(obsidian.shutil, "which", lambda name: r"C:\winget.exe")
+        installer = Path(tmp) / "Obsidian-1.15.1.exe"
+        installer.write_bytes(b"MZ" + b"0" * 64)
+        calls: list[list[str]] = []
+
+        def runner(command, **kwargs):
+            calls.append(command)
+            if command[0].endswith("winget.exe"):
+                return SimpleNamespace(returncode=1, stdout="", stderr="échec winget")
+            installed[0] = True
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        ok, detail = install_obsidian(
+            settings, runner=runner, downloader=lambda _settings: installer
+        )
+        assert ok and "installateur officiel" in detail
+        assert calls[0][:3] == [r"C:\winget.exe", "install", "--id"]
+        assert calls[1] == [str(installer), "/S", "/currentuser"]
+
+
+def test_install_reports_both_winget_and_download_failures(monkeypatch) -> None:
+    with tmpdir("obsidian-fallback-fail") as tmp:
+        settings = _enabled(make_settings(tmp))
+        monkeypatch.setattr(obsidian, "find_obsidian", lambda: None)
+        monkeypatch.setattr(obsidian.shutil, "which", lambda name: None)
+
+        def downloader(_settings):
+            raise RuntimeError("réseau indisponible")
+
+        ok, detail = install_obsidian(settings, downloader=downloader)
+        assert not ok
+        assert "winget absent" in detail
+        assert "téléchargement" in detail and "réseau indisponible" in detail
+        assert obsidian.OBSIDIAN_DOWNLOAD_URL in detail
+
+
+def test_install_requires_the_executable_after_running_the_installer(monkeypatch) -> None:
+    with tmpdir("obsidian-fallback-noverify") as tmp:
+        settings = _enabled(make_settings(tmp))
+        monkeypatch.setattr(obsidian, "find_obsidian", lambda: None)
+        monkeypatch.setattr(obsidian.shutil, "which", lambda name: None)
+        installer = Path(tmp) / "Obsidian-1.15.1.exe"
+        installer.write_bytes(b"MZ" + b"0" * 64)
+
+        ok, detail = install_obsidian(
+            settings,
+            runner=lambda command, **kwargs: SimpleNamespace(
+                returncode=0, stdout="", stderr=""
+            ),
+            downloader=lambda _settings: installer,
+        )
+        assert not ok
+        assert "n'a pas confirmé l'installation" in detail
 
 
 def test_install_is_not_attempted_when_auto_install_is_off(monkeypatch) -> None:

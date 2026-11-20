@@ -127,9 +127,14 @@ Prérequis externes :
 
 Au premier lancement graphique, OmniAgent vérifie la présence d'Obsidian et
 lance si nécessaire `winget install --id Obsidian.Obsidian --exact --silent`.
-Si winget est absent ou refuse, l'agent continue : le vault Markdown reste
+Si winget est absent ou échoue, l'agent télécharge l'installateur officiel de
+la dernière version (`Obsidian-<version>.exe`, release GitHub
+`obsidianmd/obsidian-releases`), vérifie que le fichier est bien un exécutable
+Windows, le lance en silencieux (`/S /currentuser`) puis confirme l'installation
+en retrouvant `Obsidian.exe`. En cas d'échec, le vault Markdown reste
 utilisable, et `python app.py --install-obsidian` permet de relancer le
-bootstrap explicitement. Le vault est créé sous
+bootstrap explicitement. `OBSIDIAN_INSTALLER_URL` impose une URL https
+d'installateur à la place de l'API GitHub. Le vault est créé sous
 `data/Obsidian/OmniAgent_Brain/` (ou `obsidian.vault_dir`).
 
 Le vault est la mémoire longue durée :
@@ -139,13 +144,17 @@ Le vault est la mémoire longue durée :
   notes dans `01_Sources/` ;
 - les faits, préférences et connaissances durables sont écrits par l'outil
   `obsidian_remember` dans `02_Knowledge/`, avec des `[[Wikilinks]]` et des
-  `#tags` ;
+  `#tags` ; `folder` accepte un sous-dossier relatif personnalisé
+  (`02_Knowledge/Projets/Atlas`), créé au besoin et refusé s'il sort du vault
+  (chemin absolu, `..`, dossier masqué ou nom réservé) ;
 - une note de journal est ajoutée dans `04_Journal/` à la fin d'un run.
 
 L'agent reçoit l'instruction de chercher dans `obsidian_search` avant de
 redécouvrir un fait, et de mémoriser ce qu'il apprend. Les résultats sensibles
-(coffre, cookies) ne sont jamais transformés en notes ; les écritures sont
-passées par le `Redactor`.
+(coffre, cookies) ne sont jamais transformés en notes ; titre, corps et source
+sont passés par le `Redactor` avant écriture. Les dossiers cachés du vault
+(`.obsidian`, `.trash`) ne sont ni indexés ni cherchés, et le vault ne peut pas
+être une racine de disque.
 
 ```bat
 python app.py --install-obsidian      :: bootstrap winget explicite

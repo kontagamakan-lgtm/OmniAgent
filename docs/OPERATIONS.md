@@ -273,18 +273,32 @@ python -m core.memory --forget   :: supprime expirées et sources disparues
 Le vault `data/Obsidian/OmniAgent_Brain/` est la mémoire longue durée
 Markdown. `00_CORTEX_INDEX.md` est régénéré après chaque note ; les outils
 `obsidian_remember`, `obsidian_search` et `obsidian_status` permettent à
-l'agent de l'enrichir et de le consulter. Les lectures web, fichiers, OCR et
+l'agent de l'enrichir et de le consulter. `obsidian_remember` accepte un
+sous-dossier relatif personnalisé (`02_Knowledge/Projets/Atlas`) : il est créé
+au besoin, apparaît dans `00_CORTEX_INDEX.md` et dans `obsidian_status`. Les
+chemins absolus, les traversées `..`, les dossiers masqués, les noms réservés
+Windows et les caractères interdits sont refusés, et le dossier résolu doit
+rester dans le vault. Les lectures web, fichiers, OCR et
 recherches documentaires sont transformées automatiquement en notes dans
 `01_Sources/` ; une note de journal est ajoutée à la fin de chaque run.
 
 Au premier lancement graphique, `obsidian.auto_install` lance si nécessaire
 `winget install --id Obsidian.Obsidian --exact --silent`. Si winget est absent
-ou échoue, le vault reste utilisable et l'application continue ;
-`python app.py --install-obsidian` relance explicitement le bootstrap. Le
-`--check` affiche le vault et la présence de l'application sans installer.
+ou échoue, l'installateur officiel de la dernière version est téléchargé depuis
+la release GitHub `obsidianmd/obsidian-releases` (asset `Obsidian-<version>.exe`),
+contrôlé (en-tête `MZ`, taille bornée à 512 Mio, lecture https uniquement),
+exécuté avec `/S /currentuser`, puis l'installation n'est déclarée réussie que
+si `Obsidian.exe` est retrouvé. `OBSIDIAN_INSTALLER_URL` remplace l'API GitHub
+par une URL https directe, notamment derrière un proxy. Si tout échoue, le
+vault reste utilisable et l'application continue ; `python app.py
+--install-obsidian` relance explicitement le bootstrap. Le `--check` affiche le
+vault et la présence de l'application sans installer.
 
-Les résultats sensibles (coffre, cookies) ne sont jamais mémorisés ; les
-contenus sont passés par le `Redactor`. Les fichiers du vault sont des données
+Les résultats sensibles (coffre, cookies) ne sont jamais mémorisés ; titre,
+corps et source sont masqués par le `Redactor` avant écriture (source ramenée
+sur une ligne pour ne pas injecter de frontmatter). Les dossiers cachés
+(`.obsidian`, `.trash`) sont ignorés par l'index et la recherche, et une racine
+de disque est refusée comme vault. Les fichiers du vault sont des données
 utilisateur : ne les versionnez pas et ne les incluez pas dans un paquet.
 
 ## Isolation par run

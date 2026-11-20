@@ -9,19 +9,28 @@ L'installation d'Obsidian est séparée de l'écriture du vault. Le vault reste
 utilisable même si l'application Obsidian n'est pas installée ; le bootstrap
 `ensure_obsidian()` ne fait l'installation que sur demande explicite ou au
 premier lancement graphique avec `obsidian.auto_install`.
+
+Confidentialité : tout ce qui est écrit (titre, corps, source) passe par le
+redactor, les résultats d'outils marqués sensibles ne sont jamais mémorisés et
+les dossiers cachés d'Obsidian (`.obsidian`, `.trash`) ne sont ni indexés ni
+cherchés.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
 import shutil
 import subprocess
+import tempfile
 import threading
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
+from urllib.parse import urlparse
 
 from config import APP_ID, Settings
 from security.redaction import redact
@@ -32,10 +41,14 @@ __all__ = [
     "INDEX_NAME",
     "ObsidianBrain",
     "OBSIDIAN_DOWNLOAD_URL",
+    "OBSIDIAN_INSTALLER_ENV",
+    "OBSIDIAN_RELEASES_API",
     "build_obsidian_tools",
+    "download_obsidian_installer",
     "ensure_obsidian",
     "find_obsidian",
     "install_obsidian",
+    "resolve_obsidian_installer",
     "vault_path",
 ]
 
@@ -44,6 +57,13 @@ logger = logging.getLogger(f"{APP_ID}.obsidian")
 INDEX_NAME = "00_CORTEX_INDEX.md"
 OBSIDIAN_WINGET_ID = "Obsidian.Obsidian"
 OBSIDIAN_DOWNLOAD_URL = "https://obsidian.md/download"
+OBSIDIAN_RELEASES_API = (
+    "https://api.github.com/repos/obsidianmd/obsidian-releases/releases/latest"
+)
+#: Variable qui court-circuite l'API pour fournir une URL d'installateur.
+OBSIDIAN_INSTALLER_ENV = "OBSIDIAN_INSTALLER_URL"
+MAX_INSTALLER_BYTES = 512 * 1024 * 1024
+_MIN_INSTALLER_BYTES = 1024
 FOLDERS = (
     "00_CORTEX",
     "01_Sources",
@@ -70,6 +90,16 @@ AUTO_MEMORY_TOOLS = frozenset(
 )
 _SAFE_TITLE = re.compile(r"[^A-Za-z0-9À-ÖØ-öø-ÿ ._-]+")
 _SAFE_TAG = re.compile(r"[^A-Za-z0-9_.-]+")
+_INVALID_FOLDER_CHARS = re.compile(r'[<>:"|?*\x00-\x1f]')
+#: Profondeur maximale d'un sous-dossier personnalisé (ex. `02_Knowledge/A/B`).
+MAX_FOLDER_DEPTH = 4
+#: Nombre de dossiers listés dans l'index et `obsidian_status`.
+_MAX_INDEX_FOLDERS = 200
+_WINDOWS_RESERVED = frozenset(
+    {"con", "prn", "aux", "nul"}
+    | {f"com{index}" for index in range(1, 10)}
+    | {f"lpt{index}" for index in range(1, 10)}
+)
 
 
 def vault_path(settings: Settings) -> Path:
@@ -94,6 +124,50 @@ def _safe_title(value: str, *, fallback: str = "Note") -> str:
     if not title or title in {".", ".."}:
         title = fallback
     return title[:100]
+
+
+def _folder_parts(folder: str) -> tuple[str, ...]:
+    """Valide un dossier relatif du vault et refuse toute traversée.
+
+    Accepte les sous-dossiers personnalisés (`02_Knowledge/Projets/Atlas`),
+    avec `/` ou `\\` comme séparateur, et retourne les segments normalisés.
+    Refuse les chemins absolus, les lecteurs Windows, `..`, les dossiers
+    masqués, les noms réservés et les caractères interdits.
+    """
+    text = str(folder or "").strip()
+    if not text:
+        return ("02_Knowledge",)
+    normalized = text.replace("\\", "/")
+    if normalized.startswith("/") or re.match(r"^[A-Za-z]:", normalized):
+        raise ValueError(f"dossier Obsidian invalide (chemin absolu) : {text}")
+    parts = normalized.split("/")
+    while parts and not parts[0].strip():
+        parts.pop(0)
+    while parts and not parts[-1].strip():
+        parts.pop()
+    if not parts:
+        return ("02_Knowledge",)
+    clean: list[str] = []
+    for part in parts:
+        name = part.strip()
+        if not name or name in {".", ".."}:
+            raise ValueError(f"dossier Obsidian invalide (traversée) : {text}")
+        if name != part or name.endswith("."):
+            raise ValueError(f"dossier Obsidian invalide (espace ou point final) : {text}")
+        if _INVALID_FOLDER_CHARS.search(name):
+            raise ValueError(f"dossier Obsidian invalide (caractère interdit) : {text}")
+        if name.startswith("."):
+            raise ValueError(f"dossier Obsidian invalide (dossier masqué) : {text}")
+        if name.split(".")[0].casefold() in _WINDOWS_RESERVED:
+            raise ValueError(f"dossier Obsidian invalide (nom réservé) : {text}")
+        if name.casefold() == INDEX_NAME[:-3].casefold():
+            raise ValueError("le dossier 00_CORTEX_INDEX est réservé")
+        if len(name) > 64:
+            raise ValueError(f"dossier Obsidian invalide (nom trop long) : {text}")
+        clean.append(name)
+    if len(clean) > MAX_FOLDER_DEPTH:
+        raise ValueError(f"dossier Obsidian trop profond (max {MAX_FOLDER_DEPTH}) : {text}")
+    return tuple(clean)
 
 
 def _slug(value: str) -> str:
@@ -148,7 +222,9 @@ class ObsidianBrain:
         create: bool = True,
     ) -> None:
         self.settings = settings
-        self.root = Path(path).absolute() if path else vault_path(settings)
+        self.root = (Path(path) if path else vault_path(settings)).resolve()
+        if self.root.parent == self.root:
+            raise ValueError("le vault Obsidian ne peut pas être une racine de disque")
         self._lock = threading.RLock()
         self._tasks: dict[str, str] = {}
         if create:
@@ -157,21 +233,12 @@ class ObsidianBrain:
     # -- structure ----------------------------------------------------------
 
     def ensure(self) -> Path:
-        """Crée les dossiers du cerveau et la note maîtresse si nécessaire."""
+        """Crée les dossiers du cerveau et la note maîtresse."""
         with self._lock:
             self.root.mkdir(parents=True, exist_ok=True)
             for folder in FOLDERS:
                 (self.root / folder).mkdir(exist_ok=True)
-            index = self.root / INDEX_NAME
-            if not index.is_file():
-                self._write(
-                    index,
-                    "# 00_CORTEX_INDEX\n\n"
-                    "Mémoire longue durée d'OmniAgent. Ce fichier est régénéré "
-                    "après chaque note ; les liens ci-dessous ouvrent le cerveau.\n\n"
-                    "## Notes\n",
-                )
-            else:
+            if not (self.root / INDEX_NAME).is_file():
                 self._refresh_index()
         return self.root
 
@@ -181,16 +248,55 @@ class ObsidianBrain:
         temporary.write_text(text, encoding="utf-8")
         os.replace(temporary, path)
 
+    def _folder_dir(self, parts: Iterable[str]) -> Path:
+        """Crée le dossier demandé et vérifie qu'il reste dans le vault."""
+        root = self.root
+        target = root.joinpath(*parts)
+        try:
+            target.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise ValueError(f"dossier Obsidian impossible : {exc}") from exc
+        resolved = target.resolve()
+        if resolved != root and root not in resolved.parents:
+            raise ValueError("dossier Obsidian hors du vault")
+        if not resolved.is_dir():
+            raise ValueError("dossier Obsidian invalide")
+        return resolved
+
+    def _folder_listing(self) -> list[str]:
+        """Dossiers visibles du vault, dossiers personnalisés compris."""
+        found: list[str] = []
+        pending = [self.root]
+        while pending and len(found) < _MAX_INDEX_FOLDERS:
+            current = pending.pop(0)
+            try:
+                children = sorted(current.iterdir())
+            except OSError:
+                continue
+            for child in children:
+                if len(found) >= _MAX_INDEX_FOLDERS:
+                    break
+                try:
+                    if not child.is_dir() or child.name.startswith("."):
+                        continue
+                except OSError:
+                    continue
+                found.append(child.relative_to(self.root).as_posix())
+                pending.append(child)
+        return found
+
     def _note_files(self) -> list[Path]:
-        return sorted(
-            (
-                path
-                for path in self.root.rglob("*.md")
-                if path.is_file() and path.name != INDEX_NAME
-            ),
-            key=lambda path: path.stat().st_mtime,
-            reverse=True,
-        )
+        """Notes visibles du vault ; `.obsidian`, `.trash` et index exclus."""
+        notes: list[Path] = []
+        for path in self.root.rglob("*.md"):
+            if path.name == INDEX_NAME or not path.is_file():
+                continue
+            relative = path.relative_to(self.root)
+            if any(part.startswith(".") for part in relative.parts[:-1]):
+                continue
+            notes.append(path)
+        notes.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+        return notes
 
     def _title_of(self, path: Path) -> str:
         try:
@@ -217,7 +323,8 @@ class ObsidianBrain:
             title = self._title_of(path)
             relative = path.relative_to(self.root).as_posix()
             lines.append(f"- [[{title}]] — `{relative}`")
-        lines.extend(["", "## Dossiers", *[f"- `{folder}/`" for folder in FOLDERS], ""])
+        folders = self._folder_listing() or list(FOLDERS)
+        lines.extend(["", "## Dossiers", *[f"- `{folder}/`" for folder in folders], ""])
         self._write(self.root / INDEX_NAME, "\n".join(lines))
 
     # -- écriture -----------------------------------------------------------
@@ -233,21 +340,22 @@ class ObsidianBrain:
         source: str = "",
     ) -> dict[str, Any]:
         """Crée ou met à jour une note interconnectée et rafraîchit le cortex."""
-        clean_title = _safe_title(title)
+        clean_title = _safe_title(redact(str(title or "")))
         if clean_title == INDEX_NAME or clean_title.lower().startswith("00_cortex_index"):
             raise ValueError("le nom 00_CORTEX_INDEX est réservé")
-        selected = str(folder or "02_Knowledge").strip().strip("/")
-        if selected not in FOLDERS:
-            raise ValueError(f"dossier Obsidian inconnu : {selected}")
+        selected = _folder_parts(folder)
         body = str(content or "").strip()
         if not body:
             raise ValueError("contenu de note vide")
         max_chars = max(1000, int(self.settings.obsidian.max_note_chars))
         body = redact(body)[:max_chars]
+        # `source` finit dans le frontmatter : masquée, sur une seule ligne, bornée.
+        safe_source = " ".join(redact(str(source or "")).split())[:500]
         clean_tags = _tags(tags)
         clean_links = _links(links)
         with self._lock:
-            path = self.root / selected / f"{_slug(clean_title)}.md"
+            directory = self._folder_dir(selected)
+            path = directory / f"{_slug(clean_title)}.md"
             created = _now()
             if path.is_file():
                 try:
@@ -264,7 +372,7 @@ class ObsidianBrain:
                 f'title: "{clean_title.replace(chr(34), chr(39))}"\n'
                 f"created: {created}\n"
                 f"updated: {_now()}\n"
-                f"source: \"{str(source).replace(chr(34), chr(39))}\"\n"
+                f"source: \"{safe_source.replace(chr(34), chr(39))}\"\n"
                 f"tags: [{', '.join(clean_tags)}]\n"
                 "---\n\n"
                 f"# {clean_title}\n\n"
@@ -280,6 +388,7 @@ class ObsidianBrain:
                 "title": clean_title,
                 "path": str(path),
                 "relative": path.relative_to(self.root).as_posix(),
+                "folder": "/".join(selected),
                 "tags": clean_tags,
                 "links": clean_links,
             }
@@ -295,7 +404,8 @@ class ObsidianBrain:
             return None
         if not result.ok or result.sensitive or tool_name not in AUTO_MEMORY_TOOLS:
             return None
-        text = redact(result.to_text(max_chars=6000)).strip()
+        # `remember()` masque et borne ; une seule passe de rédaction suffit.
+        text = result.to_text(max_chars=6000).strip()
         if not text:
             return None
         source = _first_source(arguments, result)
@@ -394,7 +504,7 @@ class ObsidianBrain:
             "vault": str(self.root),
             "index": str(self.root / INDEX_NAME),
             "notes": len(self._note_files()),
-            "folders": list(FOLDERS),
+            "folders": self._folder_listing() or list(FOLDERS),
             "obsidian_installed": installed is not None,
             "obsidian_path": str(installed) if installed else "",
             "auto_memory": bool(self.settings.obsidian.auto_memory),
@@ -453,8 +563,9 @@ def build_obsidian_tools(brain: ObsidianBrain) -> list[Tool]:
                     ),
                     "folder": param(
                         "string",
-                        "Dossier du vault",
-                        enum=list(FOLDERS),
+                        "Dossier relatif du vault ; un sous-dossier personnalisé "
+                        "est accepté (par exemple 02_Knowledge/Projets/Atlas). "
+                        "Les chemins absolus et les traversées `..` sont refusés.",
                         default="02_Knowledge",
                     ),
                     "source": param("string", "Source ou URL d'origine", default=""),
@@ -509,7 +620,6 @@ def _candidate_paths() -> list[Path]:
             [
                 base / "Obsidian" / "Obsidian.exe",
                 base / "Programs" / "Obsidian" / "Obsidian.exe",
-                base / "Obsidian" / "Obsidian.exe",
             ]
         )
     which = shutil.which("Obsidian.exe") or shutil.which("obsidian")
@@ -536,28 +646,102 @@ def find_obsidian() -> Path | None:
     return None
 
 
-def install_obsidian(settings: Settings, *, runner: Any = None) -> tuple[bool, str]:
-    """Installe Obsidian via winget, sans interface, puis vérifie l'exécutable."""
-    found = find_obsidian()
-    if found is not None:
-        return True, f"Obsidian déjà installé : {found}"
-    winget = shutil.which("winget")
-    if not winget:
-        return (
-            False,
-            "winget absent : installez Obsidian depuis "
-            f"{OBSIDIAN_DOWNLOAD_URL}, ou ajoutez-le au PATH.",
-        )
-    command = [
-        winget,
-        "install",
-        "--id",
-        OBSIDIAN_WINGET_ID,
-        "--exact",
-        "--silent",
-        "--accept-package-agreements",
-        "--accept-source-agreements",
-    ]
+def _open(url: str, *, opener: Any = None, timeout: int = 60) -> Any:
+    """Ouvre une URL https avec un User-Agent identifiable."""
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": f"{APP_ID}-installer",
+            "Accept": "application/vnd.github+json, application/octet-stream",
+        },
+    )
+    return (opener or urllib.request.urlopen)(request, timeout=timeout)
+
+
+def resolve_obsidian_installer(*, opener: Any = None) -> tuple[str, str]:
+    """Résout l'installateur Windows officiel de la dernière version.
+
+    Retourne `(url, version)`. L'URL de l'asset `.exe` est prise dans la
+    dernière release GitHub `obsidianmd/obsidian-releases` ;
+    `OBSIDIAN_INSTALLER_URL` court-circuite l'API avec une URL https directe.
+    """
+    override = os.environ.get(OBSIDIAN_INSTALLER_ENV, "").strip()
+    if override:
+        if not override.lower().startswith("https://"):
+            raise ValueError(f"{OBSIDIAN_INSTALLER_ENV} doit être une URL https")
+        return override, "personnalisée"
+    try:
+        with _open(OBSIDIAN_RELEASES_API, opener=opener, timeout=30) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(
+            f"liste des versions indisponible : {type(exc).__name__}: {exc}"
+        ) from exc
+    assets = payload.get("assets") if isinstance(payload, dict) else None
+    if not isinstance(assets, list):
+        raise RuntimeError("réponse de version inattendue")
+    for asset in assets:
+        if not isinstance(asset, dict):
+            continue
+        name = str(asset.get("name") or "")
+        url = str(asset.get("browser_download_url") or "")
+        lowered = name.lower()
+        if lowered.startswith("obsidian") and lowered.endswith(".exe"):
+            if url.lower().startswith("https://"):
+                version = str(payload.get("tag_name") or name)[:32].lstrip("vV")
+                return url, version
+    raise RuntimeError("aucun installateur Windows dans la dernière version")
+
+
+def download_obsidian_installer(
+    settings: Settings,
+    *,
+    opener: Any = None,
+) -> Path:
+    """Télécharge l'installateur officiel et vérifie que c'est bien un `.exe`."""
+    url, version = resolve_obsidian_installer(opener=opener)
+    name = Path(urlparse(url).path).name
+    if not name.lower().endswith(".exe"):
+        name = "Obsidian-Setup.exe"
+    target_dir = Path(tempfile.mkdtemp(prefix="omniagent-obsidian-"))
+    target = target_dir / name
+    temporary = target.with_name(target.name + ".part")
+    total = 0
+    try:
+        with _open(
+            url,
+            opener=opener,
+            timeout=max(60, int(settings.obsidian.install_timeout_s)),
+        ) as response:
+            with open(temporary, "wb") as handle:
+                while True:
+                    chunk = response.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > MAX_INSTALLER_BYTES:
+                        raise RuntimeError("installateur anormalement volumineux")
+                    handle.write(chunk)
+        with open(temporary, "rb") as handle:
+            header = handle.read(2)
+        if header != b"MZ" or total < _MIN_INSTALLER_BYTES:
+            raise RuntimeError(
+                "le fichier téléchargé n'est pas un exécutable Windows valide"
+            )
+        os.replace(temporary, target)
+    finally:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+    logger.info("installateur Obsidian %s téléchargé : %s", version, url)
+    return target
+
+
+def _run_installer(
+    command: list[str], settings: Settings, runner: Any, *, label: str
+) -> str:
+    """Exécute une commande d'installation silencieuse et résume l'échec."""
     run = runner or subprocess.run
     try:
         completed = run(
@@ -566,22 +750,106 @@ def install_obsidian(settings: Settings, *, runner: Any = None) -> tuple[bool, s
             text=True,
             timeout=max(30, int(settings.obsidian.install_timeout_s)),
             check=False,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            if os.name == "nt"
+            else 0,
         )
     except (OSError, subprocess.SubprocessError) as exc:
-        return False, f"installation Obsidian impossible : {type(exc).__name__}: {exc}"
-    found = find_obsidian()
-    if found is not None:
-        return True, f"Obsidian installé : {found}"
-    output = (str(getattr(completed, "stderr", "") or "") + " " + str(getattr(completed, "stdout", "") or "")).strip()
+        return f"{label} impossible : {type(exc).__name__}: {exc}"
+    output = (
+        str(getattr(completed, "stderr", "") or "")
+        + " "
+        + str(getattr(completed, "stdout", "") or "")
+    ).strip()
     detail = f"code {getattr(completed, 'returncode', '?')}"
     if output:
         detail += f" — {output[-500:]}"
-    return (
-        False,
-        f"winget n'a pas confirmé l'installation ({detail}). "
-        f"Téléchargez l'installateur officiel : {OBSIDIAN_DOWNLOAD_URL}",
-    )
+    return f"{label} n'a pas confirmé l'installation ({detail})"
+
+
+def _cleanup_installer(installer: Path) -> None:
+    """Supprime le dossier temporaire créé pour l'installateur téléchargé."""
+    parent = installer.parent
+    if parent.name.startswith("omniagent-obsidian-") and parent.parent == Path(
+        tempfile.gettempdir()
+    ):
+        shutil.rmtree(parent, ignore_errors=True)
+
+
+def install_obsidian(
+    settings: Settings,
+    *,
+    runner: Any = None,
+    downloader: Any = None,
+) -> tuple[bool, str]:
+    """Installe Obsidian via winget, sinon l'installateur officiel téléchargé.
+
+    Après chaque tentative, l'exécutable est recherché à nouveau ; le succès
+    n'est annoncé que si `find_obsidian()` retourne un fichier existant.
+    """
+    found = find_obsidian()
+    if found is not None:
+        return True, f"Obsidian déjà installé : {found}"
+    problems: list[str] = []
+    winget = shutil.which("winget")
+    if winget:
+        problems.append(
+            _run_installer(
+                [
+                    winget,
+                    "install",
+                    "--id",
+                    OBSIDIAN_WINGET_ID,
+                    "--exact",
+                    "--silent",
+                    "--accept-package-agreements",
+                    "--accept-source-agreements",
+                ],
+                settings,
+                runner,
+                label="winget",
+            )
+        )
+        installed = find_obsidian()
+        if installed is not None:
+            return True, f"Obsidian installé via winget : {installed}"
+    else:
+        problems.append("winget absent")
+
+    installer: Path | None = None
+    try:
+        installer = Path((downloader or download_obsidian_installer)(settings))
+    except (OSError, RuntimeError, ValueError) as exc:
+        return (
+            False,
+            "; ".join(problems)
+            + " — téléchargement de l'installateur officiel impossible : "
+            f"{type(exc).__name__}: {exc}. "
+            f"Téléchargez-le depuis {OBSIDIAN_DOWNLOAD_URL}.",
+        )
+    try:
+        if not installer.is_file():
+            return (
+                False,
+                f"installateur officiel introuvable : {installer}. "
+                f"Téléchargez-le depuis {OBSIDIAN_DOWNLOAD_URL}.",
+            )
+        detail = _run_installer(
+            [str(installer), "/S", "/currentuser"],
+            settings,
+            runner,
+            label="installateur officiel",
+        )
+        installed = find_obsidian()
+        if installed is not None:
+            return True, f"Obsidian installé depuis l'installateur officiel : {installed}"
+        return (
+            False,
+            "; ".join([*problems, detail])
+            + f". Téléchargez l'installateur officiel : {OBSIDIAN_DOWNLOAD_URL}",
+        )
+    finally:
+        _cleanup_installer(installer)
 
 
 def ensure_obsidian(settings: Settings, *, force: bool = False) -> tuple[bool, str]:
