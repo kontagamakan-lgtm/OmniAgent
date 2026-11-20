@@ -275,7 +275,12 @@ sur les paquets de `dist\` de ce poste :
 
 Valeurs tronquées à deux décimales (somme réelle des tailles de fichiers) :
 196 501 824 octets pour le complet, 166 891 821 pour le lite. Aucun des deux
-paquets ne contient de `node.exe`. Le surcoût de ~60 Mio par rapport aux mesures
+paquets ne contient de `node.exe`.
+
+L'installateur Windows est construit avec `installer/OmniAgent.iss` (Inno Setup)
+et publié sous `OmniAgent-<version>-Setup.exe`. Il s'installe par utilisateur dans
+`%LOCALAPPDATA%\Programs\OmniAgent`, crée les raccourcis et le désinstalleur,
+sans demander de droits administrateur. Le surcoût de ~60 Mio par rapport aux mesures
 précédentes vient du moteur OCR en processus : DLL `tesserocr` (Tesseract 5.5,
 Leptonica, ICU, ~53 Mio après sélection de la fermeture des imports) et
 5,1 Mio de données `eng`/`fra`. `pypdf`, `docx`, `openpyxl` et `tesserocr` sont

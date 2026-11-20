@@ -67,6 +67,48 @@ jobs:
           python smoke_exe.py --doc-index --exe dist\OmniAgent-slim\OmniAgent.exe || exit /b 1
           python smoke_exe.py --ocr --exe dist\OmniAgent-slim\OmniAgent.exe || exit /b 1
 
+      # L'installateur est construit depuis dist\OmniAgent, déjà testé ci-dessus.
+      - name: Construire l'installateur Windows
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $iscc = @(
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe",
+            "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
+          ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) { throw "ISCC.exe introuvable après installation d'Inno Setup" }
+          $version = (Select-String -Path config.py -Pattern '^APP_VERSION = "([^"]+)"').Matches[0].Groups[1].Value
+          & $iscc "/DMyAppVersion=$version" "installer\OmniAgent.iss"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $setup = "dist\installer\OmniAgent-$version-Setup.exe"
+          if (-not (Test-Path $setup)) { throw "installateur introuvable : $setup" }
+
+      - name: Contrôler l'installateur
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path config.py -Pattern '^APP_VERSION = "([^"]+)"').Matches[0].Groups[1].Value
+          $setup = (Resolve-Path "dist\installer\OmniAgent-$version-Setup.exe").Path
+          $target = Join-Path $env:RUNNER_TEMP "omniagent-install"
+          $process = Start-Process -Wait -PassThru -FilePath $setup -ArgumentList @(
+            "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART",
+            ("/DIR=`"{0}`"" -f $target)
+          )
+          if ($process.ExitCode -ne 0) { throw "installation silencieuse : code $($process.ExitCode)" }
+          try {
+            $app = Start-Process -Wait -PassThru -FilePath (Join-Path $target "OmniAgent.exe") -ArgumentList @("--version")
+            if ($app.ExitCode -ne 0) { throw "OmniAgent.exe --version : code $($app.ExitCode)" }
+          } finally {
+            $uninstaller = Join-Path $target "unins000.exe"
+            if (Test-Path $uninstaller) {
+              $uninstall = Start-Process -Wait -PassThru -FilePath $uninstaller -ArgumentList @(
+                "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"
+              )
+              if ($uninstall.ExitCode -ne 0) { throw "désinstallation silencieuse : code $($uninstall.ExitCode)" }
+            }
+          }
+
       # Empreintes et versions de build : un binaire publié reste identifiable
       # et comparable sans reconstruire pour savoir ce qu'il contient.
       - name: Empreintes et versions de build
@@ -87,7 +129,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          $version = (Select-String -Path config.py -Pattern '^APP_VERSION = "([^"]+)"').Matches[0].Groups[1].Value
           gh release create "$env:GITHUB_REF_NAME" `
             dist/OmniAgent.zip dist/OmniAgent-lite.zip dist/OmniAgent-slim.zip `
+            "dist/installer/OmniAgent-$version-Setup.exe" `
             dist/SHA256SUMS.txt dist/BUILD-INFO.txt `
             --title "$env:GITHUB_REF_NAME" --generate-notes
