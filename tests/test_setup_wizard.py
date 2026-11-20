@@ -26,13 +26,22 @@ def test_needs_setup_tracks_the_api_key(monkeypatch) -> None:
         assert needs_setup(settings) is False, "Ollama n'a pas besoin de clé"
 
 
-def test_needs_setup_rejects_a_deepseek_placeholder(monkeypatch) -> None:
-    with tmpdir("setup-placeholder") as tmp:
+def test_needs_setup_treats_invalid_deepseek_keys_as_absent(monkeypatch) -> None:
+    with tmpdir("setup-invalid-key") as tmp:
         settings = make_settings(tmp)
         variable = settings.llm.api_key_env
-        monkeypatch.setenv(variable, "sk-" + "test" + "x" * 30)
+        invalid_keys = (
+            "sk-court",
+            "pas-une-cle",
+            "sk-" + "test" + "x" * 30,
+            "sk-" + "0" * 30,
+        )
 
-        assert needs_setup(settings) is True, "un placeholder ne doit pas valider le wizard"
+        for invalid in invalid_keys:
+            monkeypatch.setenv(variable, invalid)
+            assert needs_setup(settings) is True, (
+                "une clé invalide doit être traitée comme absente par le wizard"
+            )
 
 
 def test_apply_setup_saves_all_four_settings(monkeypatch) -> None:

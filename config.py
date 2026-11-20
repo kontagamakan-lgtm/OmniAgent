@@ -337,6 +337,36 @@ _FAKE_API_KEY_MARKERS = (
 )
 
 
+def deepseek_key_problem(key: str, *, origin: str = "DEEPSEEK_API_KEY") -> str:
+    """Préflight partagé d'une clé DeepSeek, sans révéler sa valeur."""
+    clean = str(key or "").strip()
+    if not clean:
+        return f"clé d'API absente : renseignez la variable {origin}"
+    if not clean.startswith("sk-"):
+        return (
+            f"clé d'API invalide dans {origin} : le préfixe « sk- » "
+            "attendu pour DeepSeek est absent"
+        )
+    if len(clean) < _MIN_DEEPSEEK_KEY_LENGTH:
+        return (
+            f"clé d'API trop courte dans {origin} "
+            f"({len(clean)} caractères) : copiez la clé complète fournie par DeepSeek"
+        )
+    body = clean[3:].casefold()
+    if len(set(body)) == 1:
+        return (
+            f"clé d'API manifestement factice dans {origin} : "
+            "le corps de la clé est un caractère unique répété"
+        )
+    lowered = clean.casefold()
+    if any(marker in lowered for marker in _FAKE_API_KEY_MARKERS):
+        return (
+            f"clé d'API manifestement factice dans {origin} : "
+            "remplacez-la par une clé DeepSeek réelle"
+        )
+    return ""
+
+
 @dataclass(slots=True)
 class LLMConfig:
     """Backend de génération (DeepSeek, endpoint compatible OpenAI, Ollama)."""
@@ -378,23 +408,7 @@ class LLMConfig:
             return f"clé d'API absente : renseignez la variable {self.api_key_env}"
         if self.backend != "deepseek":
             return ""
-        if not key.startswith("sk-"):
-            return (
-                f"clé d'API invalide dans {self.api_key_env} : le préfixe « sk- » "
-                "attendu pour DeepSeek est absent"
-            )
-        if len(key) < _MIN_DEEPSEEK_KEY_LENGTH:
-            return (
-                f"clé d'API trop courte dans {self.api_key_env} "
-                f"({len(key)} caractères) : copiez la clé complète fournie par DeepSeek"
-            )
-        lowered = key.casefold()
-        if any(marker in lowered for marker in _FAKE_API_KEY_MARKERS):
-            return (
-                f"clé d'API manifestement factice dans {self.api_key_env} : "
-                "remplacez-la par une clé DeepSeek réelle"
-            )
-        return ""
+        return deepseek_key_problem(key, origin=self.api_key_env)
 
     def has_credentials(self) -> bool:
         if self.backend == "ollama":

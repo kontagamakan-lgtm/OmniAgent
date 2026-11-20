@@ -35,7 +35,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 import httpx
 
-from config import APP_ID, Settings
+from config import APP_ID, Settings, deepseek_key_problem
 from core.errors import LLMError
 from core.llm_client import LLMResponse
 from core.react_parser import ParsedToolCall, decode_arguments
@@ -539,6 +539,10 @@ class LLMRouter:
             slug = detect_provider(clean)
         if slug not in PROVIDERS or slug == "ollama":
             raise ValueError(f"fournisseur inconnu : {provider!r}")
+        if slug == "deepseek":
+            problem = deepseek_key_problem(clean, origin="le routeur multi-LLM")
+            if problem:
+                raise ValueError(problem)
         if not getattr(self.vault, "unlocked", False):
             raise RuntimeError("coffre verrouillé : déverrouillez-le pour ajouter une clé")
         key_id = secrets.token_hex(6)
