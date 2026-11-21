@@ -61,6 +61,17 @@ jobs:
           python -m ruff check --select F,B,E9 security tools config.py core
           tests ui app.py smoke_exe.py pyinstaller_recipe.py build_smoke
 
+      # Un workflow présent dans le dépôt n'est pas forcément enregistré par
+      # GitHub : celui de publication, déclenché seulement par un tag, ne
+      # l'est qu'à l'occasion d'un push qui le modifie. Non enregistré, il
+      # n'apparaît nulle part et aucun tag ne le lance — ce silence a déjà
+      # coûté une publication entière.
+      - name: Workflow de publication enregistré par GitHub
+        if: matrix.python-version == '3.11'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python build_smoke/check_publication_workflow.py
+
       # OMNIAGENT_SLOW_TESTS : les tests de concurrence (vrais sous-processus)
       # sont lents et lancés ici plutôt qu'à chaque exécution locale.
       - name: Pytest
