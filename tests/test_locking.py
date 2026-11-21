@@ -9,6 +9,7 @@ from pathlib import Path
 
 from support import ROOT, tmpdir  # noqa: I001
 
+from core import run_index
 from core.locking import LockTimeout, file_lock
 from core.run_index import RunIndex
 
@@ -44,6 +45,33 @@ def test_two_processes_append_without_losing_a_line() -> None:
         assert set(entries) == {
             f"{name}-{number}" for name in ("a", "b") for number in range(25)
         }
+
+
+def test_a_transient_error_does_not_lose_the_state(monkeypatch) -> None:
+    """Un échec passager d'accès au fichier ne doit pas perdre une écriture.
+
+    Antivirus, indexeur et sauvegardes ouvrent brièvement `runs.index` en
+    partage exclusif : l'écriture échoue quelques millisecondes, puis
+    fonctionne. Renoncer au premier essai faisait disparaître l'état d'un run
+    sans que personne ne le sache (49 lignes sur 50 en CI).
+    """
+    with tmpdir("verrou-erreur-passagere") as tmp:
+        directory = Path(tmp)
+        real = run_index.file_lock
+        attempts = {"count": 0}
+
+        def flaky(path, **kwargs):
+            attempts["count"] += 1
+            if attempts["count"] <= 2:
+                raise PermissionError(13, "fichier tenu par un autre programme")
+            return real(path, **kwargs)
+
+        monkeypatch.setattr(run_index, "file_lock", flaky)
+        index = RunIndex(directory)
+
+        assert index.mark("run-1", "started") is True
+        assert attempts["count"] == 3, attempts
+        assert set(index.entries()) == {"run-1"}
 
 
 def test_a_held_lock_times_out_instead_of_blocking_forever() -> None:
