@@ -41,7 +41,7 @@ OmniAgent/
 ├── build.bat                  # ✔ LIVRABLE 5 — compilation en un clic
 ├── OmniAgent.spec             # ✔ LIVRABLE 5 — recette PyInstaller (paquet complet)
 ├── OmniAgent-lite.spec        #    variante --lite (sans NumPy, Pillow conservé)
-├── OmniAgent-slim.spec        #    alias de --lite : même paquet, dossier « slim »
+├── OmniAgent-slim.spec        #    alias local de --lite ; dossier « slim » non publié
 ├── .env.example / .gitignore / README.md
 ├── build_smoke/               # smoke tests des exécutables et de la boucle ReAct
 ├── assets/                    # icon.ico, theme.json, tessdata/
@@ -272,7 +272,7 @@ sur les paquets de `dist\` de ce poste :
 |---|---|---|---|---|
 | Complète | `build.bat` | 187,40 Mio | 1536 | NumPy/OpenBLAS (~26 Mio), Pillow, `pytesseract`, moteur OCR `tesserocr` (DLL Tesseract/Leptonica/ICU, ~58 Mio) et données `eng`/`fra`, `pypdf`/`docx`/`openpyxl` ; navigateur pris dans le cache Playwright, sinon Edge/Chrome de la machine |
 | Lite | `build.bat --lite` | 159,16 Mio | 1497 | Sans NumPy (index vectoriel dégradé) ; Pillow, `pytesseract`, moteur OCR `tesserocr` et données de langue conservés, donc OCR, indexation PDF/DOCX/XLSX et navigateurs fonctionnent à l'identique |
-| Slim | `build.bat --slim` | 159,16 Mio | 1497 | **Alias de `--lite`** : même recette, produite dans `dist\OmniAgent-slim` pour les scripts qui utilisent ce dossier |
+| Slim | `build.bat --slim` | 159,16 Mio | 1497 | **Alias local de `--lite`, non publié** : même recette, produite dans `dist\OmniAgent-slim` pour les scripts qui utilisent ce dossier |
 
 Valeurs tronquées à deux décimales (somme réelle des tailles de fichiers) :
 196 501 824 octets pour le complet, 166 891 821 pour le lite. Aucun des deux
@@ -292,11 +292,14 @@ Aucune variante n'embarque `playwright/driver/node.exe` (~95 Mio) : les outils
 `browser_*` pilotent Chromium avec le **Node.js 18+ du système** (voir
 « Dépendances de la cible pour les outils `browser_*` »).
 
-`--slim` reste disponible comme **alias de `--lite`** : la commande et le
+`--slim` reste disponible comme **alias local de `--lite`** : la commande et le
 dossier `dist\OmniAgent-slim` continuent de fonctionner pour les scripts
 existants, avec exactement le contenu de la variante allégée (mêmes exclusions,
-même poids). La seule différence historique — l'absence de Node embarqué — ne
-distingue plus les paquets puisqu'aucun ne l'embarque.
+même poids). Il n'est en revanche **plus publié** : `OmniAgent-slim.zip` a
+quitté les assets de release, puisque c'était le paquet de `OmniAgent-lite.zip`
+sous un autre nom — environ 80 Mio de doublon par version. Qui téléchargeait le
+zip « slim » prend `OmniAgent-lite.zip`. Les releases déjà publiées gardent
+leur asset : rien n'est retiré rétroactivement.
 
 ### Contrôle de fumée du navigateur
 

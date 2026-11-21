@@ -82,14 +82,18 @@ jobs:
       - name: Smoke test de la boucle ReAct
         run: python build_smoke/agent_loop_smoke.py
 
-      - name: Construire les trois paquets
+      # `OmniAgent-slim.zip` n'est plus publié : c'était exactement le paquet de
+      # `OmniAgent-lite.zip` (mêmes exclusions, mêmes 159 Mio), dupliqué à
+      # chaque release pour environ 80 Mio d'assets en double. `build.bat
+      # --slim` reste disponible localement pour les scripts qui pointent sur
+      # `dist\OmniAgent-slim`, mais ne produit plus d'asset. Les releases déjà
+      # publiées gardent le leur : rien n'est retiré rétroactivement.
+      - name: Construire les deux paquets
         shell: cmd
         env:
           PYTHONUTF8: "1"
         run: |
           call build.bat --all --no-smoke || exit /b 1
-          call build.bat --slim --no-smoke || exit /b 1
-          if not exist dist\OmniAgent-slim\OmniAgent.exe exit /b 1
 
       - name: Contrôles de fumée sans fenêtre
         shell: cmd
@@ -102,9 +106,6 @@ jobs:
           python smoke_exe.py --browser --exe dist\OmniAgent-lite\OmniAgent.exe || exit /b 1
           python smoke_exe.py --doc-index --exe dist\OmniAgent-lite\OmniAgent.exe || exit /b 1
           python smoke_exe.py --ocr --exe dist\OmniAgent-lite\OmniAgent.exe || exit /b 1
-          python smoke_exe.py --browser --exe dist\OmniAgent-slim\OmniAgent.exe || exit /b 1
-          python smoke_exe.py --doc-index --exe dist\OmniAgent-slim\OmniAgent.exe || exit /b 1
-          python smoke_exe.py --ocr --exe dist\OmniAgent-slim\OmniAgent.exe || exit /b 1
 
       # L'installateur est construit depuis dist\OmniAgent, déjà testé ci-dessus.
       - name: Construire l'installateur Windows
@@ -162,7 +163,6 @@ jobs:
         run: |
           Compress-Archive -Path dist/OmniAgent/* -DestinationPath dist/OmniAgent.zip
           Compress-Archive -Path dist/OmniAgent-lite/* -DestinationPath dist/OmniAgent-lite.zip
-          Compress-Archive -Path dist/OmniAgent-slim/* -DestinationPath dist/OmniAgent-slim.zip
 
       - name: Créer la GitHub Release
         shell: pwsh
@@ -178,7 +178,6 @@ jobs:
           $assets = @(
             "dist/OmniAgent.zip",
             "dist/OmniAgent-lite.zip",
-            "dist/OmniAgent-slim.zip",
             "dist/installer/OmniAgent-$version-Setup.exe",
             "dist/SHA256SUMS.txt",
             "dist/BUILD-INFO.txt"
