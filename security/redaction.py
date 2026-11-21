@@ -15,6 +15,7 @@ retour arrière catastrophique possible sur une entrée hostile.
 from __future__ import annotations
 
 import re
+from functools import partial
 from typing import Any, Iterable, Mapping
 
 __all__ = [
@@ -158,7 +159,9 @@ class Redactor:
             return "" if text is None else str(text)
         result = str(text)
         for label, pattern in self._patterns:
-            result = pattern.sub(lambda m, _l=label: self._substitute(_l, m), result)
+            # `partial` fixe le libellé une fois pour toutes : la lambda
+            # équivalente obligeait mypy à deviner le type de ses paramètres.
+            result = pattern.sub(partial(self._substitute, label), result)
         return result
 
     def _substitute(self, label: str, match: re.Match[str]) -> str:
