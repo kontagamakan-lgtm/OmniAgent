@@ -32,7 +32,7 @@ jobs:
     environment: release
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # En manuel, on construit exactement le tag demandé et non la tête de
           # la branche depuis laquelle le workflow est lancé.
