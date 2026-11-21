@@ -8,6 +8,9 @@ et index sémantique local. Interface CustomTkinter, backend LLM interchangeable
 
 > **Limites de sûreté et vérifications manuelles restantes** : voir
 > `docs/OPERATIONS.md`, section « Limites connues et vérifications manuelles ».
+>
+> **Données et confidentialité** : ce qui reste sur la machine, ce qui en sort
+> et comment tout effacer — `docs/PRIVACY.md`.
 
 ---
 
