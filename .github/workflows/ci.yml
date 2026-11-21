@@ -196,7 +196,7 @@ jobs:
 
       - name: Conserver les captures
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ui-snapshots-windows
           path: |
@@ -287,7 +287,7 @@ jobs:
       # captures d'écran du job `ui-tk`. Rétention courte : un paquet de CI sert
       # à inspecter la construction du jour, pas à archiver les versions.
       - name: Conserver les paquets
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: omniagent-windows
           path: |
