@@ -43,7 +43,9 @@ ddgs==9.16.1
 pypdf==6.21.4
 python-docx==1.2.0
 openpyxl==3.1.5
-numpy==2.5.5
+# Derniere branche qui accepte Python 3.11 : numpy 2.5 exige >= 3.12, et la
+# matrice de tests inclut 3.11.
+numpy==2.4.6
 
 # --- OCR ---------------------------------------------------------------------
 # pytesseract pilote un tesseract.exe installé ; tesserocr embarque Tesseract et
