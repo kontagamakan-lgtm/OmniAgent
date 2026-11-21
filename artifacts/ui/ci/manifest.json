@@ -2,11 +2,21 @@
   "capture_backend": "PIL.ImageGrab",
   "viewport": [
     "900x620",
+    "1280x860",
+    "1600x1000",
     "1280x860"
+  ],
+  "appearance": [
+    "dark",
+    "dark",
+    "dark",
+    "light"
   ],
   "screens": [
     "compact_900x620.png",
+    "large_1600x1000.png",
+    "light_1280x860.png",
     "normal_1280x860.png"
   ],
-  "note": "captures locales, compar\u00e9es avec une tol\u00e9rance moyenne de 1/255"
+  "note": "captures du runner, compar\u00e9es avec une tol\u00e9rance moyenne de 1/255"
 }

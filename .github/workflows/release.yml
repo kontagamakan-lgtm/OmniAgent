@@ -26,6 +26,10 @@ jobs:
   release:
     name: Construire et publier
     runs-on: windows-latest
+    # Environnement protégé : un mainteneur doit approuver le déploiement avant
+    # que quoi que ce soit ne soit publié. Un tag poussé par erreur s'arrête
+    # donc là, au lieu de remplacer les binaires d'une release.
+    environment: release
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
@@ -47,6 +51,23 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements-dev.txt -r requirements-ci.txt
+
+      # Deux règles que ce workflow énonçait sans les vérifier : le tag décrit
+      # le contenu publié (APP_VERSION nomme l'installateur), et le commit
+      # publié a déjà passé la CI. Les contrôler ici évite de dépenser
+      # quatre-vingt-dix minutes de construction avant de découvrir l'écart.
+      # `RELEASE_FORCE_VERSION_MISMATCH=1` (variable du dépôt) autorise la
+      # republication volontaire d'un tag historique.
+      - name: Garde-fous de publication (tag, version, CI)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+          OMNIAGENT_FORCE_VERSION: ${{ vars.RELEASE_FORCE_VERSION_MISMATCH }}
+          OMNIAGENT_SKIP_CI_CHECK: ${{ vars.RELEASE_SKIP_CI_CHECK }}
+        shell: bash
+        run: >-
+          python build_smoke/check_release_gate.py --tag "$RELEASE_TAG"
+          --repo "${{ github.repository }}" --sha "$(git rev-parse HEAD)" --require-ci
 
       - name: Ruff (F, B, E9)
         run: >-
@@ -164,8 +185,31 @@ jobs:
           )
           # Relancer une publication déjà existante remplace ses fichiers au lieu
           # d'échouer sur une release qui existe déjà.
+          #
+          # Le remplacement est destructif : `--clobber` écrase les binaires
+          # validés sans en garder copie. Les assets présents sont donc d'abord
+          # téléchargés puis republiés sous le préfixe `precedent-`, dans la même
+          # release : après une republication malheureuse, l'ancien binaire reste
+          # téléchargeable. Ils vivent dans la release et non dans un artefact
+          # d'action, dont le quota (500 Mio) fait déjà échouer des jobs.
+          $archive = "dist/previous-assets"
+          New-Item -ItemType Directory -Force -Path $archive | Out-Null
           gh release view $tag --json tagName *> $null
           if ($LASTEXITCODE -eq 0) {
+            gh release download $tag --dir $archive --clobber
+            if ($LASTEXITCODE -ne 0) { throw "téléchargement des assets existants impossible" }
+            $keep = @()
+            foreach ($file in Get-ChildItem $archive -File) {
+              if ($file.Name -like "precedent-*") { continue }
+              $copy = Join-Path $archive ("precedent-" + $file.Name)
+              Copy-Item $file.FullName $copy -Force
+              $keep += $copy
+            }
+            if ($keep.Count -gt 0) {
+              gh release upload $tag @keep --clobber
+              if ($LASTEXITCODE -ne 0) { throw "archivage des assets remplacés impossible" }
+              Write-Host "Assets précédents conservés sous precedent-* ($($keep.Count))."
+            }
             gh release upload $tag @assets --clobber
           } else {
             gh release create $tag @assets --title $tag --generate-notes

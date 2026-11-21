@@ -74,10 +74,32 @@ jobs:
 
       # OMNIAGENT_SLOW_TESTS : les tests de concurrence (vrais sous-processus)
       # sont lents et lancés ici plutôt qu'à chaque exécution locale.
+      #
+      # La couverture n'est mesurée que sur 3.11 : c'est le plancher qui compte,
+      # pas la version qui l'atteint, et la mesurer trois fois triplerait le
+      # coût du job. Le seuil (78) est le 79 % mesuré le 21/11/2026, moins un
+      # point de marge pour les chemins dépendants de la plateforme : il
+      # empêche une baisse franche, pas un écart d'un fichier.
+      - name: Pytest avec couverture
+        if: matrix.python-version == '3.11'
+        env:
+          OMNIAGENT_SLOW_TESTS: "1"
+        run: >-
+          python -m pytest -q --cov=core --cov=tools --cov=security --cov=config
+          --cov-report=term:skip-covered --cov-fail-under=78
+
       - name: Pytest
+        if: matrix.python-version != '3.11'
         env:
           OMNIAGENT_SLOW_TESTS: "1"
         run: python -m pytest -q
+
+      # Le code est annoté partout ; Ruff ne lit que F/B/E9 et ne voit aucun
+      # type. `mypy.ini` déclare la dette mesurée : les modules encore exemptés
+      # y sont listés, et cette liste ne doit que rétrécir.
+      - name: Types (mypy)
+        if: matrix.python-version == '3.11'
+        run: python -m mypy core config.py security
 
       - name: Smoke test de la boucle ReAct
         run: python build_smoke/agent_loop_smoke.py

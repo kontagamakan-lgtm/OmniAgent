@@ -56,6 +56,10 @@ HELP: dict[str, tuple[str, str]] = {
         "l'index contient plus d'ecritures que de runs presents",
         "python -m core.replay --index-compact",
     ),
+    "index_lost_state": (
+        "un etat n'a pas pu etre ecrit apres tous les essais (fichier tenu)",
+        "python -m core.replay --index-rebuild : l'etat se relit dans la trace",
+    ),
     "trace_not_indexed": (
         "une trace existe mais aucune entree ne la decrit",
         "python -m core.replay --index-rebuild, ou --check --fix",
@@ -111,6 +115,30 @@ def _trace_files(directory: Path) -> dict[str, Path]:
     return {_run_id_of(path): path for path in candidates}
 
 
+def _lost_issues(index: RunIndex) -> list[IndexIssue]:
+    """États que l'index n'a pas réussi à écrire, et qui restent récupérables.
+
+    Ils étaient jusqu'ici seulement journalisés : rien ne les signalait après
+    coup. Le fichier `runs.index.lost` les rend consultables, et la trace sur
+    disque permet de les retrouver — d'où le remède par reconstruction.
+    """
+    try:
+        lost = index.lost_records()
+    except OSError:
+        return []
+    if not lost:
+        return []
+    run_ids = sorted({str(item.get("run_id") or "?") for item in lost})
+    shown = ", ".join(run_ids[:3]) + ("…" if len(run_ids) > 3 else "")
+    return [
+        IndexIssue(
+            "warning",
+            "index_lost_state",
+            f"{len(lost)} etat(s) non ecrit(s) pour {len(run_ids)} run(s) : {shown}",
+        )
+    ]
+
+
 def diagnose(directory: Path | str, *, active_ttl_s: float = 300.0) -> list[IndexIssue]:
     """Compare l'index au dossier ; ne lève jamais, même si tout manque."""
     root = Path(directory)
@@ -123,11 +151,12 @@ def diagnose(directory: Path | str, *, active_ttl_s: float = 300.0) -> list[Inde
             )
         ]
     index = RunIndex(root)
+    lost = _lost_issues(index)
     if not index.path.exists():
         files = _trace_files(root)
         if not files:
-            return []
-        return [
+            return lost
+        return lost + [
             IndexIssue(
                 "warning",
                 "missing_index",
@@ -135,7 +164,7 @@ def diagnose(directory: Path | str, *, active_ttl_s: float = 300.0) -> list[Inde
             )
         ]
 
-    issues: list[IndexIssue] = []
+    issues: list[IndexIssue] = list(lost)
     records = list(index.records())
     try:
         physical = sum(

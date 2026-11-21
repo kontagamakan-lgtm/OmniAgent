@@ -1,10 +1,13 @@
 # =============================================================================
 # OmniAgent Windows — versions figées pour l'intégration continue
 #
-# `requirements.txt` garde des bornes larges pour les utilisateurs. La CI, elle,
-# doit produire le même exécutable à chaque exécution : mêmes versions installées,
-# donc mêmes paquets PyInstaller embarqués. À mettre à jour explicitement quand
-# on veut tester une nouvelle version, jamais au fil des résolutions de pip.
+# `requirements.txt` et `requirements-dev.txt` sont épinglés : la CI installe
+# exactement ce que teste un poste de développement, donc le même exécutable à
+# chaque exécution. Ce fichier n'ajoute que les outils propres à la CI.
+#
+# Les versions doivent rester identiques à celles de `requirements-dev.txt` :
+# pip refuse sinon de satisfaire les deux fichiers dans la même installation
+# (`pytest` y apparaît deux fois, avec deux versions différentes).
 #
 #   pip install -r requirements-dev.txt -r requirements-ci.txt
 # =============================================================================
@@ -12,5 +15,6 @@
 -r requirements.txt
 
 pyinstaller==6.22.3
-pytest==8.4.2
-ruff==0.17.5
+pytest==9.2.0
+ruff==0.17.6
+pytest-cov==7.1.0
