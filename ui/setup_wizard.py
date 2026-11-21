@@ -23,7 +23,7 @@ import logging
 import os
 from pathlib import Path
 
-from config import APP_ID, Settings, expand_path, install_dir
+from config import APP_ID, Settings, deepseek_key_problem, expand_path, install_dir
 
 __all__ = [
     "CHANNELS",
@@ -132,7 +132,18 @@ def apply_setup(
     updates: list[str] = []
 
     key = api_key.strip()
-    if key:
+    # Une clé malformée était acceptée puis écrite dans `.env` : l'application
+    # la rejetait au démarrage suivant, et l'utilisateur devait tout ressaisir
+    # sans savoir pourquoi. Le préflight qui sert déjà à `needs_setup` la
+    # refuse ici, avant l'écriture.
+    problem = (
+        deepseek_key_problem(key, origin=settings.llm.api_key_env or "DEEPSEEK_API_KEY")
+        if key and settings.llm.backend == "deepseek"
+        else ""
+    )
+    if problem:
+        errors.append(problem)
+    elif key:
         if settings.llm.api_key_env:
             os.environ[settings.llm.api_key_env] = key
         updates.append(f"clé {settings.llm.api_key_env or 'API'} enregistrée")
