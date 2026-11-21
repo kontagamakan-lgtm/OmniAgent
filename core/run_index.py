@@ -62,6 +62,17 @@ TERMINAL_STATES = frozenset({FINISHED, INTERRUPTED, ARCHIVED})
 #: inutile de relire 20 Mio pour savoir comment un run s'est terminé.
 _TAIL_BYTES = 8_192
 
+#: Une écriture peut échouer pour une raison passagère sans rapport avec le
+#: verrou : antivirus, indexeur Windows ou sauvegarde ouvre le fichier en
+#: partage exclusif pendant quelques millisecondes. Renoncer au premier essai
+#: perdait l'état d'un run (49 lignes sur 50 lors d'une CI chargée).
+_APPEND_ATTEMPTS = 6
+#: Attente croissante entre deux essais : ~20 + 40 + … = 0,4 s au total, très
+#: en deçà du délai laissé aux appelants.
+_APPEND_BACKOFF_S = 0.02
+#: Verrou visé à chaque essai : court, puisque l'essai est répété.
+_APPEND_LOCK_TIMEOUT_S = 2.0
+
 
 def _now() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
@@ -131,25 +142,44 @@ class RunIndex:
     # -- écriture -----------------------------------------------------------
 
     def append(self, record: RunRecord) -> bool:
-        """Ajoute un état. Un index inaccessible ne casse jamais l'exécution."""
+        """Ajoute un état. Un index inaccessible ne casse jamais l'exécution.
+
+        Une erreur passagère est réessayée avant d'être abandonnée : perdre une
+        ligne parce qu'un scanner a tenu le fichier quelques millisecondes
+        laisserait l'index incomplet sans que personne ne le sache. Réessayer
+        après une panne survenue en fin d'écriture peut dupliquer la ligne ;
+        c'est sans conséquence, la lecture ne retient que le dernier état de
+        chaque run et la compaction déduplique.
+        """
         if not record.run_id:
             return False
         record.updated = record.updated or _now()
         line = json.dumps(record.as_dict(), ensure_ascii=False, default=str) + "\n"
-        try:
-            self.directory.mkdir(parents=True, exist_ok=True)
-            with file_lock(self._lock_path()):
-                with self.path.open("a", encoding="utf-8") as handle:
-                    handle.write(line)
-                    handle.flush()
-                    os.fsync(handle.fileno())
-        except LockTimeout:
-            logger.warning("index des runs verrouille : etat non ecrit")
-            return False
-        except OSError:
-            logger.debug("index des runs non écrit", exc_info=True)
-            return False
-        return True
+        for attempt in range(1, _APPEND_ATTEMPTS + 1):
+            try:
+                self.directory.mkdir(parents=True, exist_ok=True)
+                with file_lock(self._lock_path(), timeout=_APPEND_LOCK_TIMEOUT_S):
+                    with self.path.open("a", encoding="utf-8") as handle:
+                        handle.write(line)
+                        handle.flush()
+                        os.fsync(handle.fileno())
+            except LockTimeout:
+                logger.debug("index des runs verrouille (essai %s)", attempt)
+            except OSError:
+                logger.debug(
+                    "index des runs non écrit (essai %s)", attempt, exc_info=True
+                )
+            else:
+                return True
+            if attempt < _APPEND_ATTEMPTS:
+                time.sleep(_APPEND_BACKOFF_S * attempt)
+        logger.warning(
+            "index des runs non écrit après %s essais : état %s de %s perdu",
+            _APPEND_ATTEMPTS,
+            record.state,
+            record.run_id,
+        )
+        return False
 
     def _lock_path(self) -> Path:
         return self.path.with_name(f"{self.path.name}.lock")
