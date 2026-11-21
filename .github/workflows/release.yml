@@ -8,9 +8,16 @@ name: Publication
 on:
   push:
     tags: ["v*"]
-  # Ce workflow ne se déclenche que sur un tag. GitHub ne l'indexe qu'à
-  # l'occasion d'un push qui modifie le fichier : sans cela il reste absent de
-  # la liste des workflows et aucun tag ne le lance.
+  # Republier sans créer de nouveau tag : le tag à publier est saisi à la main
+  # et c'est lui qui est extrait, pas la branche depuis laquelle on déclenche.
+  # GitHub n'indexe un workflow qu'à l'occasion d'un push qui modifie ce
+  # fichier : c'est aussi ce qui le fait apparaître dans la liste.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag existant à republier (ex. v1.0.1)"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -22,6 +29,10 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+        with:
+          # En manuel, on construit exactement le tag demandé et non la tête de
+          # la branche depuis laquelle le workflow est lancé.
+          ref: ${{ inputs.tag || github.ref }}
 
       - uses: actions/setup-python@v5
         with:
@@ -136,10 +147,27 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          # Un déclenchement manuel explique le tag qu'il publie ; un push de tag
+          # retombe sur le nom de la référence poussée.
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
+          $tag = $env:RELEASE_TAG
+          if (-not $tag) { throw "aucun tag à publier" }
           $version = (Select-String -Path config.py -Pattern '^APP_VERSION = "([^"]+)"').Matches[0].Groups[1].Value
-          gh release create "$env:GITHUB_REF_NAME" `
-            dist/OmniAgent.zip dist/OmniAgent-lite.zip dist/OmniAgent-slim.zip `
-            "dist/installer/OmniAgent-$version-Setup.exe" `
-            dist/SHA256SUMS.txt dist/BUILD-INFO.txt `
-            --title "$env:GITHUB_REF_NAME" --generate-notes
+          $assets = @(
+            "dist/OmniAgent.zip",
+            "dist/OmniAgent-lite.zip",
+            "dist/OmniAgent-slim.zip",
+            "dist/installer/OmniAgent-$version-Setup.exe",
+            "dist/SHA256SUMS.txt",
+            "dist/BUILD-INFO.txt"
+          )
+          # Relancer une publication déjà existante remplace ses fichiers au lieu
+          # d'échouer sur une release qui existe déjà.
+          gh release view $tag --json tagName *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag @assets --clobber
+          } else {
+            gh release create $tag @assets --title $tag --generate-notes
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
