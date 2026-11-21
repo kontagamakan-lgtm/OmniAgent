@@ -444,7 +444,14 @@ def test_run_started_carries_a_manifest() -> None:
         assert payload["backend"] == settings.llm.backend
         assert payload["budget_tokens"] == settings.agent.max_context_tokens
         digest = payload["settings_digest"]
-        assert len(digest) == 16 and int(digest, 16) >= 0, "empreinte hexadécimale attendue"
+        assert len(digest) == 16 and digest.startswith("h"), "empreinte préfixée attendue"
+        assert int(digest[1:], 16) >= 0, "empreinte hexadécimale attendue après le préfixe"
+        # Un condensat n'est pas un secret. Sans le préfixe, un condensat dont
+        # les 16 caractères sont des chiffres était masqué comme un numéro de
+        # carte (vu en CI sur Python 3.12) : la trace ne l'aurait plus relu.
+        from security.redaction import redactor
+
+        assert redactor.redact(digest) == digest, "un condensat ne doit jamais être masqué"
 
 
 def test_trace_settings_drive_defaults_and_validation() -> None:
