@@ -10,4 +10,4 @@
 # par PyInstaller (`collect_dynamic_libs("sqlite_vec")` dans le .spec).
 # =============================================================================
 
-sqlite-vec>=0.1.4,<1
+sqlite-vec>=0.1.9,<1
