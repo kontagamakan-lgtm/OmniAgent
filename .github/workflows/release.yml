@@ -8,6 +8,9 @@ name: Publication
 on:
   push:
     tags: ["v*"]
+  # Ce workflow ne se déclenche que sur un tag. GitHub ne l'indexe qu'à
+  # l'occasion d'un push qui modifie le fichier : sans cela il reste absent de
+  # la liste des workflows et aucun tag ne le lance.
 
 permissions:
   contents: write
