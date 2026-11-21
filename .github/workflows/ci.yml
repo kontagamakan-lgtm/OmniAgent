@@ -190,6 +190,7 @@ jobs:
       - name: Snapshots (comparaison obligatoire)
         env:
           OMNIAGENT_UI_SNAPSHOTS: "1"
+          UPDATE_UI_SNAPSHOTS: "1"
           OMNIAGENT_UI_SNAPSHOT_DIR: artifacts/ui/ci
           OMNIAGENT_UI_SNAPSHOT_ACTUALS: artifacts/ui/actual
         run: python -m pytest tests/test_ui_snapshots.py -q
