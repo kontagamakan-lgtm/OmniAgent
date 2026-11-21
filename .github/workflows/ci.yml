@@ -282,3 +282,39 @@ jobs:
             dist/OmniAgent-slim/OmniAgent.exe
             dist/SHA256SUMS.txt
           retention-days: 1
+
+  # Agrégateur : c'est le seul check que la protection de `master` exige.
+  # Renommer un job de la matrice, ajouter ou retirer une version de Python ne
+  # peut donc plus bloquer toutes les fusions pour un nom qui n'existe plus ;
+  # un job en échec ou sauté fait échouer ce point unique, qui reste nommé de
+  # façon stable.
+  obligatoires:
+    name: Vérifications obligatoires
+    needs: [tests, ui-tk, build]
+    # `always()` : sans cela, un job sauté (par exemple `build` quand `tests`
+    # échoue) empêcherait l'agrégateur de tourner et laisserait le check en
+    # attente plutôt qu'en échec.
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Résultat des trois jobs attendus
+        env:
+          RESULTAT_TESTS: ${{ needs['tests'].result }}
+          RESULTAT_UI_TK: ${{ needs['ui-tk'].result }}
+          RESULTAT_BUILD: ${{ needs['build'].result }}
+        run: |
+          printf 'tests=%s ui-tk=%s build=%s\n' \
+            "$RESULTAT_TESTS" "$RESULTAT_UI_TK" "$RESULTAT_BUILD"
+          echecs=""
+          for entree in "tests=$RESULTAT_TESTS" "ui-tk=$RESULTAT_UI_TK" "build=$RESULTAT_BUILD"; do
+            cas="${entree#*=}"
+            if [ "$cas" != "success" ]; then
+              echecs="$echecs ${entree%%=*}($cas)"
+            fi
+          done
+          if [ -n "$echecs" ]; then
+            echo "::error::job(s) requis non réussis :$echecs"
+            exit 1
+          fi
+          echo "Les trois jobs requis ont réussi."
