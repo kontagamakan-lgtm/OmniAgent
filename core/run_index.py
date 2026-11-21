@@ -72,6 +72,11 @@ _APPEND_ATTEMPTS = 6
 _APPEND_BACKOFF_S = 0.02
 #: Verrou visé à chaque essai : court, puisque l'essai est répété.
 _APPEND_LOCK_TIMEOUT_S = 2.0
+#: Journal des états qu'on n'a pas réussi à écrire : un échec après tous les
+#: essais laissait une ligne de log que personne ne lit. Écrire la perte dans
+#: un petit fichier la rend consultable (`--index-doctor`), donc réparable :
+#: une reconstruction depuis les traces retrouve l'état perdu.
+LOST_NAME = f"{INDEX_NAME}.lost"
 
 
 def _now() -> str:
@@ -179,7 +184,49 @@ class RunIndex:
             record.state,
             record.run_id,
         )
+        self._record_loss(record)
         return False
+
+    def lost_path(self) -> Path:
+        """Fichier qui trace les états définitivement non écrits."""
+        return self.path.with_name(LOST_NAME)
+
+    def _record_loss(self, record: RunRecord) -> None:
+        """Note la perte pour qu'elle soit visible et réparable.
+
+        Cette écriture peut échouer pour la même raison que la précédente ;
+        elle est alors seulement journalisée : rien ne doit faire échouer
+        l'exécution qui appelle l'index.
+        """
+        entry = {
+            "run_id": record.run_id,
+            "state": record.state,
+            "at": record.updated or _now(),
+        }
+        try:
+            with self.lost_path().open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except OSError:
+            logger.debug("perte d'état non journalisée", exc_info=True)
+
+    def lost_records(self) -> list[dict[str, Any]]:
+        """États perdus consignés, du plus ancien au plus récent."""
+        try:
+            text = self.lost_path().read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return []
+        entries: list[dict[str, Any]] = []
+        for line in text.splitlines():
+            body = line.strip()
+            if not body:
+                continue
+            try:
+                data = json.loads(body)
+            except ValueError:
+                continue
+            if isinstance(data, dict):
+                entries.append(data)
+        return entries
 
     def _lock_path(self) -> Path:
         return self.path.with_name(f"{self.path.name}.lock")

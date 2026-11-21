@@ -1,0 +1,44 @@
+version: 2
+
+# Les exigences sont épinglées (`==`) dans requirements*.txt : sans Dependabot,
+# une version figée ne bouge plus jamais et une faille connue resterait en place
+# jusqu'à ce que quelqu'un pense à la monter à la main. Dependabot ouvre la mise
+# à jour en PR, et ce sont les trois versions de Python du job `tests` qui
+# décident si elle passe — la même porte que pour un changement de code.
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "05:00"
+      timezone: "Europe/Paris"
+    open-pull-requests-limit: 5
+    # Une PR par famille de paquets plutôt qu'une par bibliothèque : la matrice
+    # tourne deux fois par jour et chaque PR la sollicite entièrement.
+    groups:
+      production:
+        dependency-type: "production"
+        update-types: ["minor", "patch"]
+      developpement:
+        dependency-type: "development"
+        update-types: ["minor", "patch"]
+    # Les montées majeures arrivent seules : elles cassent parfois l'API et
+    # méritent une relecture dédiée plutôt que d'être noyées dans un groupe.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+    labels:
+      - "dépendances"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "05:00"
+      timezone: "Europe/Paris"
+    open-pull-requests-limit: 3
+    labels:
+      - "dépendances"
+      - "ci"

@@ -1,0 +1,11 @@
+# Propriété des fichiers sensibles.
+#
+# Les workflows portent la protection de `master` (le nom du check agrégé) et
+# la chaîne de publication : une modification ici peut désarmer une garde sans
+# qu'aucun test ne s'en aperçoive. Ils demandent donc une relecture explicite.
+/.github/workflows/  @kontagamakan-lgtm
+/.github/CODEOWNERS  @kontagamakan-lgtm
+/.github/dependabot.yml  @kontagamakan-lgtm
+
+# Le reste du dépôt suit la même règle, tant qu'il n'y a qu'un mainteneur.
+*  @kontagamakan-lgtm
