@@ -214,3 +214,30 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+def test_http_vers_un_hote_distant_est_refuse() -> None:
+    """La clé et les prompts traverseraient le réseau en clair."""
+    settings = config.Settings()
+    settings.llm.base_url = "http://api.exemple.invalid/v1"
+    errors = [i for i in settings.validate() if i.level == "error"]
+    assert any(i.field == "llm.base_url" for i in errors), errors
+
+
+def test_http_sur_la_boucle_locale_reste_accepte() -> None:
+    settings = config.Settings()
+    settings.llm.backend = "openai_compatible"
+    settings.llm.base_url = "http://127.0.0.1:11434/v1"
+    errors = [i for i in settings.validate() if i.level == "error" and i.field == "llm.base_url"]
+    assert errors == []
+
+
+def test_l_index_semantique_refuse_le_clair_hors_localhost() -> None:
+    settings = config.Settings()
+    settings.embedding.base_url = "http://vecteurs.exemple.invalid/v1"
+    errors = [i for i in settings.validate() if i.level == "error"]
+    assert any(i.field == "embedding.base_url" for i in errors), errors
+
+    settings.embedding.base_url = "http://localhost:11434"
+    errors = [i for i in settings.validate() if i.level == "error"]
+    assert not any(i.field == "embedding.base_url" for i in errors), errors

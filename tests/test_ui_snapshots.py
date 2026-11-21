@@ -11,6 +11,11 @@ régénérer après une évolution volontaire :
 l'utilise pour ses propres baselines (rendu du runner, DPI et thème différents
 de ceux d'un poste de travail) sans jamais écraser les références locales.
 
+La capture est prise par région d'écran : une autre fenêtre posée sur celle de
+l'application remplacerait son contenu sans que rien ne le signale. Les
+snapshots passent donc la fenêtre au premier plan et vérifient par OCR que
+l'image contient bien « OmniAgent » avant de la comparer.
+
 Une référence manquante n'est jamais un succès : la capture est enregistrée,
 puis le test échoue en demandant de la committer. En cas d'écart, la capture
 réelle et l'image de différence sont écrites dans
@@ -23,6 +28,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import unicodedata
 from pathlib import Path
 
 import pytest
@@ -75,6 +81,36 @@ def _assert_real(image) -> None:
     assert ImageStat.Stat(image.convert("L")).stddev[0] > 8.0
 
 
+def _normalize(text: str) -> str:
+    folded = unicodedata.normalize("NFKD", str(text))
+    return "".join(char for char in folded if not unicodedata.combining(char)).lower()
+
+
+def _ocr_omniagent(image) -> tuple[bool, str]:
+    """La capture montre-t-elle bien la fenêtre OmniAgent ?
+
+    L'image est prise par région d'écran : si un autre programme la recouvre,
+    elle contient son contenu et la comparaison échouerait pour une raison qui
+    n'a rien à voir avec le rendu de l'application.
+    """
+    import tesserocr
+    from PIL import ImageOps
+
+    data = ROOT / "assets" / "tessdata"
+    with tesserocr.PyTessBaseAPI(path=str(data), lang="eng") as api:
+        api.SetImage(ImageOps.grayscale(image))
+        text = api.GetUTF8Text()
+    return "omniagent" in _normalize(text), text
+
+
+def _bring_to_front(window) -> None:
+    """Place la fenêtre au-dessus des autres avant la capture."""
+    window.lift()
+    window.attributes("-topmost", True)
+    window.focus_force()
+    settle(window, rounds=2, delay=0.15)
+
+
 def _record_actuals(name: str, actual, *, difference=None) -> Path:
     """Écrit la capture réelle hors des références, pour l'artefact CI."""
     ACTUALS.mkdir(parents=True, exist_ok=True)
@@ -91,9 +127,18 @@ def _capture(geometry: str, name: str, font_size: int = 13) -> None:
         try:
             window.geometry(geometry + "+0+0")
             settle(window, rounds=4, delay=0.12)
-            x, y = window.winfo_rootx(), window.winfo_rooty()
-            w, h = window.winfo_width(), window.winfo_height()
-            image = _image_grab((x, y, x + w, y + h))
+            for _attempt in range(3):
+                _bring_to_front(window)
+                x, y = window.winfo_rootx(), window.winfo_rooty()
+                w, h = window.winfo_width(), window.winfo_height()
+                image = _image_grab((x, y, x + w, y + h))
+                shows_omniagent, seen = _ocr_omniagent(image)
+                if shows_omniagent:
+                    break
+            assert shows_omniagent, (
+                "la capture ne montre pas la fenêtre OmniAgent : une autre "
+                f"fenêtre la recouvre (OCR : {seen.strip()[:200]!r})"
+            )
             _assert_real(image)
             SNAPSHOTS.mkdir(parents=True, exist_ok=True)
             baseline = SNAPSHOTS / f"{name}.png"
