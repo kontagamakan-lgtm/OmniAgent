@@ -28,6 +28,14 @@ updates:
     ignore:
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
+      # numpy 2.5 exige Python >= 3.12, alors que le plancher du projet reste
+      # 3.11 (matrice de tests et en-tête de requirements.txt). Sans cette
+      # règle, Dependabot rouvre la même PR chaque semaine pour un échec de
+      # résolution garanti sur la jambe 3.11. Les correctifs 2.4.x continuent
+      # d'arriver : seule la branche 2.5 et au-delà est ignorée. Retirer cette
+      # règle le jour où le plancher Python monte à 3.12.
+      - dependency-name: "numpy"
+        versions: [">=2.5"]
     labels:
       - "dépendances"
 
