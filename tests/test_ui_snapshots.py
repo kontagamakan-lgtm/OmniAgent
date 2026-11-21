@@ -33,15 +33,19 @@ from support import tmpdir  # noqa: E402
 from ui_harness import make_window, settings_for_ui, settle  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
-#: Cas couverts. `appearance` suit `UIConfig.appearance` : le thème par défaut
-#: est sombre, mais `light` passe par le même `theme.json` et mérite donc sa
-#: propre référence. Le troisième format sort du couple minimum/normal pour
-#: voir le rendu des panneaux quand la fenêtre est nettement plus large.
+#: Cas couverts. Le troisième format sort du couple minimum/normal pour voir
+#: le rendu des panneaux quand la fenêtre est nettement plus large ; le
+#: quatrième grossit la police au minimum de fenêtre, ce qui bascule sur la
+#: barre de défilement latérale (`test_large_font_gets_a_scrollable_sidebar`).
+#:
+#: Le thème clair n'a volontairement pas son propre cas : `assets/theme.json`
+#: fixe les couleurs des deux modes, et deux captures sombre/clair au même
+#: format différaient de 0,003/255 — une référence qui n'apporte rien.
 VIEWPORTS = (
-    ("compact_900x620", "900x620", "dark"),
-    ("normal_1280x860", "1280x860", "dark"),
-    ("large_1600x1000", "1600x1000", "dark"),
-    ("light_1280x860", "1280x860", "light"),
+    ("compact_900x620", "900x620", {"font_size": 13}),
+    ("normal_1280x860", "1280x860", {"font_size": 13}),
+    ("large_1600x1000", "1600x1000", {"font_size": 13}),
+    ("large_font_900x620", "900x620", {"font_size": 28}),
 )
 SNAPSHOTS = Path(
     os.environ.get("OMNIAGENT_UI_SNAPSHOT_DIR", ROOT / "artifacts" / "ui")
@@ -81,11 +85,9 @@ def _record_actuals(name: str, actual, *, difference=None) -> Path:
     return path
 
 
-def _capture(geometry: str, name: str, appearance: str = "dark") -> None:
+def _capture(geometry: str, name: str, font_size: int = 13) -> None:
     with tmpdir(f"ui-snapshot-{name}") as tmp:
-        settings = settings_for_ui(tmp)
-        settings.ui.appearance = appearance
-        window = make_window(settings)
+        window = make_window(settings_for_ui(tmp, font_size=font_size))
         try:
             window.geometry(geometry + "+0+0")
             settle(window, rounds=4, delay=0.12)
@@ -129,9 +131,9 @@ def _capture(geometry: str, name: str, appearance: str = "dark") -> None:
             window._on_close()
 
 
-@pytest.mark.parametrize(("name", "geometry", "appearance"), VIEWPORTS)
-def test_snapshot(name: str, geometry: str, appearance: str) -> None:
-    _capture(geometry, name, appearance)
+@pytest.mark.parametrize(("name", "geometry", "options"), VIEWPORTS)
+def test_snapshot(name: str, geometry: str, options: dict) -> None:
+    _capture(geometry, name, **options)
 
 
 def test_snapshot_manifest_is_descriptive() -> None:
@@ -139,8 +141,8 @@ def test_snapshot_manifest_is_descriptive() -> None:
         pytest.skip("snapshots non générés")
     manifest = {
         "capture_backend": "PIL.ImageGrab",
-        "viewport": [geometry for _name, geometry, _mode in VIEWPORTS],
-        "appearance": [appearance for _name, _geometry, appearance in VIEWPORTS],
+        "viewport": [geometry for _name, geometry, _options in VIEWPORTS],
+        "font_size": [options["font_size"] for _name, _geometry, options in VIEWPORTS],
         "screens": sorted(path.name for path in SNAPSHOTS.glob("*.png")),
         "note": "captures locales, comparées avec une tolérance moyenne de 1/255",
     }
@@ -149,5 +151,5 @@ def test_snapshot_manifest_is_descriptive() -> None:
         path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     loaded = json.loads(path.read_text(encoding="utf-8"))
     assert loaded["capture_backend"] == "PIL.ImageGrab"
-    for name, _geometry, _appearance in VIEWPORTS:
+    for name, _geometry, _options in VIEWPORTS:
         assert f"{name}.png" in loaded["screens"], name

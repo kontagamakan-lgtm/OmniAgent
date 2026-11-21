@@ -4,18 +4,18 @@
     "900x620",
     "1280x860",
     "1600x1000",
-    "1280x860"
+    "900x620"
   ],
-  "appearance": [
-    "dark",
-    "dark",
-    "dark",
-    "light"
+  "font_size": [
+    13,
+    13,
+    13,
+    28
   ],
   "screens": [
     "compact_900x620.png",
     "large_1600x1000.png",
-    "light_1280x860.png",
+    "large_font_900x620.png",
     "normal_1280x860.png"
   ],
   "note": "captures du runner, compar\u00e9es avec une tol\u00e9rance moyenne de 1/255"
