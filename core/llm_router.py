@@ -908,7 +908,7 @@ class LLMRouter:
             payload["tool_choice"] = "auto"
         headers = {"Content-Type": "application/json", "Authorization": f"Bearer {key}"}
         if spec.provider == "openrouter":
-            headers["HTTP-Referer"] = "https://github.com/kontagafamakan98-rgb/OmniAgent"
+            headers["HTTP-Referer"] = "https://github.com/kontagamakan-lgtm/OmniAgent"
             headers["X-Title"] = APP_ID
         status, body, response_headers = self._post(
             f"{provider.base_url.rstrip('/')}/chat/completions", headers, payload

@@ -5,7 +5,7 @@
 #define MyAppName "OmniAgent Windows"
 #define MyAppExeName "OmniAgent.exe"
 #define MyAppPublisher "OmniAgent"
-#define MyAppURL "https://github.com/kontagafamakan98-rgb/OmniAgent"
+#define MyAppURL "https://github.com/kontagamakan-lgtm/OmniAgent"
 
 [Setup]
 AppId={{F1969E65-B925-4A1F-A8A9-5D2FB090F276}
