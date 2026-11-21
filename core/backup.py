@@ -124,7 +124,7 @@ def create_backup(
     )
     destination.parent.mkdir(parents=True, exist_ok=True)
     files = _collect(settings)
-    manifest = {
+    manifest: dict[str, Any] = {
         "format": 1,
         "app": APP_ID,
         "trace_format": TRACE_FORMAT_VERSION,
@@ -222,8 +222,8 @@ def inspect_backup(
                     problems.append(f"{name} : illisible ({exc})")
             elif name.name == "runs.index":
                 try:
-                    raw = archive.read(str(name)).decode("utf-8", errors="replace")
-                    for line in raw.splitlines():
+                    index_text = archive.read(str(name)).decode("utf-8", errors="replace")
+                    for line in index_text.splitlines():
                         if line.strip():
                             json.loads(line)
                 except (KeyError, OSError, ValueError, zipfile.BadZipFile) as exc:
