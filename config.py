@@ -408,6 +408,9 @@ class LLMConfig:
     stream: bool = True
     max_retries: int = 4
     retry_backoff_s: float = 2.0
+    #: Plafond d'appels au fournisseur par minute, rafale incluse. 0 = aucun
+    #: plafond : la cadence est alors celle des reprises et du fournisseur.
+    max_requests_per_minute: int = 0
     force_json_tool_calls: bool = True
     ollama_base_url: str = "http://127.0.0.1:11434"
     ollama_keep_alive: str = "15m"
@@ -1125,6 +1128,11 @@ class Settings:
             err("llm.request_timeout_s", "doit être >= 10 secondes")
         if not (0 <= llm.max_retries <= 10):
             err("llm.max_retries", "doit être comprise entre 0 et 10")
+        if not (0 <= llm.max_requests_per_minute <= 120):
+            err(
+                "llm.max_requests_per_minute",
+                "doit être comprise entre 0 (aucun plafond) et 120",
+            )
         if llm.backend != "ollama":
             if not llm.base_url.startswith(("http://", "https://")):
                 err("llm.base_url", "URL http(s) attendue")
