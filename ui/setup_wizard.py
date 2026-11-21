@@ -2,16 +2,16 @@
 
 Un nouvel utilisateur lançait l'exécutable devant une fenêtre qui répondait
 « clé absente » à chaque envoi, sans moyen de la renseigner. Cet assistant
-recueille les quatre réglages indispensables — clé API, dossier de travail,
-canal du navigateur, phrase du coffre — puis les persiste :
+recueille les quatre réglages indispensables - clé API, dossier de travail,
+canal du navigateur, phrase du coffre - puis les persiste :
 
-* clé API  → variable d'environnement du fournisseur (``llm.api_key_env``) et
+* clé API  -> variable d'environnement du fournisseur (``llm.api_key_env``) et
   fichier ``.env`` du répertoire d'installation (jamais ``config.json``) ;
-* dossier  → ajouté à ``files.allowed_roots`` (le confinement du
+* dossier  -> ajouté à ``files.allowed_roots`` (le confinement du
   ``FileManager`` le prend en compte au démarrage suivant) ;
-* canal    → ``browser.channel`` (``""`` = Chromium embarqué, sinon Edge/Chrome
+* canal    -> ``browser.channel`` (``""`` = Chromium embarqué, sinon Edge/Chrome
   du système) ;
-* coffre   → créé avec la phrase saisie s'il n'existe pas déjà.
+* coffre   -> créé avec la phrase saisie s'il n'existe pas déjà.
 
 La logique de validation vit dans `apply_setup`, sans dépendance à Tk, pour
 être testable ; `run_setup` n'est que la fenêtre.
@@ -35,7 +35,7 @@ __all__ = [
 
 logger = logging.getLogger(f"{APP_ID}.setup")
 
-#: Canaux proposés : libellé affiché → valeur de `browser.channel`.
+#: Canaux proposés : libellé affiché -> valeur de `browser.channel`.
 CHANNELS: tuple[tuple[str, str], ...] = (
     ("Automatique (Chromium embarqué, sinon Edge)", ""),
     ("Microsoft Edge", "msedge"),
@@ -240,7 +240,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             super().__init__(parent)  # type: ignore[arg-type]
             self.settings = settings
             self.saved = False
-            self.title("Configuration initiale — OmniAgent")
+            self.title("Configuration initiale - OmniAgent")
             self.geometry("620x520")
             self.resizable(False, False)
             self.transient(parent)  # type: ignore[arg-type]
