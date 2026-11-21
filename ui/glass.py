@@ -69,7 +69,7 @@ def apply_glass_backdrop(window: Any, *, acrylic: bool = True, tint: int = 0) ->
 
         # Teinte nulle par défaut : sans elle, DWM ne floute que ce qui est
         # **derrière** la fenêtre. Une teinte, même à alpha faible, s'applique à
-        # toute la surface et assombrit chaque pixel de la fenêtre — mesuré en
+        # toute la surface et assombrit chaque pixel de la fenêtre - mesuré en
         # CI : 16/255 d'écart uniforme sur les quatre références de snapshots.
         policy = AccentPolicy(
             _ACCENT_ENABLE_ACRYLICBLURBEHIND if acrylic else _ACCENT_ENABLE_BLURBEHIND,

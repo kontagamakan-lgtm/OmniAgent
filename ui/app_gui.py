@@ -2,7 +2,7 @@
 
 Le module s'importe même sans customtkinter installé : `available()` renvoie
 alors False et `run_gui()` explique quoi installer. Rien de la logique de
-l'agent ne vit ici — la fenêtre ne fait qu'afficher les événements du
+l'agent ne vit ici - la fenêtre ne fait qu'afficher les événements du
 `AgentController` et transmettre les actions de l'utilisateur.
 """
 
@@ -417,12 +417,11 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             command: Any,
             *,
             active: bool = False,
-            glyph: str = "·",
         ) -> Any:
             """Entrée de la barre latérale, avec l'état actif de la maquette."""
             button = self._button(
                 parent,
-                f"{glyph}   {text}",
+                f"    {text}",
                 command,
                 ghost=True,
                 width=190,
@@ -526,13 +525,6 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             brand.pack(fill="x", padx=16, pady=(28, 0))
             self.side_brand = brand
             ctk.CTkLabel(
-                brand,
-                text="◆",
-                width=34,
-                font=self._font(8, "bold"),
-                text_color=self._accent,
-            ).pack(side="left")
-            ctk.CTkLabel(
                 brand, text="Omni", font=self._font(8, "bold"), text_color=_UI_TEXT
             ).pack(side="left")
             ctk.CTkLabel(
@@ -551,15 +543,8 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             )
             workspace_switch.pack(fill="x", padx=16, pady=(28, 22))
             self.workspace_switch = workspace_switch
-            ctk.CTkLabel(
-                workspace_switch,
-                text="▦",
-                width=28,
-                font=self._font(2),
-                text_color=self._accent,
-            ).pack(side="left", padx=(10, 8), pady=10)
             workspace_text = ctk.CTkFrame(workspace_switch, fg_color="transparent")
-            workspace_text.pack(side="left", pady=9)
+            workspace_text.pack(side="left", padx=(14, 8), pady=9)
             ctk.CTkLabel(
                 workspace_text,
                 text="Espace personnel",
@@ -591,16 +576,15 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 "Assistant",
                 self._focus_composer,
                 active=True,
-                glyph="◆",
             )
             self._nav(
-                primary_nav, "Historique", self._open_journal, glyph="◷"
+                primary_nav, "Historique", self._open_journal
             )
             self._nav(
-                primary_nav, "Planificateur", self._open_scheduler, glyph="↻"
+                primary_nav, "Planificateur", self._open_scheduler
             )
             self._nav(
-                primary_nav, "Propositions", self._open_proposals, glyph="✦"
+                primary_nav, "Propositions", self._open_proposals
             )
 
             self.config_label = ctk.CTkLabel(
@@ -614,25 +598,23 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             config_nav = ctk.CTkFrame(side, fg_color="transparent")
             config_nav.pack(fill="x", padx=12)
             self._nav(
-                config_nav, "Autonomie", self._toggle_autonomy, glyph="⌁"
+                config_nav, "Autonomie", self._toggle_autonomy
             )
             self._nav(
-                config_nav, "Évolution", self._open_evolution, glyph="⚡"
+                config_nav, "Évolution", self._open_evolution
             )
             self._nav(
-                config_nav, "Clés & modèles", self._open_keys, glyph="⌘"
+                config_nav, "Clés & modèles", self._open_keys
             )
             self._nav(
                 config_nav,
                 "Directives",
                 self._open_prime_directive,
-                glyph="▤",
             )
             self._nav(
                 config_nav,
                 "Configuration initiale",
                 self._open_assistant,
-                glyph="⚙",
             )
 
             sidebar_bottom = ctk.CTkFrame(side, fg_color="transparent")
@@ -687,7 +669,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             crumbs.grid(row=0, column=0, sticky="w")
             ctk.CTkLabel(
                 crumbs,
-                text="▦  Espace de travail",
+                text="Espace de travail",
                 font=self._font(-2),
                 text_color="#89958D",
             ).pack(side="left")
@@ -804,24 +786,14 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
 
             stat_agent = self._card(summary)
             stat_agent.grid(row=0, column=0, sticky="nsew", padx=(0, 7))
-            stat_agent.grid_columnconfigure(1, weight=1)
-            ctk.CTkLabel(
-                stat_agent,
-                text="◆",
-                width=38,
-                height=38,
-                corner_radius=8,
-                fg_color="#232B24",
-                text_color="#A6BBA5",
-                font=self._font(2, "bold"),
-            ).grid(row=0, column=0, rowspan=2, padx=(14, 11), pady=14)
+            stat_agent.grid_columnconfigure(0, weight=1)
             ctk.CTkLabel(
                 stat_agent,
                 text="Statut de l'agent",
                 font=self._font(-3),
                 text_color="#96A197",
                 anchor="w",
-            ).grid(row=0, column=1, sticky="sw", pady=(14, 0))
+            ).grid(row=0, column=0, sticky="sw", padx=(14, 11), pady=(14, 0))
             self.status = ctk.CTkLabel(
                 stat_agent,
                 text="Prêt à travailler",
@@ -831,7 +803,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 justify="left",
                 wraplength=240,
             )
-            self.status.grid(row=1, column=1, sticky="nw", pady=(2, 14))
+            self.status.grid(row=1, column=0, sticky="nw", padx=(14, 11), pady=(2, 14))
 
             stat_tasks = self._card(summary)
             stat_tasks.grid(row=0, column=1, sticky="nsew", padx=7)
@@ -920,7 +892,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             panel_header.grid_columnconfigure(0, weight=1)
             ctk.CTkLabel(
                 panel_header,
-                text="✦  Votre assistant",
+                text="Votre assistant",
                 font=self._font(-2, "bold"),
                 text_color=_UI_TEXT,
                 anchor="w",
@@ -953,7 +925,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             self.welcome_center = welcome_center
             self.welcome_icon = ctk.CTkLabel(
                 welcome_center,
-                text="◆",
+                text="O",
                 width=58,
                 height=58,
                 corner_radius=17,
@@ -1055,7 +1027,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             ).pack(side="left")
             self.send_button = self._button(
                 composer_bottom,
-                "Envoyer  →",
+                "Envoyer",
                 self._send,
                 primary=True,
                 width=105,
@@ -1216,7 +1188,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             self.footer = footer
             ctk.CTkLabel(
                 footer,
-                text="◇  Vos données restent sur votre machine. Votre confiance, notre priorité.",
+                text="Vos données restent sur votre machine.",
                 font=self._font(-4),
                 text_color="#5E6C60",
                 anchor="w",
@@ -1492,7 +1464,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             if saved:
                 self._append(
                     "système",
-                    "assistant : réglages enregistrés — clé active tout de suite, "
+                    "assistant : réglages enregistrés - clé active tout de suite, "
                     "dossier et canal au prochain démarrage",
                 )
             else:
@@ -2021,7 +1993,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                     message = f"autonomie, cycle {record.get('cycle')} : {status}"
                     excerpt = str(record.get("excerpt") or "")
                     if excerpt:
-                        message += f" — {excerpt[:200]}"
+                        message += f" - {excerpt[:200]}"
                 self._autonomy_messages.put(message)
 
             try:
@@ -2559,7 +2531,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             if event.type == EventType.STEP_STARTED:
                 self._step = int(payload.get("index", self._step + 1) or 1)
                 self._set_status(
-                    f"étape {self._step}/{payload.get('max_steps', '?')} — réflexion…"
+                    f"étape {self._step}/{payload.get('max_steps', '?')} - réflexion…"
                 )
             elif event.type == EventType.TOOL_STARTED:
                 # L'étape agit : son texte était un préambule, pas une réponse.
@@ -2601,9 +2573,9 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 # pour une panne de mémoire.
                 self._append(
                     "système",
-                    f"contexte replié : {payload.get('before_messages', '?')} → "
+                    f"contexte replié : {payload.get('before_messages', '?')} -> "
                     f"{payload.get('after_messages', '?')} messages "
-                    f"(~{payload.get('before_tokens', '?')} → "
+                    f"(~{payload.get('before_tokens', '?')} -> "
                     f"{payload.get('after_tokens', '?')} tokens, "
                     f"{payload.get('summarized', 0)} résumé(s))",
                 )

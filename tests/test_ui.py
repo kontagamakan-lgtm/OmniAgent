@@ -507,8 +507,8 @@ def test_context_trim_report_is_written_in_the_transcript() -> None:
 
     text = widget.get("1.0", "end")
     assert "contexte replié" in text
-    assert "12 → 7 messages" in text
-    assert "900 → 420 tokens" in text
+    assert "12 -> 7 messages" in text
+    assert "900 -> 420 tokens" in text
     assert "5 résumé(s)" in text
 
 
@@ -529,7 +529,7 @@ def test_approval_dialog_uses_explicit_labels_and_refuses_by_default() -> None:
     assert approval_dialog.decision_for(None) == "deny"
     assert approval_dialog.decision_for("inconnu") == "deny"
     assert approval_dialog.dialog_title("fs_delete") == (
-        "Confirmation requise — fs_delete"
+        "Confirmation requise - fs_delete"
     )
 
 
