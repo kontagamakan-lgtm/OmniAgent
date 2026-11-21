@@ -10,7 +10,9 @@ et index sémantique local. Interface CustomTkinter, backend LLM interchangeable
 > `docs/OPERATIONS.md`, section « Limites connues et vérifications manuelles ».
 >
 > **Données et confidentialité** : ce qui reste sur la machine, ce qui en sort
-> et comment tout effacer — `docs/PRIVACY.md`.
+> et comment tout effacer - `docs/PRIVACY.md`.
+> **Conditions d'utilisation** : responsabilités, usage acceptable, garanties -
+> `docs/TERMS.md`.
 
 ---
 
@@ -36,20 +38,20 @@ et index sémantique local. Interface CustomTkinter, backend LLM interchangeable
 
 ```
 OmniAgent/
-├── app.py                     # ✔ LIVRABLE 5 — bootstrap, --task sans interface, --check
-├── config.py                  # ✔ LIVRABLE 1 — configuration typée + validation
+├── app.py                     # ✔ LIVRABLE 5 - bootstrap, --task sans interface, --check
+├── config.py                  # ✔ LIVRABLE 1 - configuration typée + validation
 ├── requirements.txt           # ✔ LIVRABLE 1
 ├── requirements-dev.txt
 ├── requirements-vector.txt    # sqlite-vec optionnel
-├── build.bat                  # ✔ LIVRABLE 5 — compilation en un clic
-├── OmniAgent.spec             # ✔ LIVRABLE 5 — recette PyInstaller (paquet complet)
+├── build.bat                  # ✔ LIVRABLE 5 - compilation en un clic
+├── OmniAgent.spec             # ✔ LIVRABLE 5 - recette PyInstaller (paquet complet)
 ├── OmniAgent-lite.spec        #    variante --lite (sans NumPy, Pillow conservé)
 ├── OmniAgent-slim.spec        #    alias local de --lite ; dossier « slim » non publié
 ├── .env.example / .gitignore / README.md
 ├── build_smoke/               # smoke tests des exécutables et de la boucle ReAct
 ├── assets/                    # icon.ico, theme.json, tessdata/
 ├── core/
-│   ├── agent_core.py          # LIVRABLE 4 — boucle ReAct, budget, approches, plan/critique
+│   ├── agent_core.py          # LIVRABLE 4 - boucle ReAct, budget, approches, plan/critique
 │   ├── llm_client.py          #    client OpenAI-compatible + Ollama (streaming)
 │   ├── prompts.py             #    system prompt action-first + templates
 │   ├── react_parser.py        #    parseur tolérant des appels d'outils
@@ -57,22 +59,22 @@ OmniAgent/
 │   ├── events.py              #    bus d'événements thread-safe vers l'UI
 │   └── errors.py              #    hiérarchie d'exceptions et politique de reprise
 ├── tools/
-│   ├── base.py                # ✔ LIVRABLE 2 — Tool ABC, ToolResult, validation JSON Schema
-│   ├── file_manager.py        # ✔ LIVRABLE 2 — FS confiné, recherche, renommage de masse
-│   ├── vault.py               # ✔ LIVRABLE 2 — coffre-fort chiffré + TOTP
-│   ├── browser_agent.py       # LIVRABLE 3 — Playwright, login, formulaires
-│   ├── web_search.py          # LIVRABLE 3 — multi-moteurs + extraction
+│   ├── base.py                # ✔ LIVRABLE 2 - Tool ABC, ToolResult, validation JSON Schema
+│   ├── file_manager.py        # ✔ LIVRABLE 2 - FS confiné, recherche, renommage de masse
+│   ├── vault.py               # ✔ LIVRABLE 2 - coffre-fort chiffré + TOTP
+│   ├── browser_agent.py       # LIVRABLE 3 - Playwright, login, formulaires
+│   ├── web_search.py          # LIVRABLE 3 - multi-moteurs + extraction
 │   ├── doc_index.py           #    RAG : découpage, FTS5, vecteurs
 │   ├── obsidian.py            #    vault Markdown, liens, mémoire automatique
 │   ├── ocr.py                 #    OCR images / PDF scannés (Tesseract)
 │   └── shell.py               #    exécution PowerShell/cmd contrôlée
 ├── security/
-│   ├── crypto.py              # ✔ LIVRABLE 2 — Argon2id/scrypt + AES-256-GCM
-│   └── redaction.py           # ✔ LIVRABLE 2 — masquage des secrets (logs + UI)
+│   ├── crypto.py              # ✔ LIVRABLE 2 - Argon2id/scrypt + AES-256-GCM
+│   └── redaction.py           # ✔ LIVRABLE 2 - masquage des secrets (logs + UI)
 ├── ui/
 │   ├── approval_dialog.py     # boîte Autoriser une fois / session / Refuser
-│   ├── controller.py          # ✔ LIVRABLE 5 — AgentCore dans un thread, file d'événements
-│   └── app_gui.py             # ✔ LIVRABLE 5 — fenêtre CustomTkinter (chat + journal d'outils)
+│   ├── controller.py          # ✔ LIVRABLE 5 - AgentCore dans un thread, file d'événements
+│   └── app_gui.py             # ✔ LIVRABLE 5 - fenêtre CustomTkinter (chat + journal d'outils)
 ├── tests/                     # suite pytest; tests opt-in ignorés par défaut
 └── data/                      # généré à l'exécution, ignoré par git
     ├── config.json            #    configuration persistée
@@ -95,11 +97,11 @@ copy .env.example .env
 
 Prérequis externes :
 
-- **Tesseract OCR** — **plus nécessaire** : les paquets embarquent le moteur
+- **Tesseract OCR** - **plus nécessaire** : les paquets embarquent le moteur
   `tesserocr` (Tesseract 5.5 + Leptonica en DLL) et les données `eng`/`fra`, donc
   `ocr_image` fonctionne sans rien installer. Le binaire système reste utile
   pour d'autres langues, ou pour profiter des données déjà présentes :
-  installeur Windows officiel —
+  installeur Windows officiel -
   <https://github.com/UB-Mannheim/tesseract/wiki> (builds UB Mannheim). Après
   installation, soit `tesseract` est dans le `PATH`, soit on renseigne la clé
   `files.tesseract_cmd` dans `data\config.json` :
@@ -234,7 +236,7 @@ contexte de la tâche.
 Les scores de base (matrice `CATALOGUE`) sont ajustés de ±8 points par les
 mesures réelles de réussite, de latence et de tokens/seconde. Le moteur
 d'auto-évolution recalcule ce classement à chaque cycle et le consigne dans
-Obsidian (`Classement LLM — date`). Le streaming est désactivé quand le routeur
+Obsidian (`Classement LLM - date`). Le streaming est désactivé quand le routeur
 est actif : un flux déjà affiché ne peut pas être rejoué sur un autre modèle
 sans dupliquer le texte ; l'agent utilise donc `complete` et conserve la bascule.
 
@@ -246,7 +248,7 @@ les journaux, les erreurs ou le fichier d'état.
 ## Assistant de premier démarrage
 
 Au lancement, si aucune clé n'est disponible pour le fournisseur, la fenêtre
-ouvre **Configuration initiale — OmniAgent** en modal au-dessus d'elle. Le
+ouvre **Configuration initiale - OmniAgent** en modal au-dessus d'elle. Le
 bouton **Plus tard** referme l'assistant : l'interface reste utilisable, mais
 chaque envoi échouera tant qu'aucune clé n'est renseignée.
 
@@ -300,7 +302,7 @@ dossier `dist\OmniAgent-slim` continuent de fonctionner pour les scripts
 existants, avec exactement le contenu de la variante allégée (mêmes exclusions,
 même poids). Il n'est en revanche **plus publié** : `OmniAgent-slim.zip` a
 quitté les assets de release, puisque c'était le paquet de `OmniAgent-lite.zip`
-sous un autre nom — environ 80 Mio de doublon par version. Qui téléchargeait le
+sous un autre nom - environ 80 Mio de doublon par version. Qui téléchargeait le
 zip « slim » prend `OmniAgent-lite.zip`. Les releases déjà publiées gardent
 leur asset : rien n'est retiré rétroactivement.
 
@@ -380,7 +382,7 @@ Autres options :
 - `build.bat --no-smoke` : compile sans démarrer l'exécutable ; combinable avec
   `--lite` et `--slim`.
 - `build.bat --all` : construit le paquet **complet puis l'allégé** et lance le
-  contrôle de fumée sur les deux exécutables — une seule commande valide les
+  contrôle de fumée sur les deux exécutables - une seule commande valide les
   deux variantes. Comme le paquet complet nettoie tout `dist\`, l'état final
   contient `dist\OmniAgent` et `dist\OmniAgent-lite` ; ajouter `--no-smoke`
   saute les deux lancements.
@@ -391,7 +393,7 @@ Autres options :
 > (`dist\OmniAgent-lite`, `dist\OmniAgent-slim`) : les paquets déjà présents
 > restent en place et peuvent coexister. En fin de compilation,
 > le script affiche le poids du paquet produit (Mio et nombre de fichiers),
-> mesure faite par Python — inutile de la calculer à la main.
+> mesure faite par Python - inutile de la calculer à la main.
 
 ### Dépendances de la cible pour les outils `browser_*`
 
@@ -408,13 +410,13 @@ du système** qui pilote Chromium.
   `_internal/playwright/driver`, d'où Playwright déduirait un cache local vide
   (`driver/package/.local-browsers`). `ensure_browsers_path` force donc
   `PLAYWRIGHT_BROWSERS_PATH` vers `%LOCALAPPDATA%\ms-playwright` (jamais si la
-  variable est déjà définie) — sans quoi le paquet ne trouverait aucun
+  variable est déjà définie) - sans quoi le paquet ne trouverait aucun
   navigateur alors que la machine en a un.
 - **Microsoft Edge ou Google Chrome** installé : aucun navigateur n'est
   fourni dans le paquet. Quand `browser.channel` vaut `""` ou `"bundled"` et
   qu'aucun Chromium Playwright n'est présent dans son cache
   (`%LOCALAPPDATA%\ms-playwright`), `resolved_channel` choisit automatiquement
-  le navigateur système (`msedge` puis `chrome`) — aucune édition manuelle de
+  le navigateur système (`msedge` puis `chrome`) - aucune édition manuelle de
   `data/config.json` n'est nécessaire. Un canal explicite (`msedge`, `chrome`)
   reste prioritaire et désactive la détection.
 - Si **aucun** navigateur n'est trouvé (ni cache Playwright, ni Edge, ni
@@ -460,7 +462,7 @@ set OMNIAGENT_FILES_ALLOWED_ROOTS=C:\Docs;D:\Projets
 | 4 | `core/agent_core.py`, `llm_client.py`, `prompts.py`, `react_parser.py`, `tool_registry.py`, `events.py`, `errors.py` | livré |
 | 5 | `ui/app_gui.py`, `ui/controller.py`, `app.py`, `build.bat`, `OmniAgent.spec` | livré |
 
-### Livrable 4 — vérification de la boucle
+### Livrable 4 - vérification de la boucle
 
 En plus de la suite pytest, un smoke test autonome exerce la boucle complète
 sans réseau ni données utilisateur : planification facultative, appel d'outil,
@@ -477,7 +479,7 @@ un appel LLM et chaque passe de critique en ajoute un.
 
 ---
 
-## Livrable 2 — coffre-fort et gestion de fichiers
+## Livrable 2 - coffre-fort et gestion de fichiers
 
 ### Format du conteneur `vault.enc`
 
@@ -504,10 +506,10 @@ invalide le tag GCM. Un conteneur forgé qui tenterait d'imposer un Argon2id à
 | Phrase secrète jamais persistée **par défaut** | Seule la clé dérivée reste en mémoire, dans un `bytearray` effacé au verrouillage. Exception opt-in : `vault.keyring_fallback` (désactivé par défaut) délègue explicitement la phrase au Gestionnaire d'identifiants Windows |
 | Pas de re-dérivation à chaque écriture | La clé est réutilisée avec un nonce neuf (`seal_with_key`) |
 | Anti-bruteforce | Argon2id 64 Mio / t=3 / p=4 ; compteur d'échecs persisté + verrouillage à backoff exponentiel (15 s → 300 s) |
-| Secrets jamais renvoyés au modèle | `vault_get_entry` masque par défaut ; `reveal=true`, `vault_totp` et `vault_generate_password` marquent le résultat `sensitive`, que `ToolResult.to_text()` / `to_dict()` refusent alors de sérialiser (un `safe_summary` — service, durée de validité, longueur — remplace la valeur). `extract_cookies` n'expose qu'un résumé (nombre, domaines, noms), valeurs retenues en local. Les notes d'une entrée (`entry.public()`) sont masquées elles aussi : du texte libre peut contenir un secret collé |
-| Journal d'audit | JSONL (création, déverrouillage, ajout, accès, suppression) — aucun secret, lignes passées au `Redactor` |
+| Secrets jamais renvoyés au modèle | `vault_get_entry` masque par défaut ; `reveal=true`, `vault_totp` et `vault_generate_password` marquent le résultat `sensitive`, que `ToolResult.to_text()` / `to_dict()` refusent alors de sérialiser (un `safe_summary` - service, durée de validité, longueur - remplace la valeur). `extract_cookies` n'expose qu'un résumé (nombre, domaines, noms), valeurs retenues en local. Les notes d'une entrée (`entry.public()`) sont masquées elles aussi : du texte libre peut contenir un secret collé |
+| Journal d'audit | JSONL (création, déverrouillage, ajout, accès, suppression) - aucun secret, lignes passées au `Redactor` |
 | 2FA | TOTP RFC 6238 implémenté en stdlib (HMAC-SHA1), validé contre les vecteurs de test officiels |
-| Remplacement forcé | `create(force=True)` copie le conteneur existant en `vault.enc.<horodatage>.bak` avant écrasement — aucune perte si la phrase secrète est oubliée |
+| Remplacement forcé | `create(force=True)` copie le conteneur existant en `vault.enc.<horodatage>.bak` avant écrasement - aucune perte si la phrase secrète est oubliée |
 
 ### Confinement des outils fichiers
 
@@ -532,10 +534,10 @@ est protégée contre la traversée de répertoire, et un renommage de masse qui
 
 Chaque outil déclare un JSON Schema strict (`additionalProperties: false`) ;
 `tools/base.py` valide les arguments et renvoie toujours un `ToolResult`
-structuré — jamais une exception non gérée — pour que la boucle ReAct puisse
+structuré - jamais une exception non gérée - pour que la boucle ReAct puisse
 analyser l'échec et changer de stratégie.
 
-Les capacités de chaque outil — lecture ou écriture, danger, secret — sont
+Les capacités de chaque outil - lecture ou écriture, danger, secret - sont
 déclarées une seule fois dans `tools/capabilities.py`. `build_agent` compare
 cette table aux outils construits et refuse de démarrer si un outil n'y figure
 pas ou si ses drapeaux divergent du contrat.
