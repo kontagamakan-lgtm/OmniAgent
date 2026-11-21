@@ -3,8 +3,10 @@ rem ===========================================================================
 rem  OmniAgent Windows - compilation de l'executable (PyInstaller)
 rem  Usage : build.bat              (paquet complet + controle de fumee)
 rem          build.bat --lite       (paquet allege, sans NumPy)
-rem          build.bat --slim       (alias de --lite : meme paquet, produit
-rem                                  dans dist\OmniAgent-slim ; Node.js n'est
+rem          build.bat --slim       (alias historique de --lite : meme paquet,
+rem                                  produit dans dist\OmniAgent-slim pour les
+rem                                  scripts existants ; ce dossier n'est plus
+rem                                  publie dans les releases ; Node.js n'est
 rem                                  jamais embarque)
 rem          build.bat --check      (verifie seulement l'environnement)
 rem          build.bat --all        (paquets complet ET allege, puis controle
@@ -113,7 +115,7 @@ if /i "%VARIANT%"=="slim" (
     rem scripts qui pointent sur dist\OmniAgent-slim.
     set "SPEC=OmniAgent-slim.spec"
     set "OUTDIR=dist\OmniAgent-slim"
-    set "LABEL=slim (alias de lite : sans NumPy, sans Node.js embarque)"
+    set "LABEL=slim (alias local de lite : sans NumPy, sans Node.js embarque, non publie)"
 ) else if /i "%VARIANT%"=="lite" (
     set "SPEC=OmniAgent-lite.spec"
     set "OUTDIR=dist\OmniAgent-lite"
@@ -125,6 +127,7 @@ if /i "%VARIANT%"=="slim" (
     set "LABEL=complet"
 )
 set "EXE=%OUTDIR%\OmniAgent.exe"
+if /i "%VARIANT%"=="slim" echo [OmniAgent] Note : slim est un alias local de --lite, non publie dans les releases.
 
 echo [OmniAgent] Nettoyage des sorties precedentes...
 if exist build rmdir /s /q build

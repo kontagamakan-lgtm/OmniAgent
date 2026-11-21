@@ -235,16 +235,12 @@ jobs:
           PYTHONUTF8: "1"
         run: build.bat --all --no-smoke
 
-      # L'alias --slim est utilisé par d'anciens scripts : le construire ici
-      # garantit qu'il ne casse pas sans que personne ne s'en aperçoive. Il ne
-      # touche que dist\OmniAgent-slim et reprend la recette de --lite.
-      - name: Construire l'alias --slim
-        shell: cmd
-        env:
-          PYTHONUTF8: "1"
-        run: |
-          build.bat --slim --no-smoke || exit /b 1
-          if not exist dist\OmniAgent-slim\OmniAgent.exe exit /b 1
+      # L'alias --slim n'est plus compilé ici : slim n'est plus publié, et sa
+      # recette reprend exactement celle de --lite — la compiler en plus coûtait
+      # une construction complète et trois contrôles de fumée à chaque exécution.
+      # Le câblage de l'option (option acceptée, recette et dossier propres)
+      # reste couvert par tests/test_build_script.py, qui lit build.bat sans
+      # l'exécuter.
 
       # Chaque contrôle exécute l'exe construit avec son auto-test et exige un
       # marqueur : navigateur réel, PDF indexé, OCR sur une image rendue.
@@ -259,9 +255,6 @@ jobs:
           python smoke_exe.py --browser --exe dist\OmniAgent-lite\OmniAgent.exe || exit /b 1
           python smoke_exe.py --doc-index --exe dist\OmniAgent-lite\OmniAgent.exe || exit /b 1
           python smoke_exe.py --ocr --exe dist\OmniAgent-lite\OmniAgent.exe || exit /b 1
-          python smoke_exe.py --browser --exe dist\OmniAgent-slim\OmniAgent.exe || exit /b 1
-          python smoke_exe.py --doc-index --exe dist\OmniAgent-slim\OmniAgent.exe || exit /b 1
-          python smoke_exe.py --ocr --exe dist\OmniAgent-slim\OmniAgent.exe || exit /b 1
 
       # Hors-ligne : un faux fournisseur local fait tourner la boucle d'outils
       # pour vérifier le budget de contexte, et --compat-smoke exerce
@@ -274,12 +267,11 @@ jobs:
         run: |
           python build_smoke\offline_smoke.py dist\OmniAgent\OmniAgent.exe || exit /b 1
           python build_smoke\offline_smoke.py dist\OmniAgent-lite\OmniAgent.exe || exit /b 1
-          python build_smoke\offline_smoke.py dist\OmniAgent-slim\OmniAgent.exe || exit /b 1
 
       - name: Taille des paquets
         shell: cmd
         run: >-
-          python -c "import os;[(print(d, round(sum(os.path.getsize(os.path.join(r,f)) for r,_,ns in os.walk(d) for f in ns)/1048576,2),'Mio', sum(len(ns) for _,_,ns in os.walk(d)),'fichiers')) for d in ('dist/OmniAgent','dist/OmniAgent-lite','dist/OmniAgent-slim')]"
+          python -c "import os;[(print(d, round(sum(os.path.getsize(os.path.join(r,f)) for r,_,ns in os.walk(d) for f in ns)/1048576,2),'Mio', sum(len(ns) for _,_,ns in os.walk(d)),'fichiers')) for d in ('dist/OmniAgent','dist/OmniAgent-lite')]"
 
       # Empreintes SHA-256 et versions de build : un binaire publié reste
       # identifiable et comparable sans reconstruire pour savoir ce qu'il contient.
@@ -289,7 +281,7 @@ jobs:
           PYTHONUTF8: "1"
         run: python build_smoke\record_build.py || exit /b 1
 
-      # Seuls les exécutables sont publiés : les trois dossiers complets pèsent
+      # Seuls les exécutables sont publiés : les deux dossiers complets pèsent
       # ~250 Mio par construction, et deux constructions par jour saturent le
       # quota d'artefacts du dépôt (500 Mio), ce qui faisait échouer aussi les
       # captures d'écran du job `ui-tk`. Rétention courte : un paquet de CI sert
@@ -301,7 +293,6 @@ jobs:
           path: |
             dist/OmniAgent/OmniAgent.exe
             dist/OmniAgent-lite/OmniAgent.exe
-            dist/OmniAgent-slim/OmniAgent.exe
             dist/SHA256SUMS.txt
           retention-days: 1
 

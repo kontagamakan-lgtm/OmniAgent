@@ -52,13 +52,16 @@ def repair(
                 entry["error"] = str(exc)
         actions.append(entry)
 
+    def make_root() -> bool:
+        """Crée le dossier de traces ; `mkdir` ne renvoie rien à propager."""
+        root.mkdir(parents=True, exist_ok=True)
+        return True
+
     if not root.is_dir():
         add(
             "missing_directory",
             f"créer le dossier de traces {root}",
-            run=(lambda: (root.mkdir(parents=True, exist_ok=True), True)[1])
-            if apply
-            else None,
+            run=make_root if apply else None,
         )
         if not apply:
             actions[-1]["detail"] = f"créerait le dossier de traces {root}"
