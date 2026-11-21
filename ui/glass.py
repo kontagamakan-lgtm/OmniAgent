@@ -38,14 +38,7 @@ def glass_supported() -> bool:
         return False
 
 
-def _tint(alpha: int) -> int:
-    """Couleur ABGR de la teinte appliquée sous le flou (alpha en tête)."""
-    # Fond très sombre, presque transparent : le contenu reste lisible en clair
-    # comme en sombre, et le flou ne lave pas les textes.
-    return (max(0, min(255, alpha)) << 24) | 0x00101010
-
-
-def apply_glass_backdrop(window: Any, *, acrylic: bool = True) -> bool:
+def apply_glass_backdrop(window: Any, *, acrylic: bool = True, tint: int = 0) -> bool:
     """Applique un fond flouté à `window` (Tk). Retourne True si DWM a accepté."""
     if not glass_supported():
         return False
@@ -74,10 +67,14 @@ def apply_glass_backdrop(window: Any, *, acrylic: bool = True) -> bool:
         parent = ctypes.windll.user32.GetParent(hwnd)
         target = parent or hwnd
 
+        # Teinte nulle par défaut : sans elle, DWM ne floute que ce qui est
+        # **derrière** la fenêtre. Une teinte, même à alpha faible, s'applique à
+        # toute la surface et assombrit chaque pixel de la fenêtre — mesuré en
+        # CI : 16/255 d'écart uniforme sur les quatre références de snapshots.
         policy = AccentPolicy(
             _ACCENT_ENABLE_ACRYLICBLURBEHIND if acrylic else _ACCENT_ENABLE_BLURBEHIND,
             0,
-            _tint(0x66 if acrylic else 0x44),
+            max(0, min(0xFFFFFFFF, int(tint))),
             0,
         )
         data = WindowCompositionAttributeData(
