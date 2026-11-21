@@ -38,7 +38,7 @@ jobs:
           # la branche depuis laquelle le workflow est lancé.
           ref: ${{ inputs.tag || github.ref }}
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
           cache: pip
