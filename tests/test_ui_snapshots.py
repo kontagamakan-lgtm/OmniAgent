@@ -33,6 +33,16 @@ from support import tmpdir  # noqa: E402
 from ui_harness import make_window, settings_for_ui, settle  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
+#: Cas couverts. `appearance` suit `UIConfig.appearance` : le thème par défaut
+#: est sombre, mais `light` passe par le même `theme.json` et mérite donc sa
+#: propre référence. Le troisième format sort du couple minimum/normal pour
+#: voir le rendu des panneaux quand la fenêtre est nettement plus large.
+VIEWPORTS = (
+    ("compact_900x620", "900x620", "dark"),
+    ("normal_1280x860", "1280x860", "dark"),
+    ("large_1600x1000", "1600x1000", "dark"),
+    ("light_1280x860", "1280x860", "light"),
+)
 SNAPSHOTS = Path(
     os.environ.get("OMNIAGENT_UI_SNAPSHOT_DIR", ROOT / "artifacts" / "ui")
 )
@@ -71,9 +81,11 @@ def _record_actuals(name: str, actual, *, difference=None) -> Path:
     return path
 
 
-def _capture(geometry: str, name: str) -> None:
+def _capture(geometry: str, name: str, appearance: str = "dark") -> None:
     with tmpdir(f"ui-snapshot-{name}") as tmp:
-        window = make_window(settings_for_ui(tmp))
+        settings = settings_for_ui(tmp)
+        settings.ui.appearance = appearance
+        window = make_window(settings)
         try:
             window.geometry(geometry + "+0+0")
             settle(window, rounds=4, delay=0.12)
@@ -117,12 +129,9 @@ def _capture(geometry: str, name: str) -> None:
             window._on_close()
 
 
-def test_snapshot_compact_900x620() -> None:
-    _capture("900x620", "compact_900x620")
-
-
-def test_snapshot_normal_1280x860() -> None:
-    _capture("1280x860", "normal_1280x860")
+@pytest.mark.parametrize(("name", "geometry", "appearance"), VIEWPORTS)
+def test_snapshot(name: str, geometry: str, appearance: str) -> None:
+    _capture(geometry, name, appearance)
 
 
 def test_snapshot_manifest_is_descriptive() -> None:
@@ -130,7 +139,8 @@ def test_snapshot_manifest_is_descriptive() -> None:
         pytest.skip("snapshots non générés")
     manifest = {
         "capture_backend": "PIL.ImageGrab",
-        "viewport": ["900x620", "1280x860"],
+        "viewport": [geometry for _name, geometry, _mode in VIEWPORTS],
+        "appearance": [appearance for _name, _geometry, appearance in VIEWPORTS],
         "screens": sorted(path.name for path in SNAPSHOTS.glob("*.png")),
         "note": "captures locales, comparées avec une tolérance moyenne de 1/255",
     }
@@ -139,5 +149,5 @@ def test_snapshot_manifest_is_descriptive() -> None:
         path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     loaded = json.loads(path.read_text(encoding="utf-8"))
     assert loaded["capture_backend"] == "PIL.ImageGrab"
-    assert "compact_900x620.png" in loaded["screens"]
-    assert "normal_1280x860.png" in loaded["screens"]
+    for name, _geometry, _appearance in VIEWPORTS:
+        assert f"{name}.png" in loaded["screens"], name
