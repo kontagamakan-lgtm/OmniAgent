@@ -36,6 +36,7 @@ from dataclasses import dataclass, field, fields, is_dataclass
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, Literal, get_args, get_origin, get_type_hints
+from urllib.parse import urlsplit
 
 # ---------------------------------------------------------------------------
 # Identité de l'application
@@ -335,6 +336,28 @@ _FAKE_API_KEY_MARKERS = (
     "votre-cle",
     "xxx",
 )
+
+
+#: Hôtes pour lesquels `http://` reste acceptable : le trafic ne quitte pas la
+#: machine, et les serveurs locaux (Ollama, proxy d'entreprise) ne parlent pas
+#: forcément TLS.
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "[::1]"})
+
+
+def insecure_http_url(url: str) -> bool:
+    """Vrai si `url` enverrait des données en clair vers une machine distante.
+
+    Une clé d'API et le contenu des prompts partent vers `llm.base_url` : en
+    `http://` vers un hôte distant, ils traversent le réseau lisibles. Seule
+    la boucle locale est tolérée, où il n'y a pas de réseau à écouter.
+    """
+    try:
+        parts = urlsplit(str(url or "").strip())
+    except ValueError:
+        return False
+    if parts.scheme.casefold() != "http":
+        return False
+    return (parts.hostname or "").casefold() not in _LOOPBACK_HOSTS
 
 
 def deepseek_key_problem(key: str, *, origin: str = "DEEPSEEK_API_KEY") -> str:
@@ -1105,6 +1128,12 @@ class Settings:
         if llm.backend != "ollama":
             if not llm.base_url.startswith(("http://", "https://")):
                 err("llm.base_url", "URL http(s) attendue")
+            elif insecure_http_url(llm.base_url):
+                err(
+                    "llm.base_url",
+                    "HTTPS requis : la clé et les prompts partiraient en clair "
+                    "(http:// n'est accepté que pour localhost)",
+                )
             if not llm.has_credentials() and not self.llm_router.enabled:
                 warn(
                     "llm.api_key_env",
@@ -1119,6 +1148,12 @@ class Settings:
             err("embedding.dimension", "doit être comprise entre 64 et 8192")
         if emb.backend != "disabled" and not emb.model.strip():
             err("embedding.model", "aucun modèle d'embedding défini")
+        if emb.backend != "disabled" and insecure_http_url(emb.base_url):
+            err(
+                "embedding.base_url",
+                "HTTPS requis hors localhost : les textes indexés partiraient "
+                "en clair",
+            )
         if emb.batch_size < 1:
             err("embedding.batch_size", "doit être >= 1")
 
