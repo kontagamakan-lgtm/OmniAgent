@@ -33,9 +33,11 @@ document à jour.
 ### Manifeste (`run_started.payload`)
 
 `task` (500 premiers caractères), `max_steps`, `app_version`, `trace_format`,
-`model`, `backend`, `budget_tokens`, `settings_digest` (16 hexadécimaux, sans
-`paths`), `workspace`, `python`. Aucun secret : le condensat couvre les réglages,
-pas leur contenu, et la clé d'API n'y figure jamais.
+`model`, `backend`, `budget_tokens`, `settings_digest` (16 caractères : `h` suivi
+de 15 hexadécimaux, sans `paths`), `workspace`, `python`. Aucun secret : le
+condensat couvre les réglages, pas leur contenu, et la clé d'API n'y figure
+jamais. Le préfixe `h` évite qu'un condensat exclusivement numérique soit pris
+pour un numéro de carte par le masquage des traces.
 
 ### Types connus
 

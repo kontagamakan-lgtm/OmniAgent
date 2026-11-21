@@ -970,7 +970,11 @@ class AgentCore:
         except Exception:  # noqa: BLE001 - un condensat manquant ne bloque rien
             logger.debug("condensat des réglages impossible", exc_info=True)
             return ""
-        self._manifest_digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+        # Préfixe `h` : un condensat hexadécimal peut n'être que des chiffres,
+        # et le masquage des traces le prend alors pour un numéro de carte —
+        # la CI l'a fait sur Python 3.12, où `settings_digest` valait
+        # `[MASQUÉ:card_number]`. Un condensat n'est pas un secret.
+        self._manifest_digest = "h" + hashlib.sha256(text.encode("utf-8")).hexdigest()[:15]
         return self._manifest_digest
 
     def _count_response(self, response: LLMResponse) -> None:
