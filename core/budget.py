@@ -589,7 +589,8 @@ class BudgetRecorder:
             return
         if event.type != "run_finished":
             return
-        summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+        raw_summary = payload.get("summary")
+        summary: dict[str, Any] = raw_summary if isinstance(raw_summary, dict) else {}
         record_run(
             self.settings,
             run_id=str(event.run_id),
