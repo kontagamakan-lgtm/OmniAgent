@@ -323,6 +323,19 @@ def default_allowed_roots() -> list[str]:
 # ---------------------------------------------------------------------------
 
 
+#: Préfixes qui désignent un autre fournisseur, reconnus même quand DeepSeek
+#: est sélectionné : mieux vaut le nommer que laisser partir la clé vers
+#: `api.deepseek.com` pour y récolter un HTTP 401.
+_OTHER_VENDOR_PREFIXES = (
+    ("sk-proj-", "OpenAI"),
+    ("sk-svcacct-", "OpenAI"),
+    ("sk-ant-", "Anthropic"),
+    ("sk-or-", "OpenRouter"),
+    ("sk-mistral-", "Mistral"),
+    ("gsk_", "Groq"),
+    ("AIza", "Google Gemini"),
+)
+
 _MIN_DEEPSEEK_KEY_LENGTH = 20
 _FAKE_API_KEY_MARKERS = (
     "test",
@@ -365,6 +378,12 @@ def deepseek_key_problem(key: str, *, origin: str = "DEEPSEEK_API_KEY") -> str:
     clean = str(key or "").strip()
     if not clean:
         return f"clé d'API absente : renseignez la variable {origin}"
+    for prefix, label in _OTHER_VENDOR_PREFIXES:
+        if clean.startswith(prefix):
+            return (
+                f"clé d'API invalide dans {origin} : le préfixe « {prefix} » "
+                f"appartient à {label}, pas à DeepSeek"
+            )
     if not clean.startswith("sk-"):
         return (
             f"clé d'API invalide dans {origin} : le préfixe « sk- » "

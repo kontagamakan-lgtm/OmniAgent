@@ -367,6 +367,9 @@ diagnostics et aux clés ajoutées au routeur multi-LLM.
 
 Règles :
 
+- un préfixe d'un autre fournisseur (`sk-proj-`, `sk-svcacct-`, `sk-ant-`,
+  `sk-or-`, `sk-mistral-`, `gsk_`, `AIza`) est refusé en le nommant : la clé
+  n'irait pas loin sur `api.deepseek.com` ;
 - la clé doit commencer par `sk-` ;
 - elle doit contenir au moins **20 caractères** au total, préfixe compris ;
 - les valeurs d'exemple sont refusées : les marqueurs `test`, `fake`, `dummy`,

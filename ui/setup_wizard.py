@@ -41,6 +41,7 @@ __all__ = [
     "PROVIDER_CHOICES",
     "apply_setup",
     "current_provider",
+    "default_provider",
     "needs_setup",
     "run_setup",
     "write_env_value",
@@ -126,6 +127,20 @@ def current_provider(settings: Settings) -> str:
         if values[0] == env:
             return slug
     return "deepseek"
+
+
+def default_provider(settings: Settings) -> str:
+    """Choix initial du menu : « automatique » tant que la clé en place ne sert pas.
+
+    Un poste déjà configuré garde son fournisseur, pour ne pas en changer en
+    rouvrant l'assistant ; au premier démarrage, ou quand la clé présente est
+    refusée, coller n'importe quelle clé doit suffire.
+    """
+    if settings.llm.backend == "ollama" or settings.llm_router.enabled:
+        return current_provider(settings)
+    if settings.llm.has_credentials():
+        return current_provider(settings)
+    return "auto"
 
 
 def _resolve_provider(settings: Settings, provider: str, key: str) -> tuple[str, str]:
@@ -234,6 +249,23 @@ def _quote_env(value: str) -> str:
     return value
 
 
+def _guess_other_provider(key: str) -> str:
+    """Fournisseur crédible pour une clé qui n'est pas celle annoncée.
+
+    Sert uniquement à orienter le message d'erreur : un `sk-…` non hexadécimal
+    peut être n'importe quoi, et seul `sk-proj-` dit clairement OpenAI.
+    """
+    try:
+        guessed = detect_provider(key)
+    except ValueError:
+        return ""
+    if guessed == "deepseek":
+        return ""
+    if guessed == "openai" and not key.startswith("sk-proj-"):
+        return ""
+    return guessed
+
+
 def _custom_endpoint_problem(endpoint: str, model: str) -> str:
     """Un fournisseur libre doit fournir son adresse et son modèle."""
     if not endpoint:
@@ -303,6 +335,16 @@ def apply_setup(
             )
         if not problem:
             problem = api_key_problem(key, provider=slug, origin=env_var)
+        if problem and slug == "deepseek":
+            # Le message générique parle de préfixe : nommer le fournisseur
+            # reconnu évite de rejouer l'erreur DeepSeek pour une bonne clé.
+            other = _guess_other_provider(key)
+            if other:
+                problem = (
+                    f"cette clé n'est pas une clé DeepSeek : elle a le format "
+                    f"d'une clé {_LABELS[other]}. Choisissez ce fournisseur, ou "
+                    "« Automatique », dans la liste."
+                )
         if problem:
             errors.append(problem)
         else:
@@ -445,9 +487,9 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             )
             labels = [label for label, _slug in PROVIDER_CHOICES]
             slugs = [slug for _label, slug in PROVIDER_CHOICES]
-            start = current_provider(settings)
+            start = default_provider(settings)
             self.provider_menu = ctk.CTkOptionMenu(form, values=labels)
-            self.provider_menu.set(labels[slugs.index(start)] if start in slugs else labels[1])
+            self.provider_menu.set(labels[slugs.index(start)] if start in slugs else labels[0])
             self.provider_menu.grid(
                 row=0, column=1, columnspan=2, sticky="ew", padx=SPACE_MD, pady=SPACE_SM
             )

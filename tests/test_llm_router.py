@@ -74,6 +74,18 @@ def test_detects_providers_from_key_prefixes() -> None:
     assert detect_provider("AIzaSyAbcdef123456") == "gemini"
     assert detect_provider("sk-proj-abcdef123456") == "openai"
     assert detect_provider("sk-ds-abcdef123456") == "deepseek"
+
+
+def test_detects_deepseek_and_openai_behind_the_shared_sk_prefix() -> None:
+    """`sk-` seul ne dit rien : le corps hexadécimal de 32 signes est DeepSeek."""
+    assert detect_provider("sk-" + "0123456789abcdef" * 2) == "deepseek"
+    assert detect_provider("sk-" + "A1B2C3D4E5F60718293A4B5C6D7E8F90") == "deepseek"
+    # Clé OpenAI historique : 48 signes mêlant lettres et tirets.
+    assert detect_provider("sk-abc123DEF456ghi789JKL012mno345PQR") == "openai"
+    # Un corps hexadécimal trop court ne suffit pas.
+    assert detect_provider("sk-0123456789abcdef") == "openai"
+    # Un seul signe non hexadécimal dans le corps suffit à écarter DeepSeek.
+    assert detect_provider("sk-" + "0123456789abcdef" * 2 + "z") == "openai"
     try:
         detect_provider("inconnue-123456")
     except ValueError:
