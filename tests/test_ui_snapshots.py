@@ -11,10 +11,12 @@ régénérer après une évolution volontaire :
 l'utilise pour ses propres baselines (rendu du runner, DPI et thème différents
 de ceux d'un poste de travail) sans jamais écraser les références locales.
 
-La capture est prise par région d'écran : une autre fenêtre posée sur celle de
-l'application remplacerait son contenu sans que rien ne le signale. Les
-snapshots passent donc la fenêtre au premier plan et vérifient par OCR que
-l'image contient bien « OmniAgent » avant de la comparer.
+La capture demande à la fenêtre de se dessiner elle-même (`PrintWindow`) : une
+autre fenêtre posée dessus, ou la transparence du bureau, ne peut plus remplacer
+son contenu. Le rendu est en plus normalisé à 1 px = 1 px et 96 ppp par le
+harnais (`tests/ui_harness.py`), pour que 900x620 mesure 900x620 sur n'importe
+quel poste, comme sur le runner. L'OCR reste un garde-fou : l'image doit
+montrer « OmniAgent » avant d'être comparée.
 
 Une référence manquante n'est jamais un succès : la capture est enregistrée,
 puis le test échoue en demandant de la committer. En cas d'écart, la capture
@@ -36,7 +38,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from support import tmpdir  # noqa: E402
-from ui_harness import make_window, settings_for_ui, settle  # noqa: E402
+from ui_harness import grab_client, make_window, settings_for_ui, settle  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 #: Cas couverts. Le troisième format sort du couple minimum/normal pour voir
@@ -66,12 +68,6 @@ pytestmark = pytest.mark.skipif(
     os.environ.get("OMNIAGENT_UI_SNAPSHOTS") != "1",
     reason="snapshots opt-in : définir OMNIAGENT_UI_SNAPSHOTS=1 avec affichage",
 )
-
-
-def _image_grab(box: tuple[int, int, int, int]):
-    from PIL import ImageGrab
-
-    return ImageGrab.grab(bbox=box)
 
 
 def _assert_real(image) -> None:
@@ -129,9 +125,8 @@ def _capture(geometry: str, name: str, font_size: int = 13) -> None:
             settle(window, rounds=4, delay=0.12)
             for _attempt in range(3):
                 _bring_to_front(window)
-                x, y = window.winfo_rootx(), window.winfo_rooty()
                 w, h = window.winfo_width(), window.winfo_height()
-                image = _image_grab((x, y, x + w, y + h))
+                image = grab_client(window, w, h)
                 shows_omniagent, seen = _ocr_omniagent(image)
                 if shows_omniagent:
                     break
@@ -185,7 +180,7 @@ def test_snapshot_manifest_is_descriptive() -> None:
     if not SNAPSHOTS.is_dir():
         pytest.skip("snapshots non générés")
     manifest = {
-        "capture_backend": "PIL.ImageGrab",
+        "capture_backend": "PrintWindow (Win32 GDI)",
         "viewport": [geometry for _name, geometry, _options in VIEWPORTS],
         "font_size": [options["font_size"] for _name, _geometry, options in VIEWPORTS],
         "screens": sorted(path.name for path in SNAPSHOTS.glob("*.png")),
@@ -195,6 +190,6 @@ def test_snapshot_manifest_is_descriptive() -> None:
     if os.environ.get("UPDATE_UI_SNAPSHOTS") == "1" or not path.is_file():
         path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     loaded = json.loads(path.read_text(encoding="utf-8"))
-    assert loaded["capture_backend"] == "PIL.ImageGrab"
+    assert loaded["capture_backend"] == "PrintWindow (Win32 GDI)"
     for name, _geometry, _options in VIEWPORTS:
         assert f"{name}.png" in loaded["screens"], name
