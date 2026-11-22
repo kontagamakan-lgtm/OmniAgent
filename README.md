@@ -4,7 +4,8 @@ Agent personnel autonome pour Windows : boucle **ReAct** (Reasoning + Acting),
 outils fichiers illimités dans les racines autorisées, automatisation navigateur
 Playwright, coffre-fort d'identifiants AES-256-GCM, recherche web multi-moteurs
 et index sémantique local. Interface CustomTkinter, backend LLM interchangeable
-(DeepSeek, endpoint compatible OpenAI, Ollama local), compilation PyInstaller.
+(DeepSeek, tout endpoint compatible OpenAI, API Messages d'Anthropic, Ollama
+local), compilation PyInstaller.
 
 > **Limites de sûreté et vérifications manuelles restantes** : voir
 > `docs/OPERATIONS.md`, section « Limites connues et vérifications manuelles ».
@@ -27,9 +28,9 @@ et index sémantique local. Interface CustomTkinter, backend LLM interchangeable
 | Coffre-fort | Argon2id (64 Mio, t=3, p=4) + AES-256-GCM, en-tête authentifié | Paramètres conformes aux recommandations OWASP ; le tag GCM authentifie aussi l'en-tête (anti-altération du sel). |
 | Répertoires | Racines blanches + `denied_globs` en seconde ceinture | Les outils fichiers refusent toute sortie hors racines, y compris via `..` ou lien symbolique (`follow_symlinks=False`). |
 
-> Note technique : un modèle hébergé (DeepSeek, tout endpoint compatible OpenAI)
-> applique ses propres filtres **côté serveur**, qu'aucun system prompt ne peut
-> neutraliser. Le mode réellement sans filtre plateforme est le backend Ollama
+> Note technique : un modèle hébergé (DeepSeek, Anthropic, tout endpoint
+> compatible OpenAI) applique ses propres filtres **côté serveur**, qu'aucun
+> system prompt ne peut neutraliser. Le mode réellement sans filtre plateforme est le backend Ollama
 > local, sélectionnable dans l'UI.
 
 ---
@@ -52,7 +53,7 @@ OmniAgent/
 ├── assets/                    # icon.ico, theme.json, tessdata/
 ├── core/
 │   ├── agent_core.py          # LIVRABLE 4 - boucle ReAct, budget, approches, plan/critique
-│   ├── llm_client.py          #    client OpenAI-compatible + Ollama (streaming)
+│   ├── llm_client.py          #    client OpenAI / Anthropic / Ollama (flux SSE)
 │   ├── prompts.py             #    system prompt action-first + templates
 │   ├── react_parser.py        #    parseur tolérant des appels d'outils
 │   ├── tool_registry.py       #    schémas JSON, dispatch, garde-fous

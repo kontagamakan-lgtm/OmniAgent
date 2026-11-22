@@ -36,7 +36,7 @@ bornée par `trace.max_runs`, `trace.max_age_days` et `trace.max_bytes`.
 
 | Destination | Déclencheur | Contenu envoyé |
 |---|---|---|
-| Fournisseur de modèle configuré (`llm.base_url` : DeepSeek, endpoint compatible OpenAI, ou Ollama local) | chaque génération | le prompt système, votre demande, les résultats d'outils nécessaires, l'historique de contexte |
+| Fournisseur de modèle configuré (`llm.base_url` : DeepSeek, endpoint compatible OpenAI, API Messages d'Anthropic, ou Ollama local) | chaque génération | le prompt système, votre demande, les résultats d'outils nécessaires, l'historique de contexte |
 | Moteurs de recherche (`search.engines`) | outils de recherche web | la requête, éventuellement les filtres de région et de sûreté |
 | Sites visités | outils navigateur et lecture de page | la requête HTTP habituelle d'un navigateur (adresse, en-têtes, cookies du site) |
 
