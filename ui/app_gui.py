@@ -128,6 +128,15 @@ def _press_frames(
     return [_mix_color(start, end, index / count) for index in range(count + 1)]
 
 
+#: Trois demandes d'amorce, écrites pour ce que l'agent sait faire ici :
+#: lire des fichiers locaux, ranger selon des règles, relire des traces. Un
+#: clic remplit le composeur, il n'envoie rien.
+_WELCOME_EXAMPLES = (
+    "Résume les PDF du dossier Rapports",
+    "Trie les fichiers des Téléchargements par mois",
+    "Compare deux runs et explique l'écart",
+)
+
 _TOOL_LABELS = {
     "fs_read_text": "lecture d'un fichier",
     "fs_write_text": "écriture d'un fichier",
@@ -587,6 +596,12 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             """Cliquer sur « Tâche en cours » ramène au composeur, sans rien effacer."""
             self.prompt.focus_set()
 
+        def _use_example(self, text: str) -> None:
+            """Remplit le composeur d'un exemple : à relire avant d'envoyer."""
+            self.prompt.delete("1.0", "end")
+            self.prompt.insert("1.0", text)
+            self.prompt.focus_set()
+
         def _focus_navigation(self, _event: object | None = None) -> str:
             """F6 place le focus sur la première entrée de navigation visible."""
             for button in self._nav_buttons:
@@ -980,8 +995,14 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             workspace = ctk.CTkFrame(content, fg_color="transparent")
             workspace.grid(row=2, column=0, sticky="nsew")
             workspace.grid_columnconfigure(0, weight=1)
-            workspace.grid_columnconfigure(1, minsize=290)
+            workspace.grid_columnconfigure(2, minsize=290)
             workspace.grid_rowconfigure(0, weight=1)
+            # Filet de colonne : il court sur toute la hauteur du poste de
+            # travail, donc l'espace sous les réglages se lit comme une marge
+            # de colonne et non comme un oubli.
+            ctk.CTkFrame(workspace, width=1, height=1, fg_color=_UI_LINE_SOFT).grid(
+                row=0, column=1, sticky="ns", padx=SPACE_MD
+            )
 
             assistant = self._card(workspace)
             assistant.grid(row=0, column=0, sticky="nsew")
@@ -1026,38 +1047,64 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             welcome_center = ctk.CTkFrame(
                 self.welcome_frame, fg_color="transparent"
             )
-            welcome_center.pack(expand=True, pady=(SPACE_XL, SPACE_MD))
+            # Bloc d'accueil ancré en haut à gauche, aligné sur le texte du
+            # composeur : un centrage dans une carte de 600 px se lit comme
+            # une affiche inachevée, pas comme un espace de travail.
+            welcome_center.pack(anchor="nw", padx=SPACE_XL, pady=(SPACE_XL, SPACE_MD))
             self.welcome_center = welcome_center
-            self.welcome_icon = ctk.CTkLabel(
-                welcome_center,
-                text="O",
-                width=56,
-                height=56,
-                corner_radius=16,
-                fg_color=_UI_ACCENT_SOFT,
-                text_color=self._accent,
-                font=self._serif(14),
-            )
-            self.welcome_icon.pack()
             self.welcome_title = ctk.CTkLabel(
                 welcome_center,
                 text="Aucune tâche en cours.",
                 font=self._serif(6),
                 text_color=_UI_TEXT,
+                anchor="w",
+                justify="left",
+                wraplength=480,
             )
-            self.welcome_title.pack(pady=(SPACE_LG, SPACE_XS))
+            self.welcome_title.pack(anchor="w", pady=(SPACE_LG, SPACE_XS))
             self.welcome_subtitle = ctk.CTkLabel(
                 welcome_center,
                 text=(
                     "Écrivez une demande : il planifie, propose les outils un "
-                    "par un, et laisse une trace lisible.\n"
-                    "Rien ne part sans votre accord."
+                    "par un, et laisse une trace lisible. Rien ne part sans "
+                    "votre accord."
                 ),
                 font=self._font(-1),
                 text_color=_UI_MUTED,
-                justify="center",
+                anchor="w",
+                justify="left",
+                wraplength=480,
             )
-            self.welcome_subtitle.pack(pady=(0, SPACE_LG))
+            self.welcome_subtitle.pack(anchor="w", pady=(0, SPACE_LG))
+
+            # Trois amorces concrètes, séparées du texte par un filet. Elles
+            # remplissent le composeur : le champ reste le seul endroit d'où
+            # part une tâche, et l'exemple se relit avant l'envoi.
+            self.welcome_examples = ctk.CTkFrame(welcome_center, fg_color="transparent")
+            ctk.CTkFrame(
+                self.welcome_examples, height=1, fg_color=_UI_LINE_SOFT
+            ).pack(fill="x", pady=(0, SPACE_MD))
+            ctk.CTkLabel(
+                self.welcome_examples,
+                text="Exemples",
+                font=self._font(-3, "bold"),
+                text_color=_UI_FAINT,
+                anchor="w",
+            ).pack(fill="x")
+            self._example_buttons: list[Any] = []
+            for example in _WELCOME_EXAMPLES:
+                button = self._button(
+                    self.welcome_examples,
+                    example,
+                    lambda text=example: self._use_example(text),
+                    ghost=True,
+                    width=240,
+                    height=30,
+                    anchor="w",
+                    font_delta=-2,
+                )
+                button.pack(fill="x", pady=(SPACE_XS, 0))
+                self._example_buttons.append(button)
 
             self.transcript = ctk.CTkTextbox(
                 conversation,
@@ -1195,11 +1242,13 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
 
             # -- colonne de droite ---------------------------------------------
             right = ctk.CTkFrame(workspace, fg_color=_UI_BG)
-            right.grid(row=0, column=1, sticky="nsew", padx=(SPACE_XL, 0))
+            right.grid(row=0, column=2, sticky="nsew")
             right.grid_columnconfigure(0, weight=1)
-            # La colonne garde ses contrôles groupés en haut : un arrêt
-            # d'urgence relégué au bas d'une grande fenêtre se cherche.
+            # Réglages en haut, arrêt d'urgence en bas : la ligne élastique
+            # ferme la colonne dans une grande fenêtre et se replie à zéro
+            # quand la hauteur manque, sans seuil ni bascule de mode.
             right.grid_rowconfigure(0, weight=0)
+            right.grid_rowconfigure(1, weight=1)
 
             session = self._card(right)
             session.grid(row=0, column=0, sticky="new")
@@ -1315,8 +1364,11 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 height=34,
                 font_delta=-3,
             )
+            ctk.CTkFrame(right, height=1, fg_color="transparent").grid(
+                row=1, column=0, sticky="nsew"
+            )
             self.emergency_button.grid(
-                row=1, column=0, sticky="ew", pady=(SPACE_MD, 0)
+                row=2, column=0, sticky="ew", pady=(SPACE_MD, 0)
             )
 
             footer = ctk.CTkFrame(content, fg_color="transparent")
@@ -1565,19 +1617,22 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 self.footer.grid_remove()
             self.heading.grid_configure(pady=plan.heading_pady)
             self.content_panel.grid_configure(pady=plan.content_pady)
-            if plan.welcome_icon_visible:
-                self.welcome_icon.pack_forget()
+            if plan.welcome_subtitle_visible:
                 self.welcome_title.pack_forget()
                 self.welcome_subtitle.pack_forget()
-                self.welcome_title.configure(wraplength=0)
-                self.welcome_icon.pack()
-                self.welcome_title.pack(pady=(SPACE_LG, SPACE_XS))
-                self.welcome_subtitle.pack(pady=(0, SPACE_LG))
+                self.welcome_examples.pack_forget()
+                self.welcome_title.configure(wraplength=480)
+                self.welcome_title.pack(anchor="w", pady=(SPACE_LG, SPACE_XS))
+                self.welcome_subtitle.pack(anchor="w", pady=(0, SPACE_LG))
+                self.welcome_examples.pack(fill="x")
             else:
-                self.welcome_icon.pack_forget()
                 self.welcome_subtitle.pack_forget()
+                # Les exemples suivent le sous-titre : même information, même
+                # place. C'est le plan de densité qui décide, sans seuil de
+                # largeur supplémentaire.
+                self.welcome_examples.pack_forget()
                 self.welcome_title.configure(
-                    wraplength=plan.wrap_length or 0, justify="center"
+                    wraplength=plan.wrap_length or 0, justify="left"
                 )
                 self.welcome_title.pack_configure(pady=(0, 0))
             self.welcome_center.pack_configure(pady=plan.welcome_center_pady)

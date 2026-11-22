@@ -40,7 +40,7 @@ def test_normal_layout_uses_measured_requirements() -> None:
     assert plan.wrap_length == 0
     assert plan.prompt_height == 62
     assert plan.summary_visible and plan.footer_visible
-    assert plan.budget_details_visible and plan.welcome_icon_visible
+    assert plan.budget_details_visible
     assert not plan.badge_visible
 
 
@@ -60,7 +60,6 @@ def test_compact_layout_follows_width_requirement() -> None:
     assert plan.nav_height == 30 and plan.nav_pady == 0
     assert not plan.summary_visible and not plan.footer_visible
     assert not plan.budget_details_visible
-    assert not plan.welcome_icon_visible
     assert plan.badge_visible
 
 

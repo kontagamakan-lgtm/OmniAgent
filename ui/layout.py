@@ -60,7 +60,6 @@ class LayoutPlan:
     heading_pady: tuple[int, int]
     content_pady: tuple[int, int]
     welcome_center_pady: tuple[int, int]
-    welcome_icon_visible: bool
     welcome_subtitle_visible: bool
     summary_visible: bool
     footer_visible: bool
@@ -121,7 +120,6 @@ def plan_layout(
             heading_pady=(0, SPACE_SM),
             content_pady=(SPACE_SM, SPACE_SM),
             welcome_center_pady=(SPACE_SM, SPACE_SM),
-            welcome_icon_visible=False,
             welcome_subtitle_visible=False,
             summary_visible=False,
             footer_visible=False,
@@ -143,7 +141,6 @@ def plan_layout(
         heading_pady=(SPACE_SM, SPACE_XL),
         content_pady=(SPACE_MD, SPACE_XL),
         welcome_center_pady=(SPACE_XL, SPACE_MD),
-        welcome_icon_visible=True,
         welcome_subtitle_visible=True,
         summary_visible=True,
         footer_visible=True,

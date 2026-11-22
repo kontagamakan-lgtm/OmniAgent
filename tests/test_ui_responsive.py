@@ -45,6 +45,7 @@ def test_compact_900_keeps_sidebar_and_panels_reachable() -> None:
             assert window._compact_layout
             assert window.summary_panel.winfo_ismapped() == 0
             assert window.footer.winfo_ismapped() == 0
+            assert window.welcome_examples.winfo_ismapped() == 0
             assert window.layout_badge.winfo_ismapped() == 1
             assert window.sidebar._parent_canvas.winfo_height() <= window.winfo_height()
             assert window.welcome_title.winfo_reqwidth() <= window.welcome_frame.winfo_width()
@@ -68,11 +69,14 @@ def test_normal_1280_restores_every_panel_after_compact() -> None:
             assert not window._compact_layout
             assert window.summary_panel.winfo_ismapped() == 1
             assert window.footer.winfo_ismapped() == 1
-            assert window.welcome_icon.winfo_ismapped() == 1
             assert window.welcome_subtitle.winfo_ismapped() == 1
+            assert window.welcome_examples.winfo_ismapped() == 1
             assert window.layout_badge.winfo_ismapped() == 0
             assert window.budget_reset_label.winfo_ismapped() == 1
-            assert int(window.welcome_title.cget("wraplength")) == 0
+            # En normal, l'accueil est aligné à gauche : sa longueur de ligne
+            # est calée sur le bloc, pas sur la largeur de la fenêtre.
+            title_wrap = int(window.welcome_title.cget("wraplength"))
+            assert 0 < title_wrap <= 520
             assert window._sidebar_scroll_visible is False
         finally:
             window._on_close()
@@ -177,5 +181,25 @@ def test_large_font_gets_a_scrollable_sidebar() -> None:
             assert window._compact_layout
             assert window._sidebar_scroll_visible == (content > viewport + 2)
             assert all(button.winfo_ismapped() for button in window._nav_buttons)
+        finally:
+            window._on_close()
+
+
+def test_example_fills_the_composer_without_sending() -> None:
+    """Une amorce remplit le champ : elle ne part pas sans relecture."""
+    with tmpdir("ui-responsive-example") as tmp:
+        window = _open_window(tmp)
+        try:
+            assert len(window._example_buttons) == 3
+            assert window.prompt.get("1.0", "end").strip() == ""
+
+            window._use_example("Trie les fichiers des Téléchargements par mois")
+
+            assert (
+                window.prompt.get("1.0", "end").strip()
+                == "Trie les fichiers des Téléchargements par mois"
+            )
+            assert not window.controller.busy, "un exemple ne lance aucune tâche"
+            assert window.welcome_frame.winfo_ismapped() == 1
         finally:
             window._on_close()
