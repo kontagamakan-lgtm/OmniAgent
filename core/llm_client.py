@@ -32,6 +32,7 @@ from core.errors import (
     LLMResponseError,
     retry_delay,
 )
+from core.ratelimit import RequestBudget
 from core.react_parser import ParsedToolCall, decode_arguments
 
 __all__ = ["LLMClient", "LLMResponse"]
@@ -90,6 +91,10 @@ class LLMClient:
         self._client = client
         self._owns_client = client is None
         self._sleep = sleep
+        #: Cadence imposée au fournisseur ; inactive quand le plafond est nul.
+        self.rate_budget = RequestBudget(
+            int(getattr(cfg, "max_requests_per_minute", 0) or 0), sleep=sleep
+        )
         self.request_count = 0
         self.retry_count = 0
         self._abort = threading.Event()
@@ -219,6 +224,9 @@ class LLMClient:
         )
 
     def _post(self, url: str, headers: dict[str, str], payload: dict[str, Any]) -> dict[str, Any]:
+        # Cadence bornée avant l'envoi : mieux vaut attendre ici que prendre un
+        # HTTP 429 au milieu d'une tâche.
+        self.rate_budget.acquire()
         try:
             response = self._http().post(url, json=payload, headers=headers)
         except httpx.TimeoutException as exc:

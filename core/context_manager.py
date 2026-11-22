@@ -212,7 +212,10 @@ def plan_trim(
     la coupe se fait juste avant un tour utilisateur, et les messages abandonnés
     sont résumés dans un message `system` inséré après la tâche d'origine.
     """
-    items = list(messages)
+    # Les messages arrivent en `Mapping` (lecture seule) mais l'historique
+    # retenu est un `list[dict]` : on matérialise chaque message une fois, ce
+    # que le docstring annonce déjà (« une copie inchangée »).
+    items: list[dict[str, Any]] = [dict(message) for message in messages]
     limit = max(4, int(max_messages))
     budget = max(0, int(max_tokens or 0))
     reserved = max(0, int(reserved_tokens or 0))

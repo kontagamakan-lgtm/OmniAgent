@@ -7,14 +7,14 @@ des vérifications qui n'ont pas été réalisées dans cet environnement ; les
 détails d'implémentation et les procédures complètes restent dans les sections
 indiquées.
 
-- **Isolation (#11) — au niveau des outils, pas un bac à sable système.**
+- **Isolation (#11) - au niveau des outils, pas un bac à sable système.**
   Les profils filtrent les outils, mais **un outil conservé garde les droits du
   processus hôte** : il peut accéder à ce que le compte OmniAgent peut lire et
   lancer des processus avec la même identité. Ce sont des contrôles
   applicatifs, pas un jeton, un espace de noms ou une ACL système. Une
   séparation réelle exige un conteneur, AppContainer ou une machine virtuelle,
   non implémenté ici. Détails : « Isolation par run ».
-- **Audit (#9) — chaîne falsifiable par le détenteur de la clé, ancrage
+- **Audit (#9) - chaîne falsifiable par le détenteur de la clé, ancrage
   externe requis.** Un attaquant qui possède la clé peut réécrire la trace et
   tout le journal puis recalculer les empreintes ; `--verify-audit` seul peut
   alors afficher une chaîne cohérente. La parade est une copie de
@@ -25,7 +25,7 @@ indiquées.
   une réécriture des entrées déjà copiées, mais ne protège pas si la
   destination est compromise ; ce n'est ni une signature ni une restauration
   du contenu des traces. Procédure complète : « Journal d'audit ».
-- **Notifications Windows (#8) — raccourci, protocole et boutons vérifiés
+- **Notifications Windows (#8) - raccourci, protocole et boutons vérifiés
   sous Windows.** Vérifié le 2026-11-19 : `--notify-install` a été exécuté deux
   fois (deux succès), le raccourci
   `%APPDATA%\Microsoft\Windows\Start Menu\Programs\OmniAgent.lnk` pointe vers
@@ -39,7 +39,7 @@ indiquées.
   la trace` a ouvert l'Explorateur sur `data/logs/runs` (trace jetable), sans
   créer `STOP` ; le raccourci a été relancé après réinstallation avec l'icône
   `assets/icon.ico` et a créé un `pythonw.exe`, arrêté ensuite.
-- **Approbation (#6) — dialogue explicite et parcours réel testés.** Les trois
+- **Approbation (#6) - dialogue explicite et parcours réel testés.** Les trois
   choix sont `Autoriser une fois`, `Autoriser pour la session` et `Refuser` ;
   `Refuser` est le bouton par défaut, et fermer la fenêtre (ou Échap) refuse.
   Vérifié le 2026-11-19 : les trois clics et la fermeture ont été testés sur la
@@ -50,7 +50,7 @@ indiquées.
   `data/approvals.jsonl` ; ils ne passent pas par la fenêtre graphique, dont
   les clics sont vérifiés séparément. La capture
   `artifacts/visual/approval_dialog.png` montre les trois libellés.
-- **Planificateur (#5) — test d'intégration réel opt-in, exécuté avec succès
+- **Planificateur (#5) - test d'intégration réel opt-in, exécuté avec succès
   sous Windows.** Le test n'est pas lancé par défaut. Pour l'activer :
   `set FREEBUFF_SCHTASKS_INTEGRATION=1` puis
   `python -m pytest tests/test_taskscheduler_integration.py -vv` (PowerShell :
@@ -155,7 +155,7 @@ suite normale, sans Windows : il place un faux `schtasks` en tête de `PATH`,
 vérifie les arguments exacts de création/suppression, le code retour et le
 message d'échec.
 `--schedule-checks` borne l'attente et sert aux essais. À la fin de chaque
-session, une toast Windows native est affichée (« OmniAgent — session
+session, une toast Windows native est affichée (« OmniAgent - session
 planifiée ») via PowerShell/WinRT, sans paquet supplémentaire ;
 `autonomy.notify_on_session = false` la désactive. La sortie console et
 l'historique restent la trace durable.
@@ -289,7 +289,7 @@ la release GitHub `obsidianmd/obsidian-releases` (asset `Obsidian-<version>.exe`
 contrôlé (en-tête `MZ`, taille bornée à 512 Mio, lecture https uniquement),
 puis sa signature Authenticode est vérifiée via PowerShell : statut `Valid`,
 et CN et O exactement égaux à `Dynalist Inc` ou `Obsidian` (casse ignorée),
-refus sinon — une simple sous-chaîne comme « Evil Obsidian Ltd » ne passe pas
+refus sinon - une simple sous-chaîne comme « Evil Obsidian Ltd » ne passe pas
 (y compris si
 PowerShell manque). L'installateur n'est exécuté avec `/S /currentuser`
 qu'après cette vérification, et l'installation n'est déclarée réussie que si
@@ -649,8 +649,8 @@ prouve pas l'identité du contenu.
 L'aperçu classe les appels déjà faits. Avec `--resume-apply`, les appels de
 lecture seule (`fs_read_text`, `fs_list`, `web_search`, etc.) sont réellement
 rejoués avant le premier appel au modèle, et leurs observations fraîches sont
-ajoutées au contexte. Tout outil à effet de bord — écriture, shell, navigateur,
-coffre en modification — est refusé et jamais exécuté ; un outil inconnu l'est
+ajoutées au contexte. Tout outil à effet de bord - écriture, shell, navigateur,
+coffre en modification - est refusé et jamais exécuté ; un outil inconnu l'est
 aussi, faute de preuve qu'il est sans effet. Une trace terminée normalement n'a
 pas besoin de reprise.
 

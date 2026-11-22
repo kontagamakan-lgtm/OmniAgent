@@ -20,7 +20,7 @@ ou le dossier de l'application en mode portable).
 
 | Donnée | Fichier | Contenu | Réglage |
 |---|---|---|---|
-| Configuration | `config.json` | réglages, chemins autorisés, canaux du navigateur — **jamais de clé d'API** | toujours |
+| Configuration | `config.json` | réglages, chemins autorisés, canaux du navigateur - **jamais de clé d'API** | toujours |
 | Clé d'API | `.env` (répertoire d'installation) ou variable d'environnement | une ligne `CLE=valeur`, permissions restreintes quand le système le permet | assistant de démarrage |
 | Traces d'exécution | `traces/*.jsonl` | étapes, outils appelés, compteurs ; le contenu des messages seulement si `trace.content = "full"` | `trace.enabled` (activé par défaut) |
 | Coffre d'identifiants | `vault.enc` | identifiants chiffrés AES-256-GCM, clé dérivée par Argon2id (scrypt en repli) | créé à la demande |

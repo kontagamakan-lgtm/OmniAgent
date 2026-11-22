@@ -28,7 +28,7 @@ document à jour.
 | `seq` | Numéro strictement croissant dans le fichier, commence à 1. |
 | `payload` | Objet JSON propre au type (chiffré au repos si activé). |
 | `enc` | Enveloppe `{"v", "nonce", "ct"}` quand le chiffrement est actif. |
-| `meta` | Sur `run_started` chiffré uniquement : version, modèle, espace de travail, format — de quoi reconstruire l'index sans la clé. |
+| `meta` | Sur `run_started` chiffré uniquement : version, modèle, espace de travail, format - de quoi reconstruire l'index sans la clé. |
 
 ### Manifeste (`run_started.payload`)
 
