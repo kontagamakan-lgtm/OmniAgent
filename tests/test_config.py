@@ -232,6 +232,17 @@ def test_http_sur_la_boucle_locale_reste_accepte() -> None:
     assert errors == []
 
 
+def test_env_example_matches_the_init_template() -> None:
+    """`config.py --init` doit produire le même gabarit que le fichier livré."""
+    root_example = Path(config.__file__).resolve().parent / ".env.example"
+    assert root_example.is_file(), f"gabarit absent : {root_example}"
+    committed = root_example.read_text(encoding="utf-8")
+    assert committed == config._DEFAULT_ENV_EXAMPLE, (
+        "`.env.example` et `config._DEFAULT_ENV_EXAMPLE` ont divergé : "
+        "mettre à jour les deux (le fichier reste la référence)."
+    )
+
+
 def test_l_index_semantique_refuse_le_clair_hors_localhost() -> None:
     settings = config.Settings()
     settings.embedding.base_url = "http://vecteurs.exemple.invalid/v1"
