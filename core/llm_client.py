@@ -1,6 +1,17 @@
-"""Client de génération : endpoint compatible OpenAI, ou Ollama local.
+"""Client de génération : OpenAI-compatible, API Messages d'Anthropic, Ollama.
 
-Deux méthodes seulement sont exposées, et elles suffisent à la boucle ReAct :
+Un seul client, trois protocoles choisis par `llm.backend` :
+
+* `deepseek` et `openai_compatible` — `POST /chat/completions`, flux SSE
+  `data:` ; c'est le format de DeepSeek, OpenAI, Gemini, Groq, OpenRouter,
+  Mistral et de tout service équivalent ;
+* `anthropic` — `POST /messages`, clé dans `x-api-key`, en-tête
+  `anthropic-version`, prompt système séparé et blocs `tool_use` ; le flux SSE
+  est décodé événement par événement, arguments d'outil compris
+  (`input_json_delta`) ;
+* `ollama` — `POST /api/chat`, un objet JSON par ligne.
+
+Trois méthodes seulement sont exposées, et elles suffisent à la boucle ReAct :
 
 * `complete()` — une réponse complète, avec appels d'outils éventuels ;
 * `stream_complete()` — le même contrat en flux : le texte est remis fragment
