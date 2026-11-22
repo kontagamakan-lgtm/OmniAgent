@@ -21,6 +21,7 @@ from core.factory import AgentBundle
 from core.self_evolver import format_evolution_journal, format_evolution_status
 from ui.controller import AgentController
 from ui.hotkey import HotkeyListener
+from ui.after_loop import SingleTimer
 from ui.key_panel import KeyTable
 from ui.list_state import STATE_EMPTY, STATE_ERROR, STATE_LOADING, StateLabel
 from ui.layout import (
@@ -257,6 +258,13 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             self.bundle = bundle
             self.controller = AgentController(bundle.agent)
             self._pump_id: str | None = None
+            #: Les relances de `_sync_sidebar_scroll` après une bascule de
+            #: densité : un minuteur chacune, pour qu'un redimensionnement
+            #: rapide ne les empile pas.
+            self._sidebar_idle = SingleTimer(self.after, self.after_cancel)
+            self._sidebar_soon = SingleTimer(self.after, self.after_cancel)
+            self._sidebar_late = SingleTimer(self.after, self.after_cancel)
+            self._sidebar_retry = SingleTimer(self.after, self.after_cancel)
             self._step = 0
             #: Dernier run tracé : support du bouton « Annuler ce run ».
             self._last_run_id = ""
@@ -1330,7 +1338,9 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             """Bascule le mode compact sans traiter les Configure des enfants."""
             if event.widget is self:
                 self._apply_layout_mode(event.width, event.height)
-                self.after_idle(self._sync_sidebar_scroll)
+                # Un redimensionnement produit une rafale de Configure : un
+                # seul passage en attente suffit, quel que soit leur nombre.
+                self._sidebar_idle.start(0, self._sync_sidebar_scroll)
 
         def _sidebar_content_height(self) -> float:
             """Hauteur réelle du contenu, même dans un CTkScrollableFrame."""
@@ -1359,8 +1369,9 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 )
                 if viewport <= 10:
                     # Avant le premier layout, le canvas vaut 1 px : attendre
-                    # une passe au lieu d'afficher une scrollbar inutile.
-                    self.after(50, self._sync_sidebar_scroll)
+                    # une passe au lieu d'afficher une scrollbar inutile. Le
+                    # minuteur est unique, sinon chaque appel en pose un autre.
+                    self._sidebar_retry.start(50, self._sync_sidebar_scroll)
                     return
                 content = self._sidebar_content_height()
                 needed = sidebar_needs_scroll(content, viewport)
@@ -1444,7 +1455,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             self._layout_ready = True
             self._compact_layout = plan.compact
             self._apply_layout_plan(plan)
-            self.after_idle(self._sync_sidebar_scroll)
+            self._sidebar_idle.start(0, self._sync_sidebar_scroll)
 
         def _apply_layout_plan(self, plan: LayoutPlan) -> None:
             """Applique un plan déjà décidé (séparé pour les tests)."""
@@ -1504,8 +1515,8 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             self._apply_compact_typography(plan.compact)
             # La densité change la hauteur du contenu : refaire le point après
             # que Tk a appliqué les nouveaux paddings.
-            self.after(120, self._sync_sidebar_scroll)
-            self.after(300, self._sync_sidebar_scroll)
+            self._sidebar_soon.start(120, self._sync_sidebar_scroll)
+            self._sidebar_late.start(300, self._sync_sidebar_scroll)
 
         # -- affichage ------------------------------------------------------
 
@@ -1777,6 +1788,9 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             journal = ctk.CTkTextbox(window, wrap="word")
             journal.pack(fill="both", expand=True, padx=SPACE_LG, pady=SPACE_SM)
             journal.configure(state="disabled")
+            # Une boucle unique : rafraîchir à la main remplace le tour
+            # planifié au lieu d'ajouter une seconde cadence.
+            timer = SingleTimer(window.after, window.after_cancel)
 
             def refresh() -> None:
                 try:
@@ -1788,7 +1802,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                     journal.delete("1.0", "end")
                     journal.insert("1.0", body)
                     journal.configure(state="disabled")
-                    window.after(2000, refresh)
+                    timer.start(2000, refresh)
                 except Exception:  # noqa: BLE001 - fenêtre fermée pendant le rafraîchissement
                     logger.debug("panneau d'évolution refermé", exc_info=True)
 
@@ -1936,6 +1950,9 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 rows_frame, ctk, on_reset=reset, on_remove=remove
             )
             table.show_state(STATE_LOADING)
+            # Réactiver ou supprimer une clé appelle `refresh` directement : le
+            # minuteur unique empêche la boucle de 2 s de se dédoubler.
+            timer = SingleTimer(window.after, window.after_cancel)
 
             def refresh() -> None:
                 """Relit les clés toutes les 2 s ; une panne devient un état à l'écran.
@@ -1970,7 +1987,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                             "panneau des clés : lecture impossible", exc_info=True
                         )
                         table.show_state(STATE_ERROR, reason=str(exc))
-                    window.after(2000, refresh)
+                    timer.start(2000, refresh)
                 except Exception:  # noqa: BLE001 - fenêtre refermée pendant le rafraîchissement
                     logger.debug("panneau des clés refermé", exc_info=True)
 
@@ -2005,6 +2022,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             body = ctk.CTkTextbox(window, wrap="word")
             body.pack(fill="both", expand=True, padx=SPACE_LG, pady=SPACE_SM)
             body.configure(state="disabled")
+            timer = SingleTimer(window.after, window.after_cancel)
 
             def refresh() -> None:
                 try:
@@ -2022,7 +2040,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                     body.delete("1.0", "end")
                     body.insert("1.0", prime.format_dashboard())
                     body.configure(state="disabled")
-                    window.after(3000, refresh)
+                    timer.start(3000, refresh)
                 except Exception:  # noqa: BLE001 - fenêtre fermée pendant le rafraîchissement
                     logger.debug("panneau Directive Première refermé", exc_info=True)
 
@@ -2776,6 +2794,13 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 self.controller.close()
                 if self._pump_id is not None:
                     self.after_cancel(self._pump_id)
+                for timer in (
+                    self._sidebar_idle,
+                    self._sidebar_soon,
+                    self._sidebar_late,
+                    self._sidebar_retry,
+                ):
+                    timer.cancel()
             finally:
                 self.destroy()
 
