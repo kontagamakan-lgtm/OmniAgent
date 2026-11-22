@@ -9,6 +9,8 @@ entre l'appui et le relâchement.
 from __future__ import annotations
 
 from typing import Any, Callable
+from ui.layout import SPACE_SM, SPACE_XS
+from ui.list_state import STATE_EMPTY, StateLabel
 
 STATUS_COLORS = {
     "ACTIVE": "#16A34A",
@@ -64,8 +66,14 @@ class KeyTable:
         self.on_reset = on_reset
         self.on_remove = on_remove
         self.rows: dict[str, dict[str, Any]] = {}
-        self._empty: Any | None = None
-        self._empty_visible = False
+        self._state = StateLabel(
+            ctk_module,
+            parent,
+            subject="Clés",
+            loading="Chargement des clés…",
+            empty="Aucune clé : Ollama local sert de secours.",
+            visible=False,
+        )
 
     def render(self, rows: list[dict[str, Any]]) -> None:
         """Synchronise les widgets avec l'état courant, sans tout recréer."""
@@ -75,38 +83,33 @@ class KeyTable:
                 self.rows.pop(key_id)["line"].destroy()
 
         if not wanted:
-            self._show_empty()
+            self._state.show(STATE_EMPTY)
             return
-        self._hide_empty()
+        self._state.hide()
         for key_id, row in wanted.items():
             self._upsert(key_id, row)
 
-    def _show_empty(self) -> None:
-        if self._empty is None:
-            self._empty = self.ctk.CTkLabel(
-                self.parent,
-                text="Aucune clé : Ollama local sert de secours.",
-                anchor="w",
-            )
-        if not self._empty_visible:
-            self._empty.pack(fill="x", padx=6, pady=6)
-            self._empty_visible = True
+    def show_state(self, state: str, *, reason: str = "") -> None:
+        """Affiche un état (chargement, vide, échec) à la place des lignes.
 
-    def _hide_empty(self) -> None:
-        if self._empty is not None and self._empty_visible:
-            self._empty.pack_forget()
-            self._empty_visible = False
+        Une lecture de clés qui échoue ne doit pas ressembler à une absence de
+        clés : l'appelant nomme l'état et la table compose la phrase.
+        """
+        for entry in self.rows.values():
+            entry["line"].destroy()
+        self.rows.clear()
+        self._state.show(state, reason=reason)
 
     def _upsert(self, key_id: str, row: dict[str, Any]) -> None:
         entry = self.rows.get(key_id)
         if entry is None:
             line = self.ctk.CTkFrame(self.parent)
-            line.pack(fill="x", pady=2)
+            line.pack(fill="x", pady=SPACE_XS)
             line.grid_columnconfigure(1, weight=1)
             dot = self.ctk.CTkLabel(line, text="●", width=18)
-            dot.grid(row=0, column=0, padx=(6, 2), pady=2)
+            dot.grid(row=0, column=0, padx=(SPACE_SM, SPACE_XS), pady=SPACE_XS)
             detail = self.ctk.CTkLabel(line, text="", anchor="w", justify="left")
-            detail.grid(row=0, column=1, sticky="ew", padx=4, pady=2)
+            detail.grid(row=0, column=1, sticky="ew", padx=SPACE_XS, pady=SPACE_XS)
             reset = self.ctk.CTkButton(
                 line,
                 text="Réactiver",
@@ -115,7 +118,7 @@ class KeyTable:
                 hover_color="#1E40AF",
                 command=lambda key=key_id: self.on_reset(key),
             )
-            reset.grid(row=0, column=2, padx=6, pady=2)
+            reset.grid(row=0, column=2, padx=SPACE_SM, pady=SPACE_XS)
             remove = self.ctk.CTkButton(
                 line,
                 text="Supprimer",
@@ -124,7 +127,7 @@ class KeyTable:
                 hover_color="#991B1B",
                 command=lambda key=key_id: self.on_remove(key),
             )
-            remove.grid(row=0, column=3, padx=6, pady=2)
+            remove.grid(row=0, column=3, padx=SPACE_SM, pady=SPACE_XS)
             entry = {
                 "line": line,
                 "dot": dot,

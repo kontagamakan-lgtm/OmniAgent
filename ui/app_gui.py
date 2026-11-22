@@ -21,7 +21,9 @@ from core.factory import AgentBundle
 from core.self_evolver import format_evolution_journal, format_evolution_status
 from ui.controller import AgentController
 from ui.hotkey import HotkeyListener
+from ui.after_loop import SingleTimer
 from ui.key_panel import KeyTable
+from ui.list_state import STATE_EMPTY, STATE_ERROR, STATE_LOADING, StateLabel
 from ui.layout import (
     SPACE_LG,
     SPACE_MD,
@@ -86,10 +88,12 @@ def _mix_color(start: str, end: str, ratio: float) -> str:
 def _press_colors(
     color: str, *, darken: float = _PRESS_DARKEN
 ) -> tuple[str, str]:
-    """Couleur au repos et couleur enfoncée : la seconde assombrit la première."""
-    red, green, blue = _hex_channels(color)
-    pressed = [round(channel * (1.0 - max(0.0, min(0.9, float(darken))))) for channel in (red, green, blue)]
-    return color, "#" + "".join(f"{value:02X}" for value in pressed)
+    """Couleur au repos et couleur enfoncée : assombrir, c'est mêler du noir."""
+    return color, _mix_color(color, "#000000", max(0.0, min(0.9, float(darken))))
+
+
+#: Couleur de la pastille de session selon l'état : neutre, en cours, en échec.
+_STATUS_COLORS = {"idle": "#ABC6A6", "busy": "#D7F5CF", "error": _UI_RED}
 
 
 def _press_frames(
@@ -254,6 +258,13 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             self.bundle = bundle
             self.controller = AgentController(bundle.agent)
             self._pump_id: str | None = None
+            #: Les relances de `_sync_sidebar_scroll` après une bascule de
+            #: densité : un minuteur chacune, pour qu'un redimensionnement
+            #: rapide ne les empile pas.
+            self._sidebar_idle = SingleTimer(self.after, self.after_cancel)
+            self._sidebar_soon = SingleTimer(self.after, self.after_cancel)
+            self._sidebar_late = SingleTimer(self.after, self.after_cancel)
+            self._sidebar_retry = SingleTimer(self.after, self.after_cancel)
             self._step = 0
             #: Dernier run tracé : support du bouton « Annuler ce run ».
             self._last_run_id = ""
@@ -517,7 +528,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             return header
 
         def _focus_composer(self) -> None:
-            """Cliquer sur « Assistant » ramène au composeur sans effacer la session."""
+            """Cliquer sur « Tâche en cours » ramène au composeur, sans rien effacer."""
             self.prompt.focus_set()
 
         def _focus_navigation(self, _event: object | None = None) -> str:
@@ -549,7 +560,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             if count is not None:
                 count.configure(text="0")
             self.prompt.delete("1.0", "end")
-            self._set_status("prêt")
+            self._set_status("prêt pour une tâche")
             self.prompt.focus_set()
 
         def _build_widgets(self) -> None:
@@ -628,18 +639,18 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             primary_nav.pack(fill="x", padx=SPACE_MD)
             self._nav(
                 primary_nav,
-                "Assistant",
+                "Tâche en cours",
                 self._focus_composer,
                 active=True,
             )
             self._nav(
-                primary_nav, "Historique", self._open_journal
+                primary_nav, "Traces de runs", self._open_journal
             )
             self._nav(
-                primary_nav, "Planificateur", self._open_scheduler
+                primary_nav, "Tâches planifiées", self._open_scheduler
             )
             self._nav(
-                primary_nav, "Propositions", self._open_proposals
+                primary_nav, "Propositions d'évolution", self._open_proposals
             )
 
             self.config_label = ctk.CTkLabel(
@@ -653,22 +664,22 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             config_nav = ctk.CTkFrame(side, fg_color="transparent")
             config_nav.pack(fill="x", padx=SPACE_MD)
             self._nav(
-                config_nav, "Autonomie", self._toggle_autonomy
+                config_nav, "Cycles autonomes", self._toggle_autonomy
             )
             self._nav(
-                config_nav, "Évolution", self._open_evolution
+                config_nav, "Auto-évolution", self._open_evolution
             )
             self._nav(
-                config_nav, "Clés & modèles", self._open_keys
+                config_nav, "Clés API et modèles", self._open_keys
             )
             self._nav(
                 config_nav,
-                "Directives",
+                "Consignes permanentes",
                 self._open_prime_directive,
             )
             self._nav(
                 config_nav,
-                "Configuration initiale",
+                "Assistant de configuration",
                 self._open_assistant,
             )
 
@@ -736,7 +747,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             ).pack(side="left", padx=SPACE_SM)
             ctk.CTkLabel(
                 crumbs,
-                text="Assistant",
+                text="Tâche en cours",
                 font=self._font(-1),
                 text_color="#D6DDD7",
             ).pack(side="left")
@@ -862,7 +873,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             ).grid(row=0, column=0, sticky="w", padx=SPACE_LG, pady=(SPACE_MD, 0))
             self.status = ctk.CTkLabel(
                 stat_agent,
-                text="Prêt",
+                text="Prêt pour une tâche",
                 font=self._font(4, "bold"),
                 text_color=_UI_TEXT,
                 anchor="w",
@@ -940,7 +951,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             ).grid(row=0, column=0, sticky="w", padx=SPACE_XL, pady=SPACE_XL)
             self.session_status = ctk.CTkLabel(
                 panel_header,
-                text="● En ligne",
+                text="● Aucune tâche",
                 font=self._font(-3, "bold"),
                 text_color="#ABC6A6",
                 fg_color="#243027",
@@ -1131,13 +1142,13 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             mode_row.pack(fill="x", pady=SPACE_XS)
             ctk.CTkLabel(
                 mode_row,
-                text="Mode d'exécution",
+                text="Approbations",
                 font=self._font(-3),
                 text_color="#99A498",
             ).pack(side="left")
             self.mode_label = ctk.CTkLabel(
                 mode_row,
-                text="● Supervisé",
+                text="● À chaque outil",
                 font=self._font(-3, "bold"),
                 text_color="#B4C5A8",
             )
@@ -1147,16 +1158,16 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             autonomy_row.pack(fill="x", pady=SPACE_XS)
             ctk.CTkLabel(
                 autonomy_row,
-                text="Session autonome",
+                text="Cycles autonomes",
                 font=self._font(-3),
                 text_color="#99A498",
             ).pack(side="left")
             self.autonomy_button = self._button(
                 autonomy_row,
-                "Lancer",
+                "Démarrer un cycle",
                 self._toggle_autonomy,
                 ghost=False,
-                width=76,
+                width=140,
                 height=26,
                 font_delta=-3,
             )
@@ -1244,7 +1255,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             self.footer = footer
             ctk.CTkLabel(
                 footer,
-                text="Vos données restent sur votre machine.",
+                text="Traces et fichiers restent sur ce poste.",
                 font=self._font(-4),
                 text_color="#5E6C60",
                 anchor="w",
@@ -1254,45 +1265,69 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
         def _bind_press_motion(self, button: Any) -> None:
             """Donne à un bouton ses états d'appui animés (192 ms).
 
-            La couleur de repos est relue à chaque appui : les entrées de
-            navigation changent de fond quand elles deviennent actives, et une
-            base figée à la construction ramènerait l'ancienne teinte. Les
-            boutons « transparents » n'ont rien à interpoler et sont laissés
-            tels quels.
+            La teinte de repos est relue quand le bouton est au repos : les
+            entrées de navigation changent de fond en devenant actives, et une
+            base figée à la construction ramènerait l'ancienne couleur. Les
+            boutons « transparents » n'ont rien à interpoler et sont ignorés.
             """
-            state: dict[str, list[str]] = {"frames": []}
+            frames: list[str] = []
+            rest = ""
+            timer = ""
+            running = False
 
             def animate(sequence: list[str]) -> None:
+                """Joue une suite de teintes ; un nouvel appui remplace l'ancienne."""
+                nonlocal timer, running
+                if timer:
+                    self.after_cancel(timer)
+                    timer = ""
+                running = True
+
                 def step(index: int = 0) -> None:
+                    nonlocal timer, running
+                    timer = ""
                     if not button.winfo_exists():
+                        running = False
                         return
                     try:
                         button.configure(fg_color=sequence[index])
                     except Exception:  # noqa: BLE001 - bouton détruit en route
+                        running = False
                         return
                     if index + 1 < len(sequence):
-                        self.after(_PRESS_STEP_MS, lambda: step(index + 1))
+                        timer = self.after(
+                            _PRESS_STEP_MS, lambda: step(index + 1)
+                        )
+                    else:
+                        running = False
 
                 step()
 
             def on_press(_event: Any = None) -> None:
-                try:
-                    current = button.cget("fg_color")
-                except Exception:  # noqa: BLE001 - bouton détruit
+                nonlocal rest
+                # Un appui pendant le trajet garde la teinte de repos connue :
+                # la relire sur un bouton déjà assombri assombrirait l'appui
+                # suivant, et chaque clic rapide dériverait la couleur.
+                if not running:
+                    try:
+                        current = button.cget("fg_color")
+                    except Exception:  # noqa: BLE001 - bouton détruit
+                        return
+                    if not isinstance(current, str) or not current.startswith("#"):
+                        return
+                    try:
+                        rest = _press_colors(current)[0]
+                    except ValueError:
+                        return
+                if not rest:
                     return
-                if not isinstance(current, str) or not current.startswith("#"):
-                    return
-                try:
-                    rest, pressed = _press_colors(current)
-                except ValueError:
-                    return
-                state["frames"] = _press_frames(rest, pressed)
+                frames[:] = _press_frames(*_press_colors(rest))
                 # Le premier élément est déjà la couleur courante : on l'omet
                 # pour que l'appui dure exactement `_PRESS_STEPS` pas.
-                animate(state["frames"][1:])
+                animate(frames[1:])
 
             def on_release(_event: Any = None) -> None:
-                frames = state.get("frames") or []
+                """Rejoue le trajet à l'envers : le repos est retrouvé, pas approché."""
                 if frames:
                     animate(list(reversed(frames))[1:])
 
@@ -1303,7 +1338,9 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             """Bascule le mode compact sans traiter les Configure des enfants."""
             if event.widget is self:
                 self._apply_layout_mode(event.width, event.height)
-                self.after_idle(self._sync_sidebar_scroll)
+                # Un redimensionnement produit une rafale de Configure : un
+                # seul passage en attente suffit, quel que soit leur nombre.
+                self._sidebar_idle.start(0, self._sync_sidebar_scroll)
 
         def _sidebar_content_height(self) -> float:
             """Hauteur réelle du contenu, même dans un CTkScrollableFrame."""
@@ -1332,8 +1369,9 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 )
                 if viewport <= 10:
                     # Avant le premier layout, le canvas vaut 1 px : attendre
-                    # une passe au lieu d'afficher une scrollbar inutile.
-                    self.after(50, self._sync_sidebar_scroll)
+                    # une passe au lieu d'afficher une scrollbar inutile. Le
+                    # minuteur est unique, sinon chaque appel en pose un autre.
+                    self._sidebar_retry.start(50, self._sync_sidebar_scroll)
                     return
                 content = self._sidebar_content_height()
                 needed = sidebar_needs_scroll(content, viewport)
@@ -1417,7 +1455,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             self._layout_ready = True
             self._compact_layout = plan.compact
             self._apply_layout_plan(plan)
-            self.after_idle(self._sync_sidebar_scroll)
+            self._sidebar_idle.start(0, self._sync_sidebar_scroll)
 
         def _apply_layout_plan(self, plan: LayoutPlan) -> None:
             """Applique un plan déjà décidé (séparé pour les tests)."""
@@ -1477,8 +1515,8 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             self._apply_compact_typography(plan.compact)
             # La densité change la hauteur du contenu : refaire le point après
             # que Tk a appliqué les nouveaux paddings.
-            self.after(120, self._sync_sidebar_scroll)
-            self.after(300, self._sync_sidebar_scroll)
+            self._sidebar_soon.start(120, self._sync_sidebar_scroll)
+            self._sidebar_late.start(300, self._sync_sidebar_scroll)
 
         # -- affichage ------------------------------------------------------
 
@@ -1505,11 +1543,13 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 if transcript is not None:
                     transcript.grid()
 
-        def _set_status(self, text: str) -> None:
-            self.status.configure(text=text)
+        def _set_status(self, text: str, *, state: str = "idle") -> None:
+            """Met à jour la carte et la pastille, couleur d'état comprise."""
+            colour = _STATUS_COLORS.get(state, _STATUS_COLORS["idle"])
+            self.status.configure(text=text, text_color=colour)
             session = vars(self).get("session_status")
             if session is not None:
-                session.configure(text=f"● {text}")
+                session.configure(text=f"● {text}", text_color=colour)
 
         def _record_task_done(self) -> None:
             """Compteur de la carte « Tâches effectuées » (session courante)."""
@@ -1563,6 +1603,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             except Exception as exc:  # noqa: BLE001 - l'interface reste utilisable
                 logger.exception("Assistant de démarrage en échec")
                 self._append("erreur", f"assistant indisponible : {exc}")
+                self._set_status("assistant indisponible", state="error")
                 return
 
             if saved:
@@ -1590,14 +1631,14 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             self._streaming = False
             self._pending.clear()
             self._append("vous", task)
-            self._set_status("en cours…")
-            self.send_button.configure(state="disabled")
+            self._set_status("en cours…", state="busy")
+            self.send_button.configure(state="disabled", text="Envoi…")
             self.cancel_button.configure(state="normal")
             return True
 
         def _cancel(self) -> None:
             self.controller.cancel()
-            self._set_status("arrêt demandé…")
+            self._set_status("arrêt demandé…", state="busy")
 
         def _install_approval_gate(self) -> None:
             """Branche les confirmations d'outils sur une boîte de dialogue."""
@@ -1747,6 +1788,9 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             journal = ctk.CTkTextbox(window, wrap="word")
             journal.pack(fill="both", expand=True, padx=SPACE_LG, pady=SPACE_SM)
             journal.configure(state="disabled")
+            # Une boucle unique : rafraîchir à la main remplace le tour
+            # planifié au lieu d'ajouter une seconde cadence.
+            timer = SingleTimer(window.after, window.after_cancel)
 
             def refresh() -> None:
                 try:
@@ -1758,7 +1802,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                     journal.delete("1.0", "end")
                     journal.insert("1.0", body)
                     journal.configure(state="disabled")
-                    window.after(2000, refresh)
+                    timer.start(2000, refresh)
                 except Exception:  # noqa: BLE001 - fenêtre fermée pendant le rafraîchissement
                     logger.debug("panneau d'évolution refermé", exc_info=True)
 
@@ -1905,20 +1949,45 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             table = KeyTable(
                 rows_frame, ctk, on_reset=reset, on_remove=remove
             )
+            table.show_state(STATE_LOADING)
+            # Réactiver ou supprimer une clé appelle `refresh` directement : le
+            # minuteur unique empêche la boucle de 2 s de se dédoubler.
+            timer = SingleTimer(window.after, window.after_cancel)
 
             def refresh() -> None:
+                """Relit les clés toutes les 2 s ; une panne devient un état à l'écran.
+
+                La lecture entière est protégée, pas seulement le rendu : un
+                coffre ou un routeur en défaut ne doit ni arrêter la boucle ni
+                se faire passer pour une absence de clé.
+                """
                 try:
                     if not window.winfo_exists():
                         return
-                    vault.check_timeout()
-                    state = "déverrouillé" if vault.unlocked else "verrouillé"
-                    mode = "actif" if self.settings.llm_router.enabled else "désactivé"
-                    current = router.current_model or "aucun appel réussi"
-                    header.configure(
-                        text=f"Modèle courant : {current} · routeur {mode} · coffre {state}"
-                    )
-                    table.render(router.key_statuses())
-                    window.after(2000, refresh)
+                    try:
+                        vault.check_timeout()
+                        state = (
+                            "déverrouillé" if vault.unlocked else "verrouillé"
+                        )
+                        mode = (
+                            "actif"
+                            if self.settings.llm_router.enabled
+                            else "désactivé"
+                        )
+                        current = router.current_model or "aucun appel réussi"
+                        header.configure(
+                            text=(
+                                f"Modèle courant : {current} · routeur {mode} · "
+                                f"coffre {state}"
+                            )
+                        )
+                        table.render(router.key_statuses())
+                    except Exception as exc:  # noqa: BLE001 - panne dite à l'écran
+                        logger.debug(
+                            "panneau des clés : lecture impossible", exc_info=True
+                        )
+                        table.show_state(STATE_ERROR, reason=str(exc))
+                    timer.start(2000, refresh)
                 except Exception:  # noqa: BLE001 - fenêtre refermée pendant le rafraîchissement
                     logger.debug("panneau des clés refermé", exc_info=True)
 
@@ -1953,6 +2022,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             body = ctk.CTkTextbox(window, wrap="word")
             body.pack(fill="both", expand=True, padx=SPACE_LG, pady=SPACE_SM)
             body.configure(state="disabled")
+            timer = SingleTimer(window.after, window.after_cancel)
 
             def refresh() -> None:
                 try:
@@ -1970,7 +2040,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                     body.delete("1.0", "end")
                     body.insert("1.0", prime.format_dashboard())
                     body.configure(state="disabled")
-                    window.after(3000, refresh)
+                    timer.start(3000, refresh)
                 except Exception:  # noqa: BLE001 - fenêtre fermée pendant le rafraîchissement
                     logger.debug("panneau Directive Première refermé", exc_info=True)
 
@@ -2113,25 +2183,34 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             from core.autonomy import AutonomyJournal, journal_path
 
             path = journal_path(self.settings)
-            records = AutonomyJournal(
-                path,
-                max_entries=self.settings.autonomy.journal_max_entries,
-                max_bytes=self.settings.autonomy.journal_max_bytes,
-            ).tail(50)
             window = ctk.CTkToplevel(self)
             window.title("Journal d'autonomie")
             dialog_width, _ = self._fit_dialog(window, 780, 520)
             window.transient(self)
             frame = ctk.CTkScrollableFrame(window, label_text=str(path))
             frame.pack(fill="both", expand=True, padx=SPACE_MD, pady=SPACE_MD)
-            ctk.CTkLabel(
+            state = StateLabel(
+                ctk,
                 frame,
-                text=format_autonomy_journal(records),
-                justify="left",
-                anchor="w",
+                subject="Journal",
+                loading="Chargement du journal…",
+                empty="",
+            )
+            state.flush()
+            try:
+                records = AutonomyJournal(
+                    path,
+                    max_entries=self.settings.autonomy.journal_max_entries,
+                    max_bytes=self.settings.autonomy.journal_max_bytes,
+                ).tail(50)
+            except Exception as exc:  # noqa: BLE001 - la panne est dite à l'écran
+                state.show(STATE_ERROR, reason=str(exc))
+                return
+            state.text(
+                format_autonomy_journal(records),
                 wraplength=max(280, dialog_width - 70),
                 font=(self.settings.ui.font_family, self.settings.ui.font_size - 1),
-            ).pack(fill="x", padx=SPACE_SM, pady=SPACE_SM)
+            )
 
         def _open_proposals(self) -> None:
             """Propositions autonomes en attente : approuver ou rejeter, sans exécuter."""
@@ -2148,12 +2227,24 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             window.transient(self)
             frame = ctk.CTkScrollableFrame(window, label_text="En attente d'approbation")
             frame.pack(fill="both", expand=True, padx=SPACE_MD, pady=SPACE_MD)
-            pending = pending_proposals(self.settings)
-            if not pending:
-                ctk.CTkLabel(
-                    frame, text="Aucune proposition en attente (mode --autonomy-propose)."
-                ).pack(pady=SPACE_LG)
+            state = StateLabel(
+                ctk,
+                frame,
+                subject="Propositions",
+                loading="Chargement des propositions…",
+                empty="Aucune proposition en attente (mode --autonomy-propose).",
+                pady=SPACE_LG,
+            )
+            state.flush()
+            try:
+                pending = pending_proposals(self.settings)
+            except Exception as exc:  # noqa: BLE001 - la panne est dite à l'écran
+                state.show(STATE_ERROR, reason=str(exc))
                 return
+            if not pending:
+                state.show(STATE_EMPTY)
+                return
+            state.destroy()
             for record in pending:
                 row = ctk.CTkFrame(frame)
                 row.pack(fill="x", pady=SPACE_XS)
@@ -2188,7 +2279,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
 
                 def edit(proposal_id: str = str(record.get("id"))) -> None:
                     dialog = ctk.CTkInputDialog(
-                        text="Nouvelle tache :", title="Modifier la proposition"
+                        text="Nouvelle tâche :", title="Modifier la proposition"
                     )
                     value = dialog.get_input()
                     if value and set_proposal_task(self.settings, proposal_id, value):
@@ -2561,7 +2652,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                     )
                     status += " · trace tronquée"
                 self._set_status(status)
-                self.send_button.configure(state="normal")
+                self.send_button.configure(state="normal", text="Envoyer")
                 self.cancel_button.configure(state="disabled")
 
             elif (
@@ -2703,6 +2794,13 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 self.controller.close()
                 if self._pump_id is not None:
                     self.after_cancel(self._pump_id)
+                for timer in (
+                    self._sidebar_idle,
+                    self._sidebar_soon,
+                    self._sidebar_late,
+                    self._sidebar_retry,
+                ):
+                    timer.cancel()
             finally:
                 self.destroy()
 

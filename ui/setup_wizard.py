@@ -24,6 +24,7 @@ import os
 from pathlib import Path
 
 from config import APP_ID, Settings, deepseek_key_problem, expand_path, install_dir
+from ui.layout import SPACE_LG, SPACE_MD, SPACE_SM, SPACE_XS
 
 __all__ = [
     "CHANNELS",
@@ -254,7 +255,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 anchor="w",
                 justify="left",
                 wraplength=580,
-            ).pack(fill="x", padx=18, pady=(16, 2))
+            ).pack(fill="x", padx=SPACE_LG, pady=(SPACE_LG, SPACE_XS))
             ctk.CTkLabel(
                 self,
                 text=(
@@ -265,30 +266,30 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 anchor="w",
                 justify="left",
                 wraplength=580,
-            ).pack(fill="x", padx=18, pady=(0, 10))
+            ).pack(fill="x", padx=SPACE_LG, pady=(0, SPACE_MD))
 
             form = ctk.CTkFrame(self)
-            form.pack(fill="both", expand=True, padx=18, pady=4)
+            form.pack(fill="both", expand=True, padx=SPACE_LG, pady=SPACE_XS)
             form.grid_columnconfigure(1, weight=1)
 
             ctk.CTkLabel(form, text="Clé API", anchor="w").grid(
-                row=0, column=0, sticky="w", padx=10, pady=8
+                row=0, column=0, sticky="w", padx=SPACE_MD, pady=SPACE_SM
             )
             self.key_entry = ctk.CTkEntry(form, show="•", placeholder_text="sk-…")
-            self.key_entry.grid(row=0, column=1, columnspan=2, sticky="ew", padx=10, pady=8)
+            self.key_entry.grid(row=0, column=1, columnspan=2, sticky="ew", padx=SPACE_MD, pady=SPACE_SM)
 
             ctk.CTkLabel(form, text="Dossier de travail", anchor="w").grid(
-                row=1, column=0, sticky="w", padx=10, pady=8
+                row=1, column=0, sticky="w", padx=SPACE_MD, pady=SPACE_SM
             )
             default_root = settings.files.allowed_roots[0] if settings.files.allowed_roots else ""
             self.dir_entry = ctk.CTkEntry(form, placeholder_text=default_root)
-            self.dir_entry.grid(row=1, column=1, sticky="ew", padx=(10, 6), pady=8)
+            self.dir_entry.grid(row=1, column=1, sticky="ew", padx=(SPACE_MD, SPACE_SM), pady=SPACE_SM)
             ctk.CTkButton(form, text="Parcourir…", width=110, command=self._pick_dir).grid(
-                row=1, column=2, sticky="e", padx=(0, 10), pady=8
+                row=1, column=2, sticky="e", padx=(0, SPACE_MD), pady=SPACE_SM
             )
 
             ctk.CTkLabel(form, text="Navigateur", anchor="w").grid(
-                row=2, column=0, sticky="w", padx=10, pady=8
+                row=2, column=0, sticky="w", padx=SPACE_MD, pady=SPACE_SM
             )
             current = settings.browser.channel
             labels = [label for label, value in CHANNELS]
@@ -296,7 +297,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             start = labels[values.index(current)] if current in values else labels[0]
             self.channel_menu = ctk.CTkOptionMenu(form, values=labels)
             self.channel_menu.set(start)
-            self.channel_menu.grid(row=2, column=1, columnspan=2, sticky="ew", padx=10, pady=8)
+            self.channel_menu.grid(row=2, column=1, columnspan=2, sticky="ew", padx=SPACE_MD, pady=SPACE_SM)
 
             vault_hint = (
                 "Coffre existant : laissez vide pour le conserver"
@@ -304,22 +305,22 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 else "Crée le coffre-fort des identifiants (optionnel)"
             )
             ctk.CTkLabel(form, text="Phrase du coffre", anchor="w").grid(
-                row=3, column=0, sticky="w", padx=10, pady=8
+                row=3, column=0, sticky="w", padx=SPACE_MD, pady=SPACE_SM
             )
             self.pass_entry = ctk.CTkEntry(form, show="•", placeholder_text=vault_hint)
-            self.pass_entry.grid(row=3, column=1, columnspan=2, sticky="ew", padx=10, pady=8)
+            self.pass_entry.grid(row=3, column=1, columnspan=2, sticky="ew", padx=SPACE_MD, pady=SPACE_SM)
 
             ctk.CTkLabel(form, text="Confirmation", anchor="w").grid(
-                row=4, column=0, sticky="w", padx=10, pady=8
+                row=4, column=0, sticky="w", padx=SPACE_MD, pady=SPACE_SM
             )
             self.confirm_entry = ctk.CTkEntry(form, show="•")
-            self.confirm_entry.grid(row=4, column=1, columnspan=2, sticky="ew", padx=10, pady=8)
+            self.confirm_entry.grid(row=4, column=1, columnspan=2, sticky="ew", padx=SPACE_MD, pady=SPACE_SM)
 
             self.message = ctk.CTkLabel(self, text="", text_color="#F87171", anchor="w", wraplength=580)
-            self.message.pack(fill="x", padx=18, pady=(4, 0))
+            self.message.pack(fill="x", padx=SPACE_LG, pady=(SPACE_XS, 0))
 
             buttons = ctk.CTkFrame(self)
-            buttons.pack(fill="x", padx=18, pady=(4, 16))
+            buttons.pack(fill="x", padx=SPACE_LG, pady=(SPACE_XS, SPACE_LG))
             ctk.CTkButton(buttons, text="Plus tard", width=110, command=self._skip).pack(
                 side="left"
             )

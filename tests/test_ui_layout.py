@@ -264,15 +264,38 @@ def test_plan_paddings_stay_on_the_unique_scale() -> None:
 
 
 def test_window_source_has_no_off_scale_padding_literal() -> None:
-    """Le source ne doit pas réintroduire un écart hors échelle."""
-    source = (ROOT / "ui" / "app_gui.py").read_text(encoding="utf-8")
-    numbers = {
-        int(number)
-        for match in re.findall(r"pad[xy]=\(([^)]*)\)", source)
-        for number in re.findall(r"\d+", match)
-    }
-    numbers |= {int(match) for match in re.findall(r"pad[xy]=(\d+)\b", source)}
-    assert numbers <= set(SPACING_SCALE), sorted(numbers - set(SPACING_SCALE))
+    """Aucun fichier d'interface ne réintroduit un écart hors échelle."""
+    offenders: dict[str, list[int]] = {}
+    for path in sorted((ROOT / "ui").glob("*.py")):
+        source = path.read_text(encoding="utf-8")
+        numbers = {
+            int(number)
+            for match in re.findall(r"pad[xy]=\(([^)]*)\)", source)
+            for number in re.findall(r"\d+", match)
+        }
+        numbers |= {int(match) for match in re.findall(r"pad[xy]=(\d+)\b", source)}
+        off = sorted(numbers - set(SPACING_SCALE))
+        if off:
+            offenders[path.name] = off
+    assert not offenders, offenders
+
+
+def test_list_states_distinguish_loading_empty_and_failure() -> None:
+    """Un écran vide et une panne ne doivent jamais dire la même chose."""
+    from ui.list_state import (
+        STATE_EMPTY,
+        STATE_ERROR,
+        STATE_LOADING,
+        list_state_text,
+    )
+
+    kwargs = {"subject": "Clés", "loading": "Chargement des clés…", "empty": "Aucune clé."}
+    assert list_state_text(STATE_LOADING, **kwargs) == "Chargement des clés…"
+    assert list_state_text(STATE_EMPTY, **kwargs) == "Aucune clé."
+    failure = list_state_text(STATE_ERROR, **kwargs, reason="disque illisible")
+    assert "disque illisible" in failure and failure != "Aucune clé."
+    # Un état inconnu retombe sur le vide : jamais un écran muet.
+    assert list_state_text("inconnu", **kwargs) == "Aucune clé."
 
 
 def test_press_motion_lasts_between_150_and_300_ms() -> None:

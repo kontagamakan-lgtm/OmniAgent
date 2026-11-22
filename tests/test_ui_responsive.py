@@ -106,6 +106,41 @@ def test_long_status_and_budget_have_wrapping() -> None:
             window._on_close()
 
 
+def test_press_motion_returns_to_rest_and_survives_fast_clicks() -> None:
+    """Un appui puis relâchement retrouve la teinte d'origine, même en rafale."""
+    with tmpdir("ui-press-motion") as tmp:
+        window = _open_window(tmp)
+        try:
+            from ui.app_gui import _press_colors
+
+            button = window._button(window, "Essai", lambda: None)
+            button.place(x=0, y=0)
+            settle(window, rounds=2, delay=0.05)
+            rest = button.cget("fg_color")
+            # CustomTkinter pose ses liaisons sur la toile interne du bouton.
+            canvas = button._canvas
+
+            canvas.event_generate("<ButtonPress-1>", when="now")
+            settle(window, rounds=30, delay=0.02)
+            assert button.cget("fg_color") == _press_colors(rest)[1]
+
+            canvas.event_generate("<ButtonRelease-1>", when="now")
+            settle(window, rounds=30, delay=0.02)
+            assert button.cget("fg_color") == rest
+
+            # Clics en rafale : chaque trajet interrompt le précédent. Sans
+            # cela, deux minuteurs se chevauchent et le bouton reste sombre.
+            for _ in range(3):
+                canvas.event_generate("<ButtonPress-1>", when="now")
+                settle(window, rounds=2, delay=0.02)
+                canvas.event_generate("<ButtonRelease-1>", when="now")
+                settle(window, rounds=2, delay=0.02)
+            settle(window, rounds=40, delay=0.02)
+            assert button.cget("fg_color") == rest
+        finally:
+            window._on_close()
+
+
 def test_secondary_dialog_fits_the_minimum_window() -> None:
     with tmpdir("ui-responsive-dialog") as tmp:
         window = _open_window(tmp)
