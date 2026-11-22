@@ -6,7 +6,12 @@ import os
 
 from support import make_settings, tmpdir
 
-from ui.setup_wizard import apply_setup, needs_setup, write_env_value
+from ui.setup_wizard import (
+    apply_setup,
+    default_provider,
+    needs_setup,
+    write_env_value,
+)
 
 PASSPHRASE = "phrase-du-coffre-2026"
 #: Clé qui passe le préflight DeepSeek (préfixe, longueur, corps varié).
@@ -149,6 +154,36 @@ def test_apply_setup_requires_a_key_when_generating(monkeypatch) -> None:
         assert any("clé API requise" in line for line in errors), errors
 
 
+def test_default_provider_is_automatic_until_a_usable_key_exists(monkeypatch) -> None:
+    """Le menu ne réimpose plus DeepSeek quand la clé en place est refusée."""
+    with tmpdir("setup-default") as tmp:
+        settings = make_settings(tmp)
+        variable = settings.llm.api_key_env
+        monkeypatch.delenv(variable, raising=False)
+        assert default_provider(settings) == "auto", "premier démarrage sans clé"
+
+        monkeypatch.setenv(variable, "pas-une-cle-deepseek")
+        assert default_provider(settings) == "auto", "clé refusée : ne pas réimposer"
+
+        monkeypatch.setenv(variable, KEY)
+        assert default_provider(settings) == "deepseek", "clé utilisable : garder le choix"
+
+
+def test_apply_setup_detects_deepseek_behind_the_shared_sk_prefix(monkeypatch) -> None:
+    """Une clé `sk-` hexadécimale de 32 signes est DeepSeek, pas OpenAI."""
+    with tmpdir("setup-sk-deepseek") as tmp:
+        settings = make_settings(tmp)
+        monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+        key = "sk-" + "0123456789abcdef" * 2
+
+        errors = apply_setup(settings, api_key=key, provider="auto")
+
+        assert errors == [], errors
+        assert settings.llm.backend == "deepseek"
+        assert settings.llm.base_url == "https://api.deepseek.com/v1"
+        assert os.environ["DEEPSEEK_API_KEY"] == key
+
+
 def test_apply_setup_accepts_another_provider_and_switches_the_client(monkeypatch) -> None:
     """Une clé OpenAI n'est plus refusée pour un préfixe DeepSeek absent."""
     with tmpdir("setup-openai") as tmp:
@@ -188,6 +223,25 @@ def test_apply_setup_detects_the_provider_from_the_key_prefix(monkeypatch) -> No
         assert settings.llm.backend == "openai_compatible"
         assert settings.llm.base_url == "https://api.groq.com/openai/v1"
         assert settings.llm.model == "llama-3.3-70b-versatile"
+
+
+def test_apply_setup_names_the_provider_of_a_key_refused_for_deepseek(monkeypatch) -> None:
+    """Coller une clé OpenAI en laissant DeepSeek : le message le dit."""
+    with tmpdir("setup-deepseek-mismatch") as tmp:
+        settings = make_settings(tmp)
+        settings.ensure_directories()
+        env_file = tmp / ".env"
+        monkeypatch.delenv(settings.llm.api_key_env, raising=False)
+
+        errors = apply_setup(
+            settings,
+            api_key="sk-proj-abcdefghijklmnopqrstuvwxyz",
+            provider="deepseek",
+            env_path=env_file,
+        )
+
+        assert any("format d'une clé OpenAI" in line for line in errors), errors
+        assert not env_file.exists()
 
 
 def test_apply_setup_refuses_a_key_of_unknown_provider(monkeypatch) -> None:

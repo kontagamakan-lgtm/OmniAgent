@@ -123,11 +123,18 @@ PROVIDERS: dict[str, Provider] = {
 }
 
 
-def detect_provider(key: str) -> str:
-    """Devine le fournisseur d'après le préfixe de la clé.
+#: Clé DeepSeek classique : `sk-` suivi de 32 caractères hexadécimaux. OpenAI
+#: utilise `sk-proj-…` (ou des corps plus longs, avec majuscules et tirets), ce
+#: qui laisse le corps hexadécimal de 32 signes à DeepSeek.
+_DEEPSEEK_KEY_BODY = re.compile(r"^[0-9a-fA-F]{32}$")
 
-    `sk-` est ambigu (OpenAI et DeepSeek) : OpenAI est choisi par défaut, et
-    l'appelant peut toujours imposer un fournisseur explicite.
+
+def detect_provider(key: str) -> str:
+    """Devine le fournisseur d'après la clé elle-même.
+
+    `sk-` est ambigu (OpenAI et DeepSeek) : le corps hexadécimal de 32 signes
+    de DeepSeek est reconnu, et tout autre `sk-…` reste OpenAI. L'appelant peut
+    toujours imposer un fournisseur explicite.
     """
     clean = str(key or "").strip()
     for prefix in ("sk-ant-", "sk-or-", "sk-proj-", "sk-ds-", "sk-mistral-"):
@@ -140,6 +147,8 @@ def detect_provider(key: str) -> str:
         return "groq"
     if clean.startswith("AIza"):
         return "gemini"
+    if clean.startswith("sk-") and _DEEPSEEK_KEY_BODY.match(clean[3:]):
+        return "deepseek"
     if clean.startswith("sk-"):
         return "openai"
     raise ValueError(
