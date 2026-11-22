@@ -86,10 +86,8 @@ def _mix_color(start: str, end: str, ratio: float) -> str:
 def _press_colors(
     color: str, *, darken: float = _PRESS_DARKEN
 ) -> tuple[str, str]:
-    """Couleur au repos et couleur enfoncée : la seconde assombrit la première."""
-    red, green, blue = _hex_channels(color)
-    pressed = [round(channel * (1.0 - max(0.0, min(0.9, float(darken))))) for channel in (red, green, blue)]
-    return color, "#" + "".join(f"{value:02X}" for value in pressed)
+    """Couleur au repos et couleur enfoncée : assombrir, c'est mêler du noir."""
+    return color, _mix_color(color, "#000000", max(0.0, min(0.9, float(darken))))
 
 
 #: États d'une zone qui dépend de données : charger, vide et échec se disent
@@ -104,7 +102,7 @@ _STATUS_COLORS = {"idle": "#ABC6A6", "busy": "#D7F5CF", "error": _UI_RED}
 
 
 def list_state_text(
-    state: str, *, loading: str, empty: str, subject: str, reason: str = ""
+    state: str, *, subject: str, loading: str = "", empty: str = "", reason: str = ""
 ) -> str:
     """Phrase d'une liste selon son état, jamais un vide ambigu."""
     if state == STATE_LOADING:
@@ -539,7 +537,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             return header
 
         def _focus_composer(self) -> None:
-            """Cliquer sur « Assistant » ramène au composeur sans effacer la session."""
+            """Cliquer sur « Tâche en cours » ramène au composeur, sans rien effacer."""
             self.prompt.focus_set()
 
         def _focus_navigation(self, _event: object | None = None) -> str:
@@ -1276,45 +1274,69 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
         def _bind_press_motion(self, button: Any) -> None:
             """Donne à un bouton ses états d'appui animés (192 ms).
 
-            La couleur de repos est relue à chaque appui : les entrées de
-            navigation changent de fond quand elles deviennent actives, et une
-            base figée à la construction ramènerait l'ancienne teinte. Les
-            boutons « transparents » n'ont rien à interpoler et sont laissés
-            tels quels.
+            La teinte de repos est relue quand le bouton est au repos : les
+            entrées de navigation changent de fond en devenant actives, et une
+            base figée à la construction ramènerait l'ancienne couleur. Les
+            boutons « transparents » n'ont rien à interpoler et sont ignorés.
             """
-            state: dict[str, list[str]] = {"frames": []}
+            frames: list[str] = []
+            rest = ""
+            timer = ""
+            running = False
 
             def animate(sequence: list[str]) -> None:
+                """Joue une suite de teintes ; un nouvel appui remplace l'ancienne."""
+                nonlocal timer, running
+                if timer:
+                    self.after_cancel(timer)
+                    timer = ""
+                running = True
+
                 def step(index: int = 0) -> None:
+                    nonlocal timer, running
+                    timer = ""
                     if not button.winfo_exists():
+                        running = False
                         return
                     try:
                         button.configure(fg_color=sequence[index])
                     except Exception:  # noqa: BLE001 - bouton détruit en route
+                        running = False
                         return
                     if index + 1 < len(sequence):
-                        self.after(_PRESS_STEP_MS, lambda: step(index + 1))
+                        timer = self.after(
+                            _PRESS_STEP_MS, lambda: step(index + 1)
+                        )
+                    else:
+                        running = False
 
                 step()
 
             def on_press(_event: Any = None) -> None:
-                try:
-                    current = button.cget("fg_color")
-                except Exception:  # noqa: BLE001 - bouton détruit
+                nonlocal rest
+                # Un appui pendant le trajet garde la teinte de repos connue :
+                # la relire sur un bouton déjà assombri assombrirait l'appui
+                # suivant, et chaque clic rapide dériverait la couleur.
+                if not running:
+                    try:
+                        current = button.cget("fg_color")
+                    except Exception:  # noqa: BLE001 - bouton détruit
+                        return
+                    if not isinstance(current, str) or not current.startswith("#"):
+                        return
+                    try:
+                        rest = _press_colors(current)[0]
+                    except ValueError:
+                        return
+                if not rest:
                     return
-                if not isinstance(current, str) or not current.startswith("#"):
-                    return
-                try:
-                    rest, pressed = _press_colors(current)
-                except ValueError:
-                    return
-                state["frames"] = _press_frames(rest, pressed)
+                frames[:] = _press_frames(*_press_colors(rest))
                 # Le premier élément est déjà la couleur courante : on l'omet
                 # pour que l'appui dure exactement `_PRESS_STEPS` pas.
-                animate(state["frames"][1:])
+                animate(frames[1:])
 
             def on_release(_event: Any = None) -> None:
-                frames = state.get("frames") or []
+                """Rejoue le trajet à l'envers : le repos est retrouvé, pas approché."""
                 if frames:
                     animate(list(reversed(frames))[1:])
 
@@ -1932,35 +1954,44 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             )
             table.render_state(
                 list_state_text(
-                    STATE_LOADING,
-                    subject="Clés",
-                    loading="Chargement des clés…",
-                    empty="",
+                    STATE_LOADING, subject="Clés", loading="Chargement des clés…"
                 )
             )
 
             def refresh() -> None:
+                """Relit les clés toutes les 2 s ; une panne devient un état à l'écran.
+
+                La lecture entière est protégée, pas seulement le rendu : un
+                coffre ou un routeur en défaut ne doit ni arrêter la boucle ni
+                se faire passer pour une absence de clé.
+                """
                 try:
                     if not window.winfo_exists():
                         return
-                    vault.check_timeout()
-                    state = "déverrouillé" if vault.unlocked else "verrouillé"
-                    mode = "actif" if self.settings.llm_router.enabled else "désactivé"
-                    current = router.current_model or "aucun appel réussi"
-                    header.configure(
-                        text=f"Modèle courant : {current} · routeur {mode} · coffre {state}"
-                    )
                     try:
+                        vault.check_timeout()
+                        state = (
+                            "déverrouillé" if vault.unlocked else "verrouillé"
+                        )
+                        mode = (
+                            "actif"
+                            if self.settings.llm_router.enabled
+                            else "désactivé"
+                        )
+                        current = router.current_model or "aucun appel réussi"
+                        header.configure(
+                            text=(
+                                f"Modèle courant : {current} · routeur {mode} · "
+                                f"coffre {state}"
+                            )
+                        )
                         table.render(router.key_statuses())
                     except Exception as exc:  # noqa: BLE001 - panne dite à l'écran
+                        logger.debug(
+                            "panneau des clés : lecture impossible", exc_info=True
+                        )
                         table.render_state(
-                            list_state_text(
-                                STATE_ERROR,
-                                subject="Clés",
-                                loading="",
-                                empty="",
-                                reason=str(exc),
-                            )
+                            list_state_text(STATE_ERROR, subject="Clés", reason=str(exc))
                         )
                     window.after(2000, refresh)
                 except Exception:  # noqa: BLE001 - fenêtre refermée pendant le rafraîchissement
@@ -2166,10 +2197,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             state_label = ctk.CTkLabel(
                 frame,
                 text=list_state_text(
-                    STATE_LOADING,
-                    subject="Journal",
-                    loading="Chargement du journal…",
-                    empty="",
+                    STATE_LOADING, subject="Journal", loading="Chargement du journal…"
                 ),
                 justify="left",
                 anchor="w",
@@ -2186,13 +2214,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 ).tail(50)
             except Exception as exc:  # noqa: BLE001 - la panne est dite à l'écran
                 state_label.configure(
-                    text=list_state_text(
-                        STATE_ERROR,
-                        subject="Journal",
-                        loading="",
-                        empty="",
-                        reason=str(exc),
-                    )
+                    text=list_state_text(STATE_ERROR, subject="Journal", reason=str(exc))
                 )
                 return
             state_label.configure(
@@ -2222,7 +2244,6 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                     STATE_LOADING,
                     subject="Propositions",
                     loading="Chargement des propositions…",
-                    empty="",
                 ),
                 anchor="w",
                 justify="left",
@@ -2233,13 +2254,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 pending = pending_proposals(self.settings)
             except Exception as exc:  # noqa: BLE001 - la panne est dite à l'écran
                 state_label.configure(
-                    text=list_state_text(
-                        STATE_ERROR,
-                        subject="Propositions",
-                        loading="",
-                        empty="",
-                        reason=str(exc),
-                    )
+                    text=list_state_text(STATE_ERROR, subject="Propositions", reason=str(exc))
                 )
                 return
             if not pending:
@@ -2247,7 +2262,6 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                     text=list_state_text(
                         STATE_EMPTY,
                         subject="Propositions",
-                        loading="",
                         empty="Aucune proposition en attente (mode --autonomy-propose).",
                     )
                 )
