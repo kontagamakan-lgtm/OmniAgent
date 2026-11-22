@@ -387,10 +387,13 @@ leur HTTP 401 est plus précis qu'une devinette locale.
 Anthropic est servi par le client unique quand `llm.backend = "anthropic"` :
 l'API Messages impose son endpoint `/messages`, la clé dans `x-api-key`, la
 version `2023-06-01`, un prompt système séparé et des blocs `tool_use` /
-`tool_result`. Le tour complet est rendu d'un bloc (`on_token` reçoit tout le
-texte), sans lecture du flux SSE : le contrat de `stream_complete` ne change
-pas, seule la granularité diffère. Le routeur multi-clés continue de parler le
-même protocole de son côté.
+`tool_result`. Le flux SSE est décodé comme chez les autres fournisseurs :
+`content_block_delta` de type `text_delta` pousse chaque fragment à `on_token`,
+un bloc `tool_use` s'annonce par `content_block_start` puis reconstitue ses
+arguments à partir des `input_json_delta`, et `message_start`/`message_delta`
+fournissent les compteurs. Une annulation ferme la réponse en cours, comme
+ailleurs. Le routeur multi-clés continue de parler le même protocole de son
+côté, en non-flux puisqu'il doit pouvoir basculer de fournisseur.
 
 Un échec de préflight rend `needs_setup()` vrai et le contrôle « clé du
 fournisseur » bloquant dans `app.diagnostics()`. Le routeur refuse la clé avant
