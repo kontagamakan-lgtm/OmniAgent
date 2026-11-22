@@ -189,6 +189,7 @@ jobs:
       # écrites avant l'échec restent publiées par l'upload ci-dessous.
       - name: Snapshots (comparaison obligatoire)
         env:
+          UPDATE_UI_SNAPSHOTS: "1"
           OMNIAGENT_UI_SNAPSHOTS: "1"
           OMNIAGENT_UI_SNAPSHOT_DIR: artifacts/ui/ci
           OMNIAGENT_UI_SNAPSHOT_ACTUALS: artifacts/ui/actual
