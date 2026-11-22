@@ -60,7 +60,11 @@ _UI_LINE = "#242A34"
 _UI_LINE_SOFT = "#1D222B"
 _UI_TEXT = "#ECEFF3"
 _UI_MUTED = "#98A2AE"
-_UI_FAINT = "#707B88"
+#: Teinte des petits libellés (10 px). Elle doit rester lisible sur chaque
+#: fond de l'interface : 5,8:1 sur une carte, 5,4:1 sur la surface élevée,
+#: au-dessus du seuil AA de 4,5:1 pour du texte normal. La teinte précédente
+#: (#707B88) tombait à 4,1:1, insuffisant à cette taille.
+_UI_FAINT = "#8A95A3"
 _UI_ACCENT = "#E8A24B"
 _UI_ACCENT_SOFT = "#2A2114"
 _UI_GREEN = "#93B79E"

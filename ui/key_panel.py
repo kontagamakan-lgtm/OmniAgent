@@ -12,12 +12,16 @@ from typing import Any, Callable
 from ui.layout import SPACE_SM, SPACE_XS
 from ui.list_state import STATE_EMPTY, StateLabel
 
+#: Pastilles d'état, en couple (clair, sombre) : la fenêtre suit l'apparence
+#: choisie, une teinte unique serait illisible dans l'autre mode.
 STATUS_COLORS = {
-    "ACTIVE": "#93B79E",
-    "COOLDOWN": "#E8A24B",
-    "EXHAUSTED": "#E08B82",
-    "DEAD": "#8A4B45",
+    "ACTIVE": ("#2A6B3F", "#93B79E"),
+    "COOLDOWN": ("#8A5300", "#E8A24B"),
+    "EXHAUSTED": ("#A33B33", "#E08B82"),
+    "DEAD": ("#6B2E29", "#B0685F"),
 }
+#: État inconnu : ton neutre, lisible sur les deux fonds.
+_UNKNOWN_STATUS_COLOR = ("#556070", "#8A95A3")
 
 STATUS_LABELS = {
     "ACTIVE": "active",
@@ -140,7 +144,7 @@ class KeyTable:
             self.rows[key_id] = entry
 
         entry["dot"].configure(
-            text_color=STATUS_COLORS.get(row["status"], "#707B88")
+            text_color=STATUS_COLORS.get(row["status"], _UNKNOWN_STATUS_COLOR)
         )
         entry["detail"].configure(text=format_key_detail(row))
         if row["status"] == "ACTIVE":
