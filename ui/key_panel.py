@@ -13,10 +13,10 @@ from ui.layout import SPACE_SM, SPACE_XS
 from ui.list_state import STATE_EMPTY, StateLabel
 
 STATUS_COLORS = {
-    "ACTIVE": "#16A34A",
-    "COOLDOWN": "#D97706",
-    "EXHAUSTED": "#DC2626",
-    "DEAD": "#7F1D1D",
+    "ACTIVE": "#93B79E",
+    "COOLDOWN": "#E8A24B",
+    "EXHAUSTED": "#E08B82",
+    "DEAD": "#8A4B45",
 }
 
 STATUS_LABELS = {
@@ -114,8 +114,9 @@ class KeyTable:
                 line,
                 text="Réactiver",
                 width=90,
-                fg_color="#1D4ED8",
-                hover_color="#1E40AF",
+                fg_color="#E8A24B",
+                hover_color="#F0B368",
+                text_color="#20180C",
                 command=lambda key=key_id: self.on_reset(key),
             )
             reset.grid(row=0, column=2, padx=SPACE_SM, pady=SPACE_XS)
@@ -123,8 +124,9 @@ class KeyTable:
                 line,
                 text="Supprimer",
                 width=90,
-                fg_color="#7F1D1D",
-                hover_color="#991B1B",
+                fg_color="#2A1B19",
+                hover_color="#3A2422",
+                text_color="#E08B82",
                 command=lambda key=key_id: self.on_remove(key),
             )
             remove.grid(row=0, column=3, padx=SPACE_SM, pady=SPACE_XS)
@@ -138,7 +140,7 @@ class KeyTable:
             self.rows[key_id] = entry
 
         entry["dot"].configure(
-            text_color=STATUS_COLORS.get(row["status"], "#6B7280")
+            text_color=STATUS_COLORS.get(row["status"], "#707B88")
         )
         entry["detail"].configure(text=format_key_detail(row))
         if row["status"] == "ACTIVE":

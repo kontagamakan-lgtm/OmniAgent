@@ -46,19 +46,26 @@ __all__ = ["OmniAgentWindow", "available", "run_gui"]
 
 logger = logging.getLogger(f"{APP_ID}.ui")
 
-# Palette de la maquette : fonds presque noirs, surfaces vert-gris et accent
-# menthe. Les widgets de la fenêtre principale la reprennent explicitement,
-# pour que le thème reste cohérent même si CustomTkinter change ses défauts.
-_UI_BG = "#101313"
-_UI_SIDEBAR = "#131717"
-_UI_SURFACE = "#191D1D"
-_UI_SURFACE_2 = "#1E2322"
-_UI_FIELD = "#111612"
-_UI_LINE = "#2A302E"
-_UI_TEXT = "#ECF0ED"
-_UI_MUTED = "#8C9691"
-_UI_ACCENT_DARK = "#263B29"
-_UI_RED = "#ED8F89"
+# Palette « Atelier » : une encre froide, des surfaces graphite et une seule
+# couleur de signal. Tout ce qui n'est pas l'accent reste neutre, pour que
+# l'œil trouve l'action et l'état sans traverser une grille de teintes. Les
+# widgets de la fenêtre principale reprennent ces valeurs explicitement, afin
+# que le rendu ne dépende pas des défauts de CustomTkinter.
+_UI_BG = "#0D0F12"
+_UI_SIDEBAR = "#11141A"
+_UI_SURFACE = "#151920"
+_UI_SURFACE_2 = "#1B2028"
+_UI_FIELD = "#0F1216"
+_UI_LINE = "#242A34"
+_UI_LINE_SOFT = "#1D222B"
+_UI_TEXT = "#ECEFF3"
+_UI_MUTED = "#98A2AE"
+_UI_FAINT = "#707B88"
+_UI_ACCENT = "#E8A24B"
+_UI_ACCENT_SOFT = "#2A2114"
+_UI_GREEN = "#93B79E"
+_UI_RED = "#E08B82"
+_UI_RED_SOFT = "#2A1B19"
 
 #: Micro-mouvement des états d'appui : 12 pas de 16 ms, soit 192 ms. La
 #: fenêtre de 150 à 300 ms est celle d'un retour qu'on voit sans qu'il retarde
@@ -92,8 +99,16 @@ def _press_colors(
     return color, _mix_color(color, "#000000", max(0.0, min(0.9, float(darken))))
 
 
-#: Couleur de la pastille de session selon l'état : neutre, en cours, en échec.
-_STATUS_COLORS = {"idle": "#ABC6A6", "busy": "#D7F5CF", "error": _UI_RED}
+#: Couleur de la pastille de session selon l'état : au repos, en cours,
+#: en échec. Le grand libellé reste, lui, en teinte de texte : la couleur dit
+#: l'état, elle ne colore pas une phrase entière.
+_STATUS_COLORS = {"idle": _UI_GREEN, "busy": _UI_ACCENT, "error": _UI_RED}
+#: Fondu d'une couleur d'état : 8 pas de 20 ms, même fenêtre que l'appui.
+_STATUS_FADE_STEPS = 8
+_STATUS_FADE_STEP_MS = 20
+#: Montée de la jauge de budget : 8 pas de 24 ms, soit 192 ms.
+_PROGRESS_STEPS = 8
+_PROGRESS_STEP_MS = 24
 
 
 def _press_frames(
@@ -265,6 +280,11 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             self._sidebar_soon = SingleTimer(self.after, self.after_cancel)
             self._sidebar_late = SingleTimer(self.after, self.after_cancel)
             self._sidebar_retry = SingleTimer(self.after, self.after_cancel)
+            #: Fondu de la pastille d'état et montée de la jauge : un minuteur
+            #: chacune, pour qu'une rafale d'états ne laisse pas deux fondus
+            #: se disputer la même couleur.
+            self._status_fade = SingleTimer(self.after, self.after_cancel)
+            self._budget_fade = SingleTimer(self.after, self.after_cancel)
             self._step = 0
             #: Dernier run tracé : support du bouton « Annuler ce run ».
             self._last_run_id = ""
@@ -345,6 +365,20 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             return (
                 self.settings.ui.font_family,
                 max(9, int(self.settings.ui.font_size) + delta),
+                weight,
+            )
+
+        def _serif(self, delta: int = 0, weight: str = "bold") -> tuple:
+            """Police des titres : un serif éditorial, contrepoint du sans-serif.
+
+            Georgia est livrée avec Windows ; ailleurs, Tk retombe sur sa police
+            par défaut sans casser la mise en page. Réserver le serif aux titres
+            et aux valeurs donne à l'ensemble une voix, sans mélanger deux
+            familles dans une même phrase.
+            """
+            return (
+                "Georgia",
+                max(11, int(self.settings.ui.font_size) + delta),
                 weight,
             )
 
@@ -431,23 +465,25 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 "width": width,
                 "height": height,
                 "anchor": anchor,
-                "corner_radius": 7,
+                "corner_radius": 8,
                 "font": self._font(font_delta, "bold" if primary else "normal"),
             }
             if primary:
                 options.update(
                     fg_color=self._accent,
-                    hover_color="#C9F7C5",
-                    text_color="#1C301E",
+                    hover_color=_mix_color(self._accent, "#FFFFFF", 0.18),
+                    text_color="#20180C",
                     border_width=0,
                 )
             elif danger:
+                # Une action destructrice se signale par son filet, pas par un
+                # aplat rouge qui pèserait plus lourd que l'action principale.
                 options.update(
-                    fg_color="#2A1D1B",
-                    hover_color="#3A2522",
+                    fg_color="transparent",
+                    hover_color=_UI_RED_SOFT,
                     text_color=_UI_RED,
                     border_width=1,
-                    border_color="#4A302E",
+                    border_color="#3B2A27",
                 )
             elif ghost:
                 options.update(
@@ -459,13 +495,14 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             else:
                 options.update(
                     fg_color=_UI_SURFACE_2,
-                    hover_color="#273027",
+                    hover_color="#232A34",
                     text_color=_UI_TEXT,
                     border_width=1,
                     border_color=_UI_LINE,
                 )
             button = ctk.CTkButton(parent, **options)
             self._bind_press_motion(button)
+            self._bind_focus_ring(button)
             return button
 
         def _nav(
@@ -476,38 +513,61 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             *,
             active: bool = False,
         ) -> Any:
-            """Entrée de la barre latérale, avec l'état actif de la maquette."""
+            """Entrée de la barre latérale : un filet d'accent dit l'état actif.
+
+            Le repère occupe sa propre colonne, donc le libellé reste aligné sur
+            toutes les entrées, actives ou non, sans espaces d'indentation.
+            """
+            row = ctk.CTkFrame(parent, fg_color="transparent", corner_radius=0)
+            row.pack(fill="x", pady=SPACE_XS)
+            # Hauteur demandée minimale : `fill="y"` lui donne celle de la
+            # ligne. Un CTkFrame sans hauteur réclame 200 px et étirerait
+            # chaque entrée de navigation.
+            marker = ctk.CTkFrame(
+                row,
+                width=2,
+                height=1,
+                fg_color=self._accent if active else _UI_SIDEBAR,
+                corner_radius=1,
+            )
+            marker.pack(side="left", fill="y")
+            marker.pack_propagate(False)
             button = self._button(
-                parent,
-                f"    {text}",
+                row,
+                text,
                 command,
                 ghost=True,
-                width=190,
+                width=170,
                 height=38,
                 anchor="w",
                 font_delta=-1,
             )
+            button.pack(side="left", fill="x", expand=True, padx=(SPACE_SM, 0))
             if active:
                 button.configure(
-                    fg_color=_UI_ACCENT_DARK,
-                    hover_color="#2E4032",
+                    fg_color=_UI_ACCENT_SOFT,
+                    hover_color="#33281A",
                     text_color=self._accent,
                 )
-            button.pack(fill="x", pady=SPACE_XS)
             self._nav_buttons.append(button)
             return button
 
-        def _card(self, parent: Any) -> Any:
+        def _card(self, parent: Any, *, radius: int = 14) -> Any:
+            """Surface de panneau : un seul gris, un filet, aucune ombre."""
             return ctk.CTkFrame(
                 parent,
                 fg_color=_UI_SURFACE,
                 border_width=1,
                 border_color=_UI_LINE,
-                corner_radius=10,
+                corner_radius=radius,
             )
 
+        def _stat(self, parent: Any) -> Any:
+            """Colonne de la bande de synthèse : pas de boîte, un filet suffit."""
+            return ctk.CTkFrame(parent, fg_color="transparent", corner_radius=0)
+
         def _panel_title(self, parent: Any, title: str) -> Any:
-            header = ctk.CTkFrame(parent, fg_color="transparent", height=44)
+            header = ctk.CTkFrame(parent, fg_color="transparent", height=46)
             header.pack(fill="x", padx=SPACE_LG)
             header.pack_propagate(False)
             ctk.CTkLabel(
@@ -567,11 +627,11 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             # compacte suffit à 900×620.
             side = ctk.CTkScrollableFrame(
                 self,
-                width=226,
+                width=236,
                 corner_radius=0,
                 fg_color=_UI_SIDEBAR,
                 scrollbar_button_color=_UI_LINE,
-                scrollbar_button_hover_color="#3A4739",
+                scrollbar_button_hover_color=_UI_FAINT,
             )
             side.grid(row=0, column=0, sticky="ns")
             self.sidebar = side
@@ -583,26 +643,31 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             brand.pack(fill="x", padx=SPACE_LG, pady=(SPACE_XL, 0))
             self.side_brand = brand
             ctk.CTkLabel(
-                brand, text="Omni", font=self._font(8, "bold"), text_color=_UI_TEXT
+                brand, text="Omni", font=self._serif(7), text_color=_UI_TEXT
             ).pack(side="left")
             ctk.CTkLabel(
                 brand,
                 text="Agent",
-                font=self._font(8, "bold"),
+                font=self._serif(7),
                 text_color=self._accent,
             ).pack(side="left")
 
-            workspace_switch = ctk.CTkFrame(
-                side,
-                fg_color=_UI_SURFACE,
-                border_width=1,
-                border_color=_UI_LINE,
-                corner_radius=8,
-            )
+            # Ce poste : un point et deux lignes, sans la boîte qui doublait
+            # le panneau. La pastille verte dit « local » sans le répéter.
+            workspace_switch = ctk.CTkFrame(side, fg_color="transparent")
             workspace_switch.pack(fill="x", padx=SPACE_LG, pady=(SPACE_XL, SPACE_XL))
             self.workspace_switch = workspace_switch
+            dot = ctk.CTkFrame(
+                workspace_switch,
+                width=8,
+                height=8,
+                corner_radius=4,
+                fg_color=_UI_GREEN,
+            )
+            dot.pack(side="left", padx=(0, SPACE_SM))
+            dot.pack_propagate(False)
             workspace_text = ctk.CTkFrame(workspace_switch, fg_color="transparent")
-            workspace_text.pack(side="left", padx=(SPACE_MD, SPACE_SM), pady=SPACE_SM)
+            workspace_text.pack(side="left")
             ctk.CTkLabel(
                 workspace_text,
                 text="Ce poste",
@@ -612,17 +677,17 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             ).pack(fill="x")
             ctk.CTkLabel(
                 workspace_text,
-                text="Windows, hors cloud",
+                text="Local, hors cloud",
                 font=self._font(-3),
-                text_color=_UI_MUTED,
+                text_color=_UI_FAINT,
                 anchor="w",
             ).pack(fill="x")
 
             self.workspace_label = ctk.CTkLabel(
                 side,
-                text="ESPACE DE TRAVAIL",
+                text="Espace de travail",
                 font=self._font(-3, "bold"),
-                text_color="#68746D",
+                text_color=_UI_FAINT,
                 anchor="w",
             )
             self.workspace_label.pack(fill="x", padx=SPACE_XL, pady=(0, SPACE_SM))
@@ -647,9 +712,9 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
 
             self.config_label = ctk.CTkLabel(
                 side,
-                text="CONFIGURATION",
+                text="Configuration",
                 font=self._font(-3, "bold"),
-                text_color="#68746D",
+                text_color=_UI_FAINT,
                 anchor="w",
             )
             self.config_label.pack(fill="x", padx=SPACE_XL, pady=(SPACE_XL, SPACE_SM))
@@ -679,7 +744,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             sidebar_bottom.pack(side="bottom", fill="x", padx=SPACE_LG, pady=SPACE_LG)
             self.sidebar_bottom = sidebar_bottom
             ctk.CTkFrame(
-                sidebar_bottom, height=1, fg_color=_UI_LINE
+                sidebar_bottom, height=1, fg_color=_UI_LINE_SOFT
             ).pack(fill="x", pady=(0, SPACE_MD))
             profile = ctk.CTkFrame(sidebar_bottom, fg_color="transparent")
             profile.pack(fill="x")
@@ -688,10 +753,10 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 text="OA",
                 width=32,
                 height=32,
-                corner_radius=16,
-                fg_color="#38382F",
-                text_color="#D4D5B6",
-                font=self._font(-2, "bold"),
+                corner_radius=8,
+                fg_color=_UI_ACCENT_SOFT,
+                text_color=self._accent,
+                font=self._serif(-3),
             ).pack(side="left")
             profile_text = ctk.CTkFrame(profile, fg_color="transparent")
             profile_text.pack(side="left", padx=SPACE_SM)
@@ -717,7 +782,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             main.grid_rowconfigure(1, weight=1)
 
             topbar = ctk.CTkFrame(
-                main, height=75, fg_color=_UI_BG, corner_radius=0
+                main, height=64, fg_color=_UI_BG, corner_radius=0
             )
             topbar.grid(row=0, column=0, sticky="ew", padx=SPACE_XXL)
             topbar.grid_propagate(False)
@@ -729,53 +794,45 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 crumbs,
                 text="Espace de travail",
                 font=self._font(-2),
-                text_color="#89958D",
+                text_color=_UI_FAINT,
             ).pack(side="left")
             ctk.CTkLabel(
                 crumbs,
                 text="/",
                 font=self._font(-2),
-                text_color="#48514B",
+                text_color="#3C4551",
             ).pack(side="left", padx=SPACE_SM)
             ctk.CTkLabel(
                 crumbs,
                 text="Tâche en cours",
                 font=self._font(-1),
-                text_color="#D6DDD7",
+                text_color=_UI_MUTED,
             ).pack(side="left")
 
             top_actions = ctk.CTkFrame(topbar, fg_color="transparent")
             top_actions.grid(row=0, column=2, sticky="e")
-            version = ctk.CTkFrame(
-                top_actions,
-                fg_color="transparent",
-                border_width=1,
-                border_color=_UI_LINE,
-                corner_radius=4,
-            )
-            version.pack(side="left", padx=(0, SPACE_SM))
             ctk.CTkLabel(
-                version,
+                top_actions,
                 text=f"v{APP_VERSION}",
                 font=self._font(-3),
-                text_color=_UI_MUTED,
-            ).pack(padx=SPACE_SM, pady=SPACE_XS)
+                text_color=_UI_FAINT,
+            ).pack(side="left", padx=(0, SPACE_MD))
             self._button(
                 top_actions,
-                "?",
+                "Aide",
                 self._support_bundle,
                 ghost=True,
-                width=30,
-                height=30,
-                font_delta=1,
+                width=56,
+                height=28,
+                font_delta=-2,
             ).pack(side="left")
             self.layout_badge = ctk.CTkLabel(
                 top_actions,
-                text="Mode compact",
+                text="Compact",
                 font=self._font(-4),
-                text_color="#B4C5A8",
-                fg_color="#243027",
-                corner_radius=4,
+                text_color=self._accent,
+                fg_color=_UI_ACCENT_SOFT,
+                corner_radius=6,
                 padx=SPACE_SM,
                 pady=SPACE_XS,
             )
@@ -799,17 +856,10 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             heading.grid_columnconfigure(0, weight=1)
             heading_text = ctk.CTkFrame(heading, fg_color="transparent")
             heading_text.grid(row=0, column=0, sticky="w")
-            ctk.CTkLabel(
-                heading_text,
-                text="AGENT LOCAL, SANS CLOUD",
-                font=self._font(-3, "bold"),
-                text_color=self._accent,
-                anchor="w",
-            ).pack(fill="x", pady=(0, SPACE_SM))
             self.heading_title = ctk.CTkLabel(
                 heading_text,
-                text="Décrivez la tâche, validez chaque étape.",
-                font=self._font(8, "bold"),
+                text="Décrivez la tâche. Vous validez chaque étape.",
+                font=self._serif(8),
                 text_color=_UI_TEXT,
                 anchor="w",
             )
@@ -843,77 +893,84 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 width=145,
             ).pack(side="left")
 
+            # Bande de synthèse : trois colonnes séparées par un filet, entre
+            # deux règles. Pas de boîte par valeur : la grille suffit à dire
+            # que ces chiffres sont un relevé, et l'œil y lit plus vite.
             summary = ctk.CTkFrame(content, fg_color="transparent")
             summary.grid(row=1, column=0, sticky="ew", pady=(0, SPACE_XL))
             self.summary_panel = summary
-            for column in range(3):
+            for column in (0, 2, 4):
                 summary.grid_columnconfigure(column, weight=1, uniform="stat")
+            ctk.CTkFrame(summary, height=1, fg_color=_UI_LINE_SOFT).grid(
+                row=0, column=0, columnspan=5, sticky="ew"
+            )
 
-            # Trois cartes de synthèse : un grand chiffre, un libellé discret.
-            # Les pastilles d'icônes qui doublaient chaque valeur ont disparu :
-            # elles attiraient l'œil autant que le chiffre et lisaient moins
-            # vite. Le « USD » de la carte budget suivait la même logique, le
-            # symbole étant déjà dans la valeur.
-            stat_agent = self._card(summary)
-            stat_agent.grid(row=0, column=0, sticky="nsew", padx=(0, SPACE_SM))
+            stat_agent = self._stat(summary)
+            stat_agent.grid(row=1, column=0, sticky="nsew", pady=SPACE_MD)
             ctk.CTkLabel(
                 stat_agent,
                 text="Agent local",
                 font=self._font(-3),
-                text_color="#96A197",
+                text_color=_UI_FAINT,
                 anchor="w",
-            ).grid(row=0, column=0, sticky="w", padx=SPACE_LG, pady=(SPACE_MD, 0))
+            ).pack(fill="x")
             self.status = ctk.CTkLabel(
                 stat_agent,
                 text="Prêt pour une tâche",
-                font=self._font(4, "bold"),
+                font=self._serif(5),
                 text_color=_UI_TEXT,
                 anchor="w",
                 justify="left",
                 wraplength=200,
             )
-            self.status.grid(
-                row=1, column=0, sticky="w", padx=SPACE_LG, pady=(0, SPACE_MD)
+            self.status.pack(fill="x", pady=(SPACE_XS, 0))
+
+            ctk.CTkFrame(summary, width=1, height=1, fg_color=_UI_LINE).grid(
+                row=1, column=1, sticky="ns", padx=SPACE_XL
             )
 
-            stat_tasks = self._card(summary)
-            stat_tasks.grid(row=0, column=1, sticky="nsew", padx=SPACE_SM)
+            stat_tasks = self._stat(summary)
+            stat_tasks.grid(row=1, column=2, sticky="nsew", pady=SPACE_MD)
             ctk.CTkLabel(
                 stat_tasks,
                 text="Tâches terminées",
                 font=self._font(-3),
-                text_color="#96A197",
+                text_color=_UI_FAINT,
                 anchor="w",
-            ).grid(row=0, column=0, sticky="w", padx=SPACE_LG, pady=(SPACE_MD, 0))
+            ).pack(fill="x")
             self.task_count_label = ctk.CTkLabel(
                 stat_tasks,
                 text="0",
-                font=self._font(7, "bold"),
+                font=self._serif(7),
                 text_color=_UI_TEXT,
                 anchor="w",
             )
-            self.task_count_label.grid(
-                row=1, column=0, sticky="w", padx=SPACE_LG, pady=(0, SPACE_MD)
+            self.task_count_label.pack(fill="x", pady=(SPACE_XS, 0))
+
+            ctk.CTkFrame(summary, width=1, height=1, fg_color=_UI_LINE).grid(
+                row=1, column=3, sticky="ns", padx=SPACE_XL
             )
 
-            stat_budget = self._card(summary)
-            stat_budget.grid(row=0, column=2, sticky="nsew", padx=(SPACE_SM, 0))
+            stat_budget = self._stat(summary)
+            stat_budget.grid(row=1, column=4, sticky="nsew", pady=SPACE_MD)
             ctk.CTkLabel(
                 stat_budget,
                 text="Coût aujourd'hui",
                 font=self._font(-3),
-                text_color="#96A197",
+                text_color=_UI_FAINT,
                 anchor="w",
-            ).grid(row=0, column=0, sticky="w", padx=SPACE_LG, pady=(SPACE_MD, 0))
+            ).pack(fill="x")
             self.budget_card_label = ctk.CTkLabel(
                 stat_budget,
                 text="0,00 $",
-                font=self._font(7, "bold"),
+                font=self._serif(7),
                 text_color=_UI_TEXT,
                 anchor="w",
             )
-            self.budget_card_label.grid(
-                row=1, column=0, sticky="w", padx=SPACE_LG, pady=(0, SPACE_MD)
+            self.budget_card_label.pack(fill="x", pady=(SPACE_XS, 0))
+
+            ctk.CTkFrame(summary, height=1, fg_color=_UI_LINE_SOFT).grid(
+                row=2, column=0, columnspan=5, sticky="ew"
             )
 
             workspace = ctk.CTkFrame(content, fg_color="transparent")
@@ -929,7 +986,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             assistant.grid_rowconfigure(1, weight=1)
 
             panel_header = ctk.CTkFrame(
-                assistant, fg_color="transparent", height=60
+                assistant, fg_color="transparent", height=56
             )
             panel_header.grid(row=0, column=0, sticky="ew")
             panel_header.grid_propagate(False)
@@ -945,8 +1002,8 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 panel_header,
                 text="● Aucune tâche",
                 font=self._font(-3, "bold"),
-                text_color="#ABC6A6",
-                fg_color="#243027",
+                text_color=_UI_GREEN,
+                fg_color=_UI_SURFACE_2,
                 corner_radius=20,
                 padx=SPACE_SM,
                 pady=SPACE_XS,
@@ -970,18 +1027,18 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             self.welcome_icon = ctk.CTkLabel(
                 welcome_center,
                 text="O",
-                width=58,
-                height=58,
-                corner_radius=17,
-                fg_color="#29382A",
+                width=56,
+                height=56,
+                corner_radius=16,
+                fg_color=_UI_ACCENT_SOFT,
                 text_color=self._accent,
-                font=self._font(12, "bold"),
+                font=self._serif(14),
             )
             self.welcome_icon.pack()
             self.welcome_title = ctk.CTkLabel(
                 welcome_center,
                 text="Aucune tâche en cours.",
-                font=self._font(6, "bold"),
+                font=self._serif(6),
                 text_color=_UI_TEXT,
             )
             self.welcome_title.pack(pady=(SPACE_LG, SPACE_XS))
@@ -1007,8 +1064,8 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 corner_radius=0,
                 text_color=_UI_TEXT,
                 font=self._font(-1),
-                scrollbar_button_color="#3A4739",
-                scrollbar_button_hover_color="#4B5A42",
+                scrollbar_button_color=_UI_LINE,
+                scrollbar_button_hover_color=_UI_FAINT,
             )
             self.transcript.grid(
                 row=0,
@@ -1032,8 +1089,8 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 composer_wrap,
                 fg_color=_UI_FIELD,
                 border_width=1,
-                border_color="#3A4739",
-                corner_radius=9,
+                border_color=_UI_LINE,
+                corner_radius=10,
             )
             composer.pack(fill="x")
             self.prompt = ctk.CTkTextbox(
@@ -1047,6 +1104,16 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             )
             self.prompt.pack(fill="x", padx=SPACE_MD, pady=(SPACE_SM, 0))
             self.prompt.bind("<Control-Return>", lambda _event: self._send())
+            # Le champ s'allume quand il a le focus : on voit où l'on écrit
+            # sans chercher le curseur.
+            self.prompt.bind(
+                "<FocusIn>",
+                lambda _event: composer.configure(border_color=self._accent),
+            )
+            self.prompt.bind(
+                "<FocusOut>",
+                lambda _event: composer.configure(border_color=_UI_LINE),
+            )
 
             composer_bottom = ctk.CTkFrame(composer, fg_color="transparent")
             composer_bottom.pack(fill="x", padx=SPACE_SM, pady=(SPACE_XS, SPACE_SM))
@@ -1073,7 +1140,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 font_delta=-3,
             )
             self.undo_button.pack(side="left", padx=SPACE_XS)
-            self._button(
+            self.journal_button = self._button(
                 composer_tools,
                 "Journal",
                 self._open_journal,
@@ -1081,7 +1148,11 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 width=64,
                 height=26,
                 font_delta=-3,
-            ).pack(side="left")
+            )
+            self.journal_button.pack(side="left")
+            #: Boutons secondaires du composeur. En compact, la colonne ne fait
+            #: que 290 px : ils s'effacent pour qu'« Envoyer » reste visible.
+            self._composer_quiet = (self.undo_button, self.journal_button)
             self.send_button = self._button(
                 composer_bottom,
                 "Envoyer",
@@ -1112,7 +1183,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 composer_note,
                 text="Ctrl + Entrée pour envoyer  ·  Entrée pour une nouvelle ligne",
                 font=self._font(-4),
-                text_color="#68736A",
+                text_color=_UI_FAINT,
                 anchor="w",
                 justify="left",
             )
@@ -1122,7 +1193,9 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             right = ctk.CTkFrame(workspace, fg_color=_UI_BG)
             right.grid(row=0, column=1, sticky="nsew", padx=(SPACE_XL, 0))
             right.grid_columnconfigure(0, weight=1)
-            right.grid_rowconfigure(0, weight=1)
+            # La colonne garde ses contrôles groupés en haut : un arrêt
+            # d'urgence relégué au bas d'une grande fenêtre se cherche.
+            right.grid_rowconfigure(0, weight=0)
 
             session = self._card(right)
             session.grid(row=0, column=0, sticky="new")
@@ -1136,13 +1209,13 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 mode_row,
                 text="Approbations",
                 font=self._font(-3),
-                text_color="#99A498",
+                text_color=_UI_MUTED,
             ).pack(side="left")
             self.mode_label = ctk.CTkLabel(
                 mode_row,
                 text="● À chaque outil",
                 font=self._font(-3, "bold"),
-                text_color="#B4C5A8",
+                text_color=_UI_TEXT,
             )
             self.mode_label.pack(side="right")
 
@@ -1152,7 +1225,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 autonomy_row,
                 text="Cycles autonomes",
                 font=self._font(-3),
-                text_color="#99A498",
+                text_color=_UI_MUTED,
             ).pack(side="left")
             self.autonomy_button = self._button(
                 autonomy_row,
@@ -1171,17 +1244,17 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 trace_row,
                 text="Traces détaillées",
                 font=self._font(-3),
-                text_color="#99A498",
+                text_color=_UI_MUTED,
             ).pack(side="left")
             self.trace_switch = ctk.CTkSwitch(
                 trace_row,
                 text="",
                 width=38,
                 height=18,
-                fg_color="#414A40",
+                fg_color=_UI_LINE,
                 progress_color=self._accent,
-                button_color="#182218",
-                button_hover_color="#101810",
+                button_color="#0F1216",
+                button_hover_color="#1A2028",
                 command=self._toggle_trace,
             )
             self.trace_switch.pack(side="right")
@@ -1190,7 +1263,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             else:
                 self.trace_switch.deselect()
 
-            ctk.CTkFrame(session_body, height=1, fg_color=_UI_LINE).pack(
+            ctk.CTkFrame(session_body, height=1, fg_color=_UI_LINE_SOFT).pack(
                 fill="x", pady=(SPACE_SM, SPACE_XS)
             )
             budget_row = ctk.CTkFrame(session_body, fg_color="transparent")
@@ -1205,7 +1278,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 budget_row,
                 text="0,00 $ · sans plafond",
                 font=self._font(-3, "bold"),
-                text_color="#DBE3D5",
+                text_color=_UI_TEXT,
                 anchor="e",
                 justify="right",
                 wraplength=180,
@@ -1215,7 +1288,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 session_body,
                 height=4,
                 corner_radius=4,
-                fg_color="#2E362B",
+                fg_color=_UI_LINE,
                 progress_color=self._accent,
             )
             self.budget_progress.pack(fill="x", pady=(SPACE_SM, SPACE_XS))
@@ -1224,7 +1297,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 session_body,
                 text="Réinitialisation à minuit",
                 font=self._font(-4),
-                text_color="#71806F",
+                text_color=_UI_FAINT,
                 anchor="w",
             )
             self.budget_reset_label.pack(fill="x")
@@ -1249,7 +1322,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 footer,
                 text="Traces et fichiers restent sur ce poste.",
                 font=self._font(-4),
-                text_color="#5E6C60",
+                text_color=_UI_FAINT,
                 anchor="w",
             ).pack(side="left")
             self.bind_all("<Control-Alt-s>", lambda _event: self._emergency_stop())
@@ -1325,6 +1398,33 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
 
             button.bind("<ButtonPress-1>", on_press, add="+")
             button.bind("<ButtonRelease-1>", on_release, add="+")
+
+        def _bind_focus_ring(self, button: Any) -> None:
+            """Rend le focus clavier visible : un filet d'accent au clavier.
+
+            CustomTkinter ne dessine aucun anneau de focus : sans cela, tabuler
+            dans la fenêtre ne montre pas où l'on se trouve.
+            """
+            try:
+                base_color = button.cget("border_color")
+                base_width = int(button.cget("border_width"))
+            except Exception:  # noqa: BLE001 - bouton sans bordure
+                return
+
+            def show(_event: Any = None) -> None:
+                try:
+                    button.configure(border_color=self._accent, border_width=1)
+                except Exception:  # noqa: BLE001 - bouton détruit en route
+                    pass
+
+            def hide(_event: Any = None) -> None:
+                try:
+                    button.configure(border_color=base_color, border_width=base_width)
+                except Exception:  # noqa: BLE001 - bouton détruit en route
+                    pass
+
+            button.bind("<FocusIn>", show, add="+")
+            button.bind("<FocusOut>", hide, add="+")
 
         def _on_window_configure(self, event: Any) -> None:
             """Bascule le mode compact sans traiter les Configure des enfants."""
@@ -1501,6 +1601,11 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             self.composer_note_label.configure(
                 wraplength=plan.wrap_length if plan.compact else 0
             )
+            for quiet in vars(self).get("_composer_quiet", ()):
+                if plan.compact:
+                    quiet.pack_forget()
+                else:
+                    quiet.pack(side="left", padx=SPACE_XS)
             heading_wrap = plan.heading_wrap_length if plan.compact else 0
             self.heading_title.configure(wraplength=heading_wrap)
             self.heading_subtitle.configure(wraplength=heading_wrap)
@@ -1536,12 +1641,57 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                     transcript.grid()
 
         def _set_status(self, text: str, *, state: str = "idle") -> None:
-            """Met à jour la carte et la pastille, couleur d'état comprise."""
-            colour = _STATUS_COLORS.get(state, _STATUS_COLORS["idle"])
-            self.status.configure(text=text, text_color=colour)
+            """Met à jour la synthèse et la pastille, sans saut de couleur.
+
+            Le grand libellé garde la teinte du texte : la couleur d'état vit
+            dans la pastille, où elle se lit sans colorer la phrase entière.
+            """
+            colour = (
+                self._accent
+                if state == "busy"
+                else _STATUS_COLORS.get(state, _STATUS_COLORS["idle"])
+            )
+            self.status.configure(text=text)
             session = vars(self).get("session_status")
             if session is not None:
-                session.configure(text=f"● {text}", text_color=colour)
+                session.configure(text=f"● {text}")
+            self._fade_status(colour)
+
+        def _fade_status(self, target: str) -> None:
+            """Amène la pastille vers sa couleur d'état en 160 ms.
+
+            Un seul minuteur porte le fondu : un nouvel état annule le trajet
+            précédent au lieu de le laisser écrire une couleur périmée.
+            """
+            pill = vars(self).get("session_status")
+            if pill is None:
+                return
+            try:
+                current = pill.cget("text_color")
+            except Exception:  # noqa: BLE001 - widget en destruction
+                return
+            start = (
+                current
+                if isinstance(current, str) and current.startswith("#")
+                else target
+            )
+            timer = vars(self).get("_status_fade")
+            if not isinstance(timer, SingleTimer):
+                pill.configure(text_color=target)
+                return
+            position = {"step": 0}
+
+            def tick() -> None:
+                position["step"] += 1
+                share = min(1.0, position["step"] / _STATUS_FADE_STEPS)
+                try:
+                    pill.configure(text_color=_mix_color(start, target, share))
+                except Exception:  # noqa: BLE001 - widget détruit en route
+                    return
+                if share < 1.0:
+                    timer.start(_STATUS_FADE_STEP_MS, tick)
+
+            tick()
 
         def _record_task_done(self) -> None:
             """Compteur de la carte « Tâches effectuées » (session courante)."""
@@ -2070,8 +2220,9 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             ctk.CTkButton(
                 buttons,
                 text="Désinscrire",
-                fg_color="#B91C1C",
-                hover_color="#991B1B",
+                fg_color="#8E3B33",
+                hover_color="#A1463D",
+                text_color="#F5E7E4",
                 command=self._uninstall_schedule_task,
             ).pack(side="left", padx=(0, SPACE_SM))
             ctk.CTkButton(buttons, text="Fermer", command=window.destroy).pack(
@@ -2709,9 +2860,40 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                     label.configure(text=f"{state.usage.day_cost:.2f} $ · sans plafond")
             progress = local.get("budget_progress")
             if progress is not None:
-                progress.set(
-                    min(1.0, state.usage.day_cost / limit) if limit > 0 else 0.0
+                self._animate_progress(
+                    progress,
+                    min(1.0, state.usage.day_cost / limit) if limit > 0 else 0.0,
                 )
+
+        def _animate_progress(self, bar: Any, value: float) -> None:
+            """Monte la jauge vers sa valeur en 192 ms, sans saut brusque.
+
+            Le budget ne change qu'au rythme des runs : la jauge peut donc
+            prendre le temps de montrer qu'elle a bougé. Un minuteur unique
+            annule la montée précédente."""
+            target = max(0.0, min(1.0, float(value)))
+            try:
+                start = float(bar.get())
+            except Exception:  # noqa: BLE001 - jauge sans valeur lisible
+                bar.set(target)
+                return
+            timer = vars(self).get("_budget_fade")
+            if not isinstance(timer, SingleTimer) or abs(target - start) < 0.005:
+                bar.set(target)
+                return
+            position = {"step": 0}
+
+            def tick() -> None:
+                position["step"] += 1
+                share = position["step"] / _PROGRESS_STEPS
+                try:
+                    bar.set(start + (target - start) * share)
+                except Exception:  # noqa: BLE001 - jauge détruite
+                    return
+                if position["step"] < _PROGRESS_STEPS:
+                    timer.start(_PROGRESS_STEP_MS, tick)
+
+            tick()
 
         def _render(self, event: Event) -> None:
             payload: dict[str, Any] = event.payload if isinstance(event.payload, dict) else {}
@@ -2791,6 +2973,8 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                     self._sidebar_soon,
                     self._sidebar_late,
                     self._sidebar_retry,
+                    self._status_fade,
+                    self._budget_fade,
                 ):
                     timer.cancel()
             finally:
