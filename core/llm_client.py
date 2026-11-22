@@ -40,6 +40,8 @@ __all__ = ["LLMClient", "LLMResponse"]
 logger = logging.getLogger(f"{APP_ID}.llm")
 
 _RETRYABLE_STATUS = {408, 409, 425, 429, 500, 502, 503, 504}
+#: Version du protocole Messages exigée par Anthropic à chaque requête.
+_ANTHROPIC_VERSION = "2023-06-01"
 
 
 def _aborted_error() -> LLMError:
@@ -75,7 +77,7 @@ class LLMResponse:
 
 
 class LLMClient:
-    """Appels HTTP vers DeepSeek/OpenAI-compatible ou Ollama."""
+    """Appels HTTP vers DeepSeek, un endpoint compatible OpenAI, Anthropic ou Ollama."""
 
     #: `AgentCore` s'en sert pour choisir `stream_complete` quand c'est possible.
     supports_stream = True
@@ -179,6 +181,16 @@ class LLMClient:
                 },
             }
             return url, {"Content-Type": "application/json"}, payload
+        if self.cfg.backend == "anthropic":
+            # API Messages : la clé passe par `x-api-key`, pas par un Bearer, et
+            # la version du protocole doit être annoncée.
+            url = f"{self.cfg.base_url.rstrip('/')}/messages"
+            headers = {
+                "Content-Type": "application/json",
+                "x-api-key": self.cfg.api_key(),
+                "anthropic-version": _ANTHROPIC_VERSION,
+            }
+            return url, headers, {}
         url = f"{self.cfg.base_url.rstrip('/')}/chat/completions"
         headers = {
             "Content-Type": "application/json",
@@ -344,6 +356,62 @@ class LLMClient:
             raw=data,
         )
 
+    def _parse_anthropic(self, data: dict[str, Any]) -> LLMResponse:
+        """Réponse de l'API Messages : blocs de texte et blocs `tool_use`."""
+        blocks = data.get("content")
+        if not isinstance(blocks, list):
+            raise LLMResponseError("réponse Anthropic sans contenu", details=data)
+        texts: list[str] = []
+        calls: list[ParsedToolCall] = []
+        for block in blocks:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "text":
+                texts.append(str(block.get("text") or ""))
+                continue
+            if block.get("type") != "tool_use":
+                continue
+            name = str(block.get("name") or "").strip()
+            if not name:
+                continue
+            value = block.get("input")
+            if isinstance(value, dict):
+                arguments = dict(value)
+            else:
+                try:
+                    arguments = decode_arguments(value)
+                except Exception:  # noqa: BLE001 - un appel illisible est ignoré
+                    arguments = {}
+            calls.append(
+                ParsedToolCall(
+                    name=name,
+                    arguments=arguments,
+                    raw=json.dumps(block, ensure_ascii=False),
+                    source="provider",
+                    call_id=str(block.get("id") or ""),
+                )
+            )
+        usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+        prompt = max(0, int(usage.get("input_tokens") or 0))
+        completion = max(0, int(usage.get("output_tokens") or 0))
+        return LLMResponse(
+            text="".join(texts).strip(),
+            tool_calls=calls,
+            model=str(data.get("model") or self.cfg.model),
+            finish_reason=str(data.get("stop_reason") or ""),
+            # Mêmes clés que le protocole OpenAI : le coût et les compteurs
+            # lisent `prompt_tokens`/`completion_tokens` quel que soit le
+            # fournisseur.
+            usage={
+                "prompt_tokens": prompt,
+                "completion_tokens": completion,
+                "total_tokens": prompt + completion,
+                "input_tokens": prompt,
+                "output_tokens": completion,
+            },
+            raw=data,
+        )
+
     # -- API publique -------------------------------------------------------
 
     def complete(
@@ -357,6 +425,10 @@ class LLMClient:
         """Un tour de génération, avec reprises sur erreurs transitoires."""
         self._require_credentials()
         chosen = model or self.cfg.model
+        if self.cfg.backend == "anthropic":
+            return self._complete_anthropic(
+                messages, tools, model=chosen, temperature=temperature
+            )
         url, headers, extra = self._endpoint(chosen)
         payload: dict[str, Any] = {
             **extra,
@@ -378,11 +450,22 @@ class LLMClient:
             if self.cfg.backend != "ollama":
                 payload["tool_choice"] = "auto"
 
+        data = self._post_retrying(url, headers, payload)
+        return (
+            self._parse_ollama(data)
+            if self.cfg.backend == "ollama"
+            else self._parse_openai(data)
+        )
+
+    def _post_retrying(
+        self, url: str, headers: dict[str, str], payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Envoi avec reprises sur les erreurs transitoires du fournisseur."""
         attempts = max(0, int(self.cfg.max_retries)) + 1
         last_error: Exception | None = None
         for attempt in range(1, attempts + 1):
             try:
-                data = self._post(url, headers, payload)
+                return self._post(url, headers, payload)
             except LLMError as exc:
                 last_error = exc
                 if not exc.retryable or attempt >= attempts:
@@ -399,12 +482,53 @@ class LLMClient:
                 if delay:
                     self._sleep(delay)
                 continue
-            return (
-                self._parse_ollama(data)
-                if self.cfg.backend == "ollama"
-                else self._parse_openai(data)
-            )
         raise last_error or LLMError("échec inconnu du fournisseur")
+
+    def _anthropic_payload(
+        self,
+        messages: Sequence[dict[str, Any]],
+        tools: Sequence[dict[str, Any]] | None,
+        *,
+        model: str,
+        temperature: float | None,
+    ) -> dict[str, Any]:
+        """Charge utile de l'API Messages : système à part, blocs, pas de top_p.
+
+        Les conversions viennent du routeur multi-LLM, importé ici et non en
+        tête de module : `core.llm_router` importe ce fichier, l'import différé
+        évite le cycle.
+        """
+        from core.llm_router import to_anthropic_messages, to_anthropic_tools
+
+        system, converted = to_anthropic_messages(messages)
+        payload: dict[str, Any] = {
+            "model": model,
+            "max_tokens": self.cfg.max_output_tokens,
+            "temperature": (
+                self.cfg.temperature if temperature is None else float(temperature)
+            ),
+            "messages": converted,
+        }
+        if system:
+            payload["system"] = system
+        if tools:
+            payload["tools"] = to_anthropic_tools(tools)
+        return payload
+
+    def _complete_anthropic(
+        self,
+        messages: Sequence[dict[str, Any]],
+        tools: Sequence[dict[str, Any]] | None,
+        *,
+        model: str,
+        temperature: float | None,
+    ) -> LLMResponse:
+        """Un tour complet par l'API Messages d'Anthropic."""
+        url, headers, _extra = self._endpoint(model)
+        payload = self._anthropic_payload(
+            messages, tools, model=model, temperature=temperature
+        )
+        return self._parse_anthropic(self._post_retrying(url, headers, payload))
 
     def stream_complete(
         self,
@@ -425,6 +549,16 @@ class LLMClient:
         """
         self._require_credentials()
         chosen = model or self.cfg.model
+        if self.cfg.backend == "anthropic":
+            # L'API Messages n'est pas décodée en flux ici : le tour complet est
+            # rendu d'un bloc à `on_token`. Le contrat ne change pas pour
+            # l'appelant, seule la granularité du texte affiché.
+            response = self._complete_anthropic(
+                messages, tools, model=chosen, temperature=temperature
+            )
+            if on_token is not None and response.text:
+                on_token(response.text)
+            return response
         url, headers, extra = self._endpoint(chosen)
         payload: dict[str, Any] = {
             **extra,
@@ -619,6 +753,13 @@ class LLMClient:
         """Génère le texte par fragments (sans appels d'outils)."""
         self._require_credentials()
         chosen = model or self.cfg.model
+        if self.cfg.backend == "anthropic":
+            response = self._complete_anthropic(
+                messages, None, model=chosen, temperature=temperature
+            )
+            if response.text:
+                yield response.text
+            return
         url, headers, extra = self._endpoint(chosen)
         payload: dict[str, Any] = {**extra, "messages": self._messages_for_provider(messages)}
         if self.cfg.backend == "ollama":

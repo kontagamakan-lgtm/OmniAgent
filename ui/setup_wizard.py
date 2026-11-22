@@ -57,11 +57,10 @@ CHANNELS: tuple[tuple[str, str], ...] = (
 _ALLOWED_CHANNELS = frozenset(value for _label, value in CHANNELS)
 _MIN_PASSPHRASE = 8
 
-#: Fournisseurs que le client unique sait appeler : ils exposent tous un
-#: endpoint compatible OpenAI. Anthropic parle son API Messages et n'existe que
-#: dans le routeur multi-clés ; le proposer ici ferait échouer chaque requête.
-#: « custom » couvre tout autre service compatible OpenAI : l'adresse et le
-#: modèle sont alors saisis à la main.
+#: Fournisseurs que le client unique sait appeler : endpoints compatibles
+#: OpenAI, plus Anthropic par son API Messages. « custom » couvre tout autre
+#: service compatible OpenAI : l'adresse et le modèle sont alors saisis à la
+#: main.
 #: slug -> (variable d'environnement, modèle, modèle rapide, raisonnement).
 _PROVIDER_SETTINGS: dict[str, tuple[str, str, str, str]] = {
     "deepseek": (
@@ -71,6 +70,12 @@ _PROVIDER_SETTINGS: dict[str, tuple[str, str, str, str]] = {
         "deepseek-reasoner",
     ),
     "openai": ("OPENAI_API_KEY", "gpt-5-mini", "gpt-5-mini", "gpt-5"),
+    "anthropic": (
+        "ANTHROPIC_API_KEY",
+        "claude-sonnet-4-5",
+        "claude-haiku-4-5",
+        "claude-opus-4-1",
+    ),
     "gemini": (
         "GEMINI_API_KEY",
         "gemini-2.5-flash",
@@ -105,6 +110,7 @@ PROVIDER_CHOICES: tuple[tuple[str, str], ...] = (
     ("Automatique (d'après la clé)", "auto"),
     ("DeepSeek", "deepseek"),
     ("OpenAI", "openai"),
+    ("Anthropic", "anthropic"),
     ("Google Gemini", "gemini"),
     ("Groq", "groq"),
     ("OpenRouter", "openrouter"),
@@ -112,13 +118,6 @@ PROVIDER_CHOICES: tuple[tuple[str, str], ...] = (
     ("Autre (compatible OpenAI)", "custom"),
 )
 _LABELS = {slug: label for label, slug in PROVIDER_CHOICES if slug != "auto"}
-
-_ANTHROPIC_HINT = (
-    "Anthropic parle l'API Messages, que le client unique ne prend pas en "
-    "charge : ajoutez la clé dans « Clés API et modèles », avec le routeur "
-    "multi-LLM et le coffre déverrouillé"
-)
-
 
 def current_provider(settings: Settings) -> str:
     """Fournisseur déjà configuré, déduit de la variable de clé attendue."""
@@ -143,11 +142,7 @@ def _resolve_provider(settings: Settings, provider: str, key: str) -> tuple[str,
             detected = detect_provider(key)
         except ValueError:
             return "", "fournisseur indétectable d'après la clé : choisissez-le dans la liste"
-        if detected == "anthropic":
-            return "", _ANTHROPIC_HINT
         return detected, ""
-    if requested == "anthropic":
-        return "", _ANTHROPIC_HINT
     if requested not in _PROVIDER_SETTINGS:
         return "", f"fournisseur inconnu : {provider!r}"
     return requested, ""
@@ -181,7 +176,7 @@ def _configure_llm(
         updates.append(f"modèles : {default_model} et {reasoning_model}")
     if endpoint and endpoint != llm.base_url:
         updates.append(f"adresse : {endpoint}")
-    llm.backend = "deepseek" if slug == "deepseek" else "openai_compatible"
+    llm.backend = slug if slug in {"deepseek", "anthropic"} else "openai_compatible"
     llm.base_url = endpoint
     llm.api_key_env = env_var
     return updates

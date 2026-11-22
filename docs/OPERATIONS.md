@@ -377,10 +377,17 @@ Règles :
 
 Pour les autres fournisseurs, `config.api_key_problem()` ne refuse que le
 vide, un espace interne, une longueur inférieure à 12 caractères et les
-valeurs d'exemple : OpenAI (`sk-proj-`), Gemini (`AIza`) et Groq (`gsk_`) ont
-des formats incompatibles avec un préfixe unique, et leur HTTP 401 est plus
-précis qu'une devinette locale. Anthropic n'existe que dans le routeur
-multi-clés : son API Messages n'est pas le protocole du client unique.
+valeurs d'exemple : OpenAI (`sk-proj-`), Gemini (`AIza`), Groq (`gsk_`) et
+Anthropic (`sk-ant-`) ont des formats incompatibles avec un préfixe unique, et
+leur HTTP 401 est plus précis qu'une devinette locale.
+
+Anthropic est servi par le client unique quand `llm.backend = "anthropic"` :
+l'API Messages impose son endpoint `/messages`, la clé dans `x-api-key`, la
+version `2023-06-01`, un prompt système séparé et des blocs `tool_use` /
+`tool_result`. Le tour complet est rendu d'un bloc (`on_token` reçoit tout le
+texte), sans lecture du flux SSE : le contrat de `stream_complete` ne change
+pas, seule la granularité diffère. Le routeur multi-clés continue de parler le
+même protocole de son côté.
 
 Un échec de préflight rend `needs_setup()` vrai et le contrôle « clé du
 fournisseur » bloquant dans `app.diagnostics()`. Le routeur refuse la clé avant

@@ -204,23 +204,44 @@ def test_apply_setup_refuses_a_key_of_unknown_provider(monkeypatch) -> None:
         assert not env_file.exists(), "rien ne doit être écrit dans .env"
 
 
-def test_apply_setup_sends_anthropic_to_the_multi_key_router(monkeypatch) -> None:
-    """Le client unique ne parle pas l'API Messages : le dire, sans écrire."""
+def test_apply_setup_accepts_an_anthropic_key(monkeypatch) -> None:
+    """Une clé sk-ant- se suffit à elle-même : ni coffre, ni routeur."""
     with tmpdir("setup-anthropic") as tmp:
         settings = make_settings(tmp)
         settings.ensure_directories()
         env_file = tmp / ".env"
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        key = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz"
 
         errors = apply_setup(
             settings,
-            api_key="sk-ant-api03-abcdefghijklmnop",
+            api_key=key,
             provider="anthropic",
             env_path=env_file,
         )
 
-        assert any("routeur" in line for line in errors), errors
-        assert not env_file.exists()
-        assert settings.llm.api_key_env == "DEEPSEEK_API_KEY"
+        assert errors == [], errors
+        assert os.environ["ANTHROPIC_API_KEY"] == key
+        assert f"ANTHROPIC_API_KEY={key}" in env_file.read_text(encoding="utf-8")
+        assert settings.llm.backend == "anthropic"
+        assert settings.llm.base_url == "https://api.anthropic.com/v1"
+        assert settings.llm.api_key_env == "ANTHROPIC_API_KEY"
+        assert settings.llm.model == "claude-sonnet-4-5"
+        assert needs_setup(settings) is False
+
+
+def test_apply_setup_detects_anthropic_from_the_prefix(monkeypatch) -> None:
+    with tmpdir("setup-anthropic-auto") as tmp:
+        settings = make_settings(tmp)
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+        errors = apply_setup(
+            settings, api_key="sk-ant-api03-abcdefghijklmnop", provider="auto"
+        )
+
+        assert errors == [], errors
+        assert settings.llm.backend == "anthropic"
+        assert settings.llm.model == "claude-sonnet-4-5"
 
 
 def test_apply_setup_keeps_the_models_of_the_same_provider(monkeypatch) -> None:
