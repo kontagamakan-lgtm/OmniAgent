@@ -11,6 +11,7 @@ from __future__ import annotations
 import tkinter as tk
 from collections.abc import Callable
 from typing import Any
+from ui.layout import SPACE_LG, SPACE_MD, SPACE_SM, SPACE_XS
 
 __all__ = [
     "APPROVAL_CHOICES",
@@ -81,17 +82,17 @@ class ApprovalDialog(tk.Toplevel):
             justify="left",
             wraplength=560,
         )
-        heading.pack(fill="x", padx=18, pady=(16, 4))
+        heading.pack(fill="x", padx=SPACE_LG, pady=(SPACE_LG, SPACE_XS))
         tk.Label(
             self,
             text="Choisissez explicitement l'action à appliquer :",
             anchor="w",
             justify="left",
             wraplength=560,
-        ).pack(fill="x", padx=18, pady=(0, 8))
+        ).pack(fill="x", padx=SPACE_LG, pady=(0, SPACE_SM))
 
         preview_frame = tk.Frame(self)
-        preview_frame.pack(fill="both", expand=True, padx=18, pady=(0, 10))
+        preview_frame.pack(fill="both", expand=True, padx=SPACE_LG, pady=(0, SPACE_MD))
         preview = tk.Text(
             preview_frame,
             height=8,
@@ -108,7 +109,7 @@ class ApprovalDialog(tk.Toplevel):
         scrollbar.pack(side="right", fill="y")
 
         buttons = tk.Frame(self)
-        buttons.pack(fill="x", padx=14, pady=(0, 16))
+        buttons.pack(fill="x", padx=SPACE_MD, pady=(0, SPACE_LG))
         self._buttons: dict[str, tk.Button] = {}
         for decision, label in APPROVAL_CHOICES:
             button = tk.Button(
@@ -118,7 +119,7 @@ class ApprovalDialog(tk.Toplevel):
                 command=lambda value=decision: self._choose(value),
                 takefocus=True,
             )
-            button.pack(side="left", expand=True, fill="x", padx=4)
+            button.pack(side="left", expand=True, fill="x", padx=SPACE_XS)
             self._buttons[decision] = button
         self.refuse_button = self._buttons[DEFAULT_DECISION]
         self.refuse_button.configure(default=tk.ACTIVE)

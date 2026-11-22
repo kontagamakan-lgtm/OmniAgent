@@ -92,6 +92,28 @@ def _press_colors(
     return color, "#" + "".join(f"{value:02X}" for value in pressed)
 
 
+#: États d'une zone qui dépend de données : charger, vide et échec se disent
+#: différemment, parce qu'une liste vide n'est pas une panne et qu'une panne
+#: silencieuse ressemble à une liste vide.
+STATE_LOADING = "chargement"
+STATE_EMPTY = "vide"
+STATE_ERROR = "erreur"
+
+#: Couleur de la pastille de session selon l'état : neutre, en cours, en échec.
+_STATUS_COLORS = {"idle": "#ABC6A6", "busy": "#D7F5CF", "error": _UI_RED}
+
+
+def list_state_text(
+    state: str, *, loading: str, empty: str, subject: str, reason: str = ""
+) -> str:
+    """Phrase d'une liste selon son état, jamais un vide ambigu."""
+    if state == STATE_LOADING:
+        return loading
+    if state == STATE_ERROR:
+        return f"{subject} indisponible : {reason.strip() or 'cause inconnue'}"
+    return empty
+
+
 def _press_frames(
     start: str, end: str, *, steps: int = _PRESS_STEPS
 ) -> list[str]:
@@ -549,7 +571,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             if count is not None:
                 count.configure(text="0")
             self.prompt.delete("1.0", "end")
-            self._set_status("prêt")
+            self._set_status("prêt pour une tâche")
             self.prompt.focus_set()
 
         def _build_widgets(self) -> None:
@@ -628,18 +650,18 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             primary_nav.pack(fill="x", padx=SPACE_MD)
             self._nav(
                 primary_nav,
-                "Assistant",
+                "Tâche en cours",
                 self._focus_composer,
                 active=True,
             )
             self._nav(
-                primary_nav, "Historique", self._open_journal
+                primary_nav, "Traces de runs", self._open_journal
             )
             self._nav(
-                primary_nav, "Planificateur", self._open_scheduler
+                primary_nav, "Tâches planifiées", self._open_scheduler
             )
             self._nav(
-                primary_nav, "Propositions", self._open_proposals
+                primary_nav, "Propositions d'évolution", self._open_proposals
             )
 
             self.config_label = ctk.CTkLabel(
@@ -653,22 +675,22 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             config_nav = ctk.CTkFrame(side, fg_color="transparent")
             config_nav.pack(fill="x", padx=SPACE_MD)
             self._nav(
-                config_nav, "Autonomie", self._toggle_autonomy
+                config_nav, "Cycles autonomes", self._toggle_autonomy
             )
             self._nav(
-                config_nav, "Évolution", self._open_evolution
+                config_nav, "Auto-évolution", self._open_evolution
             )
             self._nav(
-                config_nav, "Clés & modèles", self._open_keys
+                config_nav, "Clés API et modèles", self._open_keys
             )
             self._nav(
                 config_nav,
-                "Directives",
+                "Consignes permanentes",
                 self._open_prime_directive,
             )
             self._nav(
                 config_nav,
-                "Configuration initiale",
+                "Assistant de configuration",
                 self._open_assistant,
             )
 
@@ -736,7 +758,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             ).pack(side="left", padx=SPACE_SM)
             ctk.CTkLabel(
                 crumbs,
-                text="Assistant",
+                text="Tâche en cours",
                 font=self._font(-1),
                 text_color="#D6DDD7",
             ).pack(side="left")
@@ -862,7 +884,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             ).grid(row=0, column=0, sticky="w", padx=SPACE_LG, pady=(SPACE_MD, 0))
             self.status = ctk.CTkLabel(
                 stat_agent,
-                text="Prêt",
+                text="Prêt pour une tâche",
                 font=self._font(4, "bold"),
                 text_color=_UI_TEXT,
                 anchor="w",
@@ -940,7 +962,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             ).grid(row=0, column=0, sticky="w", padx=SPACE_XL, pady=SPACE_XL)
             self.session_status = ctk.CTkLabel(
                 panel_header,
-                text="● En ligne",
+                text="● Aucune tâche",
                 font=self._font(-3, "bold"),
                 text_color="#ABC6A6",
                 fg_color="#243027",
@@ -1131,13 +1153,13 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             mode_row.pack(fill="x", pady=SPACE_XS)
             ctk.CTkLabel(
                 mode_row,
-                text="Mode d'exécution",
+                text="Approbations",
                 font=self._font(-3),
                 text_color="#99A498",
             ).pack(side="left")
             self.mode_label = ctk.CTkLabel(
                 mode_row,
-                text="● Supervisé",
+                text="● À chaque outil",
                 font=self._font(-3, "bold"),
                 text_color="#B4C5A8",
             )
@@ -1147,16 +1169,16 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             autonomy_row.pack(fill="x", pady=SPACE_XS)
             ctk.CTkLabel(
                 autonomy_row,
-                text="Session autonome",
+                text="Cycles autonomes",
                 font=self._font(-3),
                 text_color="#99A498",
             ).pack(side="left")
             self.autonomy_button = self._button(
                 autonomy_row,
-                "Lancer",
+                "Démarrer un cycle",
                 self._toggle_autonomy,
                 ghost=False,
-                width=76,
+                width=140,
                 height=26,
                 font_delta=-3,
             )
@@ -1244,7 +1266,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             self.footer = footer
             ctk.CTkLabel(
                 footer,
-                text="Vos données restent sur votre machine.",
+                text="Traces et fichiers restent sur ce poste.",
                 font=self._font(-4),
                 text_color="#5E6C60",
                 anchor="w",
@@ -1505,11 +1527,13 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 if transcript is not None:
                     transcript.grid()
 
-        def _set_status(self, text: str) -> None:
-            self.status.configure(text=text)
+        def _set_status(self, text: str, *, state: str = "idle") -> None:
+            """Met à jour la carte et la pastille, couleur d'état comprise."""
+            colour = _STATUS_COLORS.get(state, _STATUS_COLORS["idle"])
+            self.status.configure(text=text, text_color=colour)
             session = vars(self).get("session_status")
             if session is not None:
-                session.configure(text=f"● {text}")
+                session.configure(text=f"● {text}", text_color=colour)
 
         def _record_task_done(self) -> None:
             """Compteur de la carte « Tâches effectuées » (session courante)."""
@@ -1563,6 +1587,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             except Exception as exc:  # noqa: BLE001 - l'interface reste utilisable
                 logger.exception("Assistant de démarrage en échec")
                 self._append("erreur", f"assistant indisponible : {exc}")
+                self._set_status("assistant indisponible", state="error")
                 return
 
             if saved:
@@ -1590,14 +1615,14 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             self._streaming = False
             self._pending.clear()
             self._append("vous", task)
-            self._set_status("en cours…")
-            self.send_button.configure(state="disabled")
+            self._set_status("en cours…", state="busy")
+            self.send_button.configure(state="disabled", text="Envoi…")
             self.cancel_button.configure(state="normal")
             return True
 
         def _cancel(self) -> None:
             self.controller.cancel()
-            self._set_status("arrêt demandé…")
+            self._set_status("arrêt demandé…", state="busy")
 
         def _install_approval_gate(self) -> None:
             """Branche les confirmations d'outils sur une boîte de dialogue."""
@@ -1905,6 +1930,14 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             table = KeyTable(
                 rows_frame, ctk, on_reset=reset, on_remove=remove
             )
+            table.render_state(
+                list_state_text(
+                    STATE_LOADING,
+                    subject="Clés",
+                    loading="Chargement des clés…",
+                    empty="",
+                )
+            )
 
             def refresh() -> None:
                 try:
@@ -1917,7 +1950,18 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                     header.configure(
                         text=f"Modèle courant : {current} · routeur {mode} · coffre {state}"
                     )
-                    table.render(router.key_statuses())
+                    try:
+                        table.render(router.key_statuses())
+                    except Exception as exc:  # noqa: BLE001 - panne dite à l'écran
+                        table.render_state(
+                            list_state_text(
+                                STATE_ERROR,
+                                subject="Clés",
+                                loading="",
+                                empty="",
+                                reason=str(exc),
+                            )
+                        )
                     window.after(2000, refresh)
                 except Exception:  # noqa: BLE001 - fenêtre refermée pendant le rafraîchissement
                     logger.debug("panneau des clés refermé", exc_info=True)
@@ -2113,25 +2157,49 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             from core.autonomy import AutonomyJournal, journal_path
 
             path = journal_path(self.settings)
-            records = AutonomyJournal(
-                path,
-                max_entries=self.settings.autonomy.journal_max_entries,
-                max_bytes=self.settings.autonomy.journal_max_bytes,
-            ).tail(50)
             window = ctk.CTkToplevel(self)
             window.title("Journal d'autonomie")
             dialog_width, _ = self._fit_dialog(window, 780, 520)
             window.transient(self)
             frame = ctk.CTkScrollableFrame(window, label_text=str(path))
             frame.pack(fill="both", expand=True, padx=SPACE_MD, pady=SPACE_MD)
-            ctk.CTkLabel(
+            state_label = ctk.CTkLabel(
                 frame,
-                text=format_autonomy_journal(records),
+                text=list_state_text(
+                    STATE_LOADING,
+                    subject="Journal",
+                    loading="Chargement du journal…",
+                    empty="",
+                ),
                 justify="left",
                 anchor="w",
+            )
+            state_label.pack(fill="x", padx=SPACE_SM, pady=SPACE_SM)
+            # Peint l'état de chargement avant la lecture : sur un journal
+            # volumineux, la fenêtre ne reste pas muette.
+            window.update_idletasks()
+            try:
+                records = AutonomyJournal(
+                    path,
+                    max_entries=self.settings.autonomy.journal_max_entries,
+                    max_bytes=self.settings.autonomy.journal_max_bytes,
+                ).tail(50)
+            except Exception as exc:  # noqa: BLE001 - la panne est dite à l'écran
+                state_label.configure(
+                    text=list_state_text(
+                        STATE_ERROR,
+                        subject="Journal",
+                        loading="",
+                        empty="",
+                        reason=str(exc),
+                    )
+                )
+                return
+            state_label.configure(
+                text=format_autonomy_journal(records),
                 wraplength=max(280, dialog_width - 70),
                 font=(self.settings.ui.font_family, self.settings.ui.font_size - 1),
-            ).pack(fill="x", padx=SPACE_SM, pady=SPACE_SM)
+            )
 
         def _open_proposals(self) -> None:
             """Propositions autonomes en attente : approuver ou rejeter, sans exécuter."""
@@ -2148,12 +2216,43 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             window.transient(self)
             frame = ctk.CTkScrollableFrame(window, label_text="En attente d'approbation")
             frame.pack(fill="both", expand=True, padx=SPACE_MD, pady=SPACE_MD)
-            pending = pending_proposals(self.settings)
-            if not pending:
-                ctk.CTkLabel(
-                    frame, text="Aucune proposition en attente (mode --autonomy-propose)."
-                ).pack(pady=SPACE_LG)
+            state_label = ctk.CTkLabel(
+                frame,
+                text=list_state_text(
+                    STATE_LOADING,
+                    subject="Propositions",
+                    loading="Chargement des propositions…",
+                    empty="",
+                ),
+                anchor="w",
+                justify="left",
+            )
+            state_label.pack(fill="x", padx=SPACE_SM, pady=SPACE_LG)
+            window.update_idletasks()
+            try:
+                pending = pending_proposals(self.settings)
+            except Exception as exc:  # noqa: BLE001 - la panne est dite à l'écran
+                state_label.configure(
+                    text=list_state_text(
+                        STATE_ERROR,
+                        subject="Propositions",
+                        loading="",
+                        empty="",
+                        reason=str(exc),
+                    )
+                )
                 return
+            if not pending:
+                state_label.configure(
+                    text=list_state_text(
+                        STATE_EMPTY,
+                        subject="Propositions",
+                        loading="",
+                        empty="Aucune proposition en attente (mode --autonomy-propose).",
+                    )
+                )
+                return
+            state_label.destroy()
             for record in pending:
                 row = ctk.CTkFrame(frame)
                 row.pack(fill="x", pady=SPACE_XS)
@@ -2188,7 +2287,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
 
                 def edit(proposal_id: str = str(record.get("id"))) -> None:
                     dialog = ctk.CTkInputDialog(
-                        text="Nouvelle tache :", title="Modifier la proposition"
+                        text="Nouvelle tâche :", title="Modifier la proposition"
                     )
                     value = dialog.get_input()
                     if value and set_proposal_task(self.settings, proposal_id, value):
@@ -2561,7 +2660,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                     )
                     status += " · trace tronquée"
                 self._set_status(status)
-                self.send_button.configure(state="normal")
+                self.send_button.configure(state="normal", text="Envoyer")
                 self.cancel_button.configure(state="disabled")
 
             elif (

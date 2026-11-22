@@ -9,6 +9,7 @@ entre l'appui et le relâchement.
 from __future__ import annotations
 
 from typing import Any, Callable
+from ui.layout import SPACE_SM, SPACE_XS
 
 STATUS_COLORS = {
     "ACTIVE": "#16A34A",
@@ -81,6 +82,19 @@ class KeyTable:
         for key_id, row in wanted.items():
             self._upsert(key_id, row)
 
+    def render_state(self, text: str) -> None:
+        """Affiche un état (chargement, vide, échec) à la place des lignes.
+
+        Une lecture de clés qui échoue ne doit pas ressembler à une absence de
+        clés : l'appelant décide de la phrase, la table se contente de la rendre.
+        """
+        for entry in self.rows.values():
+            entry["line"].destroy()
+        self.rows.clear()
+        self._show_empty()
+        if self._empty is not None:
+            self._empty.configure(text=text)
+
     def _show_empty(self) -> None:
         if self._empty is None:
             self._empty = self.ctk.CTkLabel(
@@ -89,7 +103,7 @@ class KeyTable:
                 anchor="w",
             )
         if not self._empty_visible:
-            self._empty.pack(fill="x", padx=6, pady=6)
+            self._empty.pack(fill="x", padx=SPACE_SM, pady=SPACE_SM)
             self._empty_visible = True
 
     def _hide_empty(self) -> None:
@@ -101,12 +115,12 @@ class KeyTable:
         entry = self.rows.get(key_id)
         if entry is None:
             line = self.ctk.CTkFrame(self.parent)
-            line.pack(fill="x", pady=2)
+            line.pack(fill="x", pady=SPACE_XS)
             line.grid_columnconfigure(1, weight=1)
             dot = self.ctk.CTkLabel(line, text="●", width=18)
-            dot.grid(row=0, column=0, padx=(6, 2), pady=2)
+            dot.grid(row=0, column=0, padx=(SPACE_SM, SPACE_XS), pady=SPACE_XS)
             detail = self.ctk.CTkLabel(line, text="", anchor="w", justify="left")
-            detail.grid(row=0, column=1, sticky="ew", padx=4, pady=2)
+            detail.grid(row=0, column=1, sticky="ew", padx=SPACE_XS, pady=SPACE_XS)
             reset = self.ctk.CTkButton(
                 line,
                 text="Réactiver",
@@ -115,7 +129,7 @@ class KeyTable:
                 hover_color="#1E40AF",
                 command=lambda key=key_id: self.on_reset(key),
             )
-            reset.grid(row=0, column=2, padx=6, pady=2)
+            reset.grid(row=0, column=2, padx=SPACE_SM, pady=SPACE_XS)
             remove = self.ctk.CTkButton(
                 line,
                 text="Supprimer",
@@ -124,7 +138,7 @@ class KeyTable:
                 hover_color="#991B1B",
                 command=lambda key=key_id: self.on_remove(key),
             )
-            remove.grid(row=0, column=3, padx=6, pady=2)
+            remove.grid(row=0, column=3, padx=SPACE_SM, pady=SPACE_XS)
             entry = {
                 "line": line,
                 "dot": dot,
