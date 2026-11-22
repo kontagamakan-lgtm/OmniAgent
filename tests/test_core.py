@@ -1298,32 +1298,134 @@ def test_llm_client_speaks_the_anthropic_messages_api(monkeypatch) -> None:
     assert response.usage["completion_tokens"] == 7
 
 
-def test_llm_client_gives_an_anthropic_answer_as_one_stream_block(monkeypatch) -> None:
+def test_llm_client_streams_an_anthropic_answer_by_fragments(monkeypatch) -> None:
+    """Le SSE de l'API Messages arrive par fragments, outils compris."""
     monkeypatch.setenv("TEST_LLM_KEY", "sk-ant-api03-abcdefghijklmnop")
+    captured: list[dict] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(json.loads(request.content))
+        events = [
+            (
+                "message_start",
+                {
+                    "type": "message_start",
+                    "message": {"usage": {"input_tokens": 9, "output_tokens": 1}},
+                },
+            ),
+            (
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {"type": "text", "text": ""},
+                },
+            ),
+            (
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "text_delta", "text": "Bonjour "},
+                },
+            ),
+            (
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "text_delta", "text": "le "},
+                },
+            ),
+            (
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "text_delta", "text": "monde"},
+                },
+            ),
+            ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+            (
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": 1,
+                    "content_block": {
+                        "type": "tool_use",
+                        "id": "tu_1",
+                        "name": "echo",
+                        "input": {},
+                    },
+                },
+            ),
+            (
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": 1,
+                    "delta": {"type": "input_json_delta", "partial_json": '{"te'},
+                },
+            ),
+            (
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": 1,
+                    "delta": {
+                        "type": "input_json_delta",
+                        "partial_json": 'xt": "salut"}',
+                    },
+                },
+            ),
+            ("content_block_stop", {"type": "content_block_stop", "index": 1}),
+            (
+                "message_delta",
+                {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": "tool_use"},
+                    "usage": {"output_tokens": 12},
+                },
+            ),
+            ("message_stop", {"type": "message_stop"}),
+        ]
+        body = "".join(
+            f"event: {name}\ndata: {json.dumps(payload)}\n\n"
+            for name, payload in events
+        )
         return httpx.Response(
             200,
-            json={
-                "model": "claude-sonnet-4-5",
-                "content": [{"type": "text", "text": "Bien reçu"}],
-                "stop_reason": "end_turn",
-                "usage": {"input_tokens": 3, "output_tokens": 2},
-            },
+            content=body.encode("utf-8"),
+            headers={"content-type": "text/event-stream"},
         )
 
     client = _client(
-        handler, backend="anthropic", base_url="https://api.anthropic.com/v1"
+        handler,
+        backend="anthropic",
+        base_url="https://api.anthropic.com/v1",
+        model="claude-sonnet-4-5",
     )
     chunks: list[str] = []
     response = client.stream_complete(
-        [{"role": "user", "content": "test"}], on_token=chunks.append
+        [{"role": "user", "content": "salue"}], on_token=chunks.append
     )
 
-    assert chunks == ["Bien reçu"], "le tour est rendu d'un bloc, sans fragment"
-    assert response.text == "Bien reçu"
-    assert list(client.stream_text([{"role": "user", "content": "test"}])) == [
-        "Bien reçu"
+    assert captured[0]["stream"] is True
+    assert chunks == ["Bonjour ", "le ", "monde"], "le texte arrive par fragments"
+    assert response.text == "Bonjour le monde"
+    assert [call.name for call in response.tool_calls] == ["echo"]
+    assert response.tool_calls[0].arguments == {"text": "salut"}
+    assert response.tool_calls[0].call_id == "tu_1"
+    assert response.finish_reason == "tool_use"
+    assert response.usage["prompt_tokens"] == 9
+    assert response.usage["completion_tokens"] == 12
+    assert response.usage["total_tokens"] == 21
+
+    # Même flux sans outils : `stream_text` rend les mêmes fragments.
+    assert list(client.stream_text([{"role": "user", "content": "salue"}])) == [
+        "Bonjour ",
+        "le ",
+        "monde",
     ]
 
 

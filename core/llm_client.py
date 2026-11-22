@@ -412,6 +412,191 @@ class LLMClient:
             raw=data,
         )
 
+    # -- flux de l'API Messages ----------------------------------------------
+
+    @staticmethod
+    def _anthropic_usage(raw: Any) -> dict[str, int]:
+        """Compteurs Anthropic ramenés aux clés du protocole OpenAI."""
+        data = raw if isinstance(raw, dict) else {}
+        prompt = max(0, int(data.get("input_tokens") or 0))
+        completion = max(0, int(data.get("output_tokens") or 0))
+        return {
+            "prompt_tokens": prompt,
+            "completion_tokens": completion,
+            "total_tokens": prompt + completion,
+            "input_tokens": prompt,
+            "output_tokens": completion,
+        }
+
+    def _anthropic_events(
+        self, url: str, headers: dict[str, str], payload: dict[str, Any]
+    ) -> Iterator[dict[str, Any]]:
+        """Événements SSE de l'API Messages, un objet JSON par `data:`.
+
+        Anthropic émet aussi des lignes `event:` : leur contenu est répété dans
+        le champ `type` de la charge utile, donc seul `data:` est décodé. Un
+        fragment illisible est ignoré plutôt que de casser le flux.
+        """
+        self._abort.clear()
+        try:
+            with self._http().stream(
+                "POST", url, json=payload, headers=headers
+            ) as response:
+                self.request_count += 1
+                if response.status_code >= 400:
+                    self._raise_for_status(
+                        response, response.read().decode("utf-8", "replace")
+                    )
+                self._mark_active(response)
+                for line in response.iter_lines():
+                    if self._abort.is_set():
+                        raise _aborted_error()
+                    raw = (line or "").strip()
+                    if not raw.startswith("data:"):
+                        continue
+                    body = raw[len("data:") :].strip()
+                    if not body or body == "[DONE]":
+                        continue
+                    try:
+                        event = json.loads(body)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(event, dict):
+                        yield event
+        except httpx.TimeoutException as exc:
+            if self._abort.is_set():
+                raise _aborted_error() from exc
+            raise LLMError(f"délai dépassé pendant le flux : {exc}") from exc
+        except (httpx.HTTPError, httpx.StreamClosed) as exc:
+            if self._abort.is_set():
+                raise _aborted_error() from exc
+            raise LLMError(f"flux interrompu : {exc}") from exc
+        finally:
+            self._mark_active(None)
+
+    def _stream_anthropic(
+        self,
+        messages: Sequence[dict[str, Any]],
+        tools: Sequence[dict[str, Any]] | None,
+        *,
+        model: str,
+        temperature: float | None,
+        on_token: Callable[[str], None] | None,
+    ) -> LLMResponse:
+        """Flux de l'API Messages : texte par `text_delta`, outils par index.
+
+        Un bloc `tool_use` s'annonce par `content_block_start` (nom et id), puis
+        ses arguments arrivent en morceaux de JSON (`input_json_delta`) qu'on
+        recolle avant de décoder. Le texte est transmis à `on_token` au fur et
+        à mesure, comme pour les fournisseurs compatibles OpenAI.
+        """
+        url, headers, _extra = self._endpoint(model)
+        payload = self._anthropic_payload(
+            messages, tools, model=model, temperature=temperature
+        )
+        payload["stream"] = True
+        parts: list[str] = []
+        blocks: dict[int, dict[str, str]] = {}
+        usage: dict[str, int] = {}
+        finish = ""
+        for event in self._anthropic_events(url, headers, payload):
+            kind = str(event.get("type") or "")
+            if kind == "message_start":
+                message = (
+                    event.get("message")
+                    if isinstance(event.get("message"), dict)
+                    else {}
+                )
+                usage.update(
+                    {k: v for k, v in self._anthropic_usage(message.get("usage")).items() if v}
+                )
+            elif kind == "content_block_start":
+                block = (
+                    event.get("content_block")
+                    if isinstance(event.get("content_block"), dict)
+                    else {}
+                )
+                if block.get("type") == "text":
+                    # Anthropic envoie normalement un texte vide ici, mais rien
+                    # n'interdit d'ouvrir un bloc déjà rempli.
+                    opening = str(block.get("text") or "")
+                    if opening:
+                        parts.append(opening)
+                        if on_token is not None:
+                            on_token(opening)
+                elif block.get("type") == "tool_use":
+                    blocks[int(event.get("index") or 0)] = {
+                        "id": str(block.get("id") or ""),
+                        "name": str(block.get("name") or ""),
+                        "arguments": "",
+                    }
+            elif kind == "content_block_delta":
+                delta = (
+                    event.get("delta") if isinstance(event.get("delta"), dict) else {}
+                )
+                if delta.get("type") == "text_delta":
+                    text = str(delta.get("text") or "")
+                    if text:
+                        parts.append(text)
+                        if on_token is not None:
+                            on_token(text)
+                elif delta.get("type") == "input_json_delta":
+                    slot = blocks.setdefault(
+                        int(event.get("index") or 0),
+                        {"id": "", "name": "", "arguments": ""},
+                    )
+                    slot["arguments"] += str(delta.get("partial_json") or "")
+            elif kind == "message_delta":
+                delta = (
+                    event.get("delta") if isinstance(event.get("delta"), dict) else {}
+                )
+                finish = str(delta.get("stop_reason") or finish)
+                update = self._anthropic_usage(event.get("usage"))
+                usage.update({key: value for key, value in update.items() if value})
+            elif kind == "error":
+                error = (
+                    event.get("error") if isinstance(event.get("error"), dict) else {}
+                )
+                raise LLMResponseError(
+                    "flux Anthropic en erreur : "
+                    f"{error.get('message') or error or 'sans détail'}"
+                )
+        if self._abort.is_set():
+            raise _aborted_error()
+
+        parsed_calls: list[ParsedToolCall] = []
+        for index in sorted(blocks):
+            item = blocks[index]
+            name = item["name"].strip()
+            if not name:
+                continue
+            try:
+                arguments = decode_arguments(item["arguments"] or "{}")
+            except Exception:  # noqa: BLE001 - un appel illisible est ignoré
+                arguments = {}
+            parsed_calls.append(
+                ParsedToolCall(
+                    name=name,
+                    arguments=arguments,
+                    raw=item["arguments"],
+                    source="provider",
+                    call_id=item["id"],
+                )
+            )
+
+        prompt = int(usage.get("prompt_tokens") or 0)
+        completion = int(usage.get("completion_tokens") or 0)
+        usage["prompt_tokens"] = prompt
+        usage["completion_tokens"] = completion
+        usage["total_tokens"] = prompt + completion
+        return LLMResponse(
+            text="".join(parts).strip(),
+            tool_calls=parsed_calls,
+            model=model,
+            finish_reason=finish or ("tool_use" if parsed_calls else "stop"),
+            usage=usage,
+        )
+
     # -- API publique -------------------------------------------------------
 
     def complete(
@@ -550,15 +735,13 @@ class LLMClient:
         self._require_credentials()
         chosen = model or self.cfg.model
         if self.cfg.backend == "anthropic":
-            # L'API Messages n'est pas décodée en flux ici : le tour complet est
-            # rendu d'un bloc à `on_token`. Le contrat ne change pas pour
-            # l'appelant, seule la granularité du texte affiché.
-            response = self._complete_anthropic(
-                messages, tools, model=chosen, temperature=temperature
+            return self._stream_anthropic(
+                messages,
+                tools,
+                model=chosen,
+                temperature=temperature,
+                on_token=on_token,
             )
-            if on_token is not None and response.text:
-                on_token(response.text)
-            return response
         url, headers, extra = self._endpoint(chosen)
         payload: dict[str, Any] = {
             **extra,
@@ -754,11 +937,22 @@ class LLMClient:
         self._require_credentials()
         chosen = model or self.cfg.model
         if self.cfg.backend == "anthropic":
-            response = self._complete_anthropic(
+            url, headers, _extra = self._endpoint(chosen)
+            payload = self._anthropic_payload(
                 messages, None, model=chosen, temperature=temperature
             )
-            if response.text:
-                yield response.text
+            payload["stream"] = True
+            for event in self._anthropic_events(url, headers, payload):
+                delta = (
+                    event.get("delta") if isinstance(event.get("delta"), dict) else {}
+                )
+                if event.get("type") != "content_block_delta":
+                    continue
+                if delta.get("type") != "text_delta":
+                    continue
+                text = str(delta.get("text") or "")
+                if text:
+                    yield text
             return
         url, headers, extra = self._endpoint(chosen)
         payload: dict[str, Any] = {**extra, "messages": self._messages_for_provider(messages)}
