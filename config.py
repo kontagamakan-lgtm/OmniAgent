@@ -457,7 +457,8 @@ def api_key_problem(key: str, *, provider: str, origin: str) -> str:
 
 @dataclass(slots=True)
 class LLMConfig:
-    """Backend de génération (DeepSeek, endpoint compatible OpenAI, Ollama)."""
+    """Backend de génération (DeepSeek, endpoint compatible OpenAI, API
+    Messages d'Anthropic, Ollama)."""
 
     backend: Literal["deepseek", "openai_compatible", "anthropic", "ollama"] = (
         "deepseek"
@@ -493,8 +494,9 @@ class LLMConfig:
 
         DeepSeek refuse les clés absentes, tronquées ou laissées à un exemple.
         Mieux vaut le dire avant de construire un agent et d'envoyer une
-        requête vouée à un HTTP 401. Les autres backends compatibles OpenAI
-        peuvent utiliser d'autres formats : seul le vide y est contrôlé.
+        requête vouée à un HTTP 401. Les autres backends (compatibles OpenAI,
+        Anthropic, Ollama) peuvent utiliser d'autres formats : seul le vide y
+        est contrôlé, le reste est jugé par le HTTP 401 du fournisseur.
         """
         key = self.api_key()
         if not key:
@@ -1786,9 +1788,10 @@ _DEFAULT_ENV_EXAMPLE = """\
 # OmniAgent Windows — secrets locaux (ne jamais committer ce fichier)
 # Copiez .env.example vers .env puis renseignez vos clés.
 
-# Backend cloud (DeepSeek, compatible OpenAI)
+# Backend cloud (DeepSeek, compatible OpenAI, API Messages d'Anthropic)
 DEEPSEEK_API_KEY=
 OPENAI_API_KEY=
+ANTHROPIC_API_KEY=
 
 # Recherche Brave (optionnel, sans clé le moteur est ignoré)
 BRAVE_API_KEY=
