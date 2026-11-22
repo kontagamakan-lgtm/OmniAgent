@@ -282,7 +282,7 @@ def test_window_source_has_no_off_scale_padding_literal() -> None:
 
 def test_list_states_distinguish_loading_empty_and_failure() -> None:
     """Un écran vide et une panne ne doivent jamais dire la même chose."""
-    from ui.app_gui import (
+    from ui.list_state import (
         STATE_EMPTY,
         STATE_ERROR,
         STATE_LOADING,

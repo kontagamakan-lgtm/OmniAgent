@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 from ui.layout import SPACE_SM, SPACE_XS
+from ui.list_state import STATE_EMPTY, StateLabel
 
 STATUS_COLORS = {
     "ACTIVE": "#16A34A",
@@ -65,8 +66,14 @@ class KeyTable:
         self.on_reset = on_reset
         self.on_remove = on_remove
         self.rows: dict[str, dict[str, Any]] = {}
-        self._empty: Any | None = None
-        self._empty_visible = False
+        self._state = StateLabel(
+            ctk_module,
+            parent,
+            subject="Clés",
+            loading="Chargement des clés…",
+            empty="Aucune clé : Ollama local sert de secours.",
+            visible=False,
+        )
 
     def render(self, rows: list[dict[str, Any]]) -> None:
         """Synchronise les widgets avec l'état courant, sans tout recréer."""
@@ -76,40 +83,22 @@ class KeyTable:
                 self.rows.pop(key_id)["line"].destroy()
 
         if not wanted:
-            self._show_empty()
+            self._state.show(STATE_EMPTY)
             return
-        self._hide_empty()
+        self._state.hide()
         for key_id, row in wanted.items():
             self._upsert(key_id, row)
 
-    def render_state(self, text: str) -> None:
+    def show_state(self, state: str, *, reason: str = "") -> None:
         """Affiche un état (chargement, vide, échec) à la place des lignes.
 
         Une lecture de clés qui échoue ne doit pas ressembler à une absence de
-        clés : l'appelant décide de la phrase, la table se contente de la rendre.
+        clés : l'appelant nomme l'état et la table compose la phrase.
         """
         for entry in self.rows.values():
             entry["line"].destroy()
         self.rows.clear()
-        self._show_empty()
-        if self._empty is not None:
-            self._empty.configure(text=text)
-
-    def _show_empty(self) -> None:
-        if self._empty is None:
-            self._empty = self.ctk.CTkLabel(
-                self.parent,
-                text="Aucune clé : Ollama local sert de secours.",
-                anchor="w",
-            )
-        if not self._empty_visible:
-            self._empty.pack(fill="x", padx=SPACE_SM, pady=SPACE_SM)
-            self._empty_visible = True
-
-    def _hide_empty(self) -> None:
-        if self._empty is not None and self._empty_visible:
-            self._empty.pack_forget()
-            self._empty_visible = False
+        self._state.show(state, reason=reason)
 
     def _upsert(self, key_id: str, row: dict[str, Any]) -> None:
         entry = self.rows.get(key_id)

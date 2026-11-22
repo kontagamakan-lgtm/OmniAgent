@@ -22,6 +22,7 @@ from core.self_evolver import format_evolution_journal, format_evolution_status
 from ui.controller import AgentController
 from ui.hotkey import HotkeyListener
 from ui.key_panel import KeyTable
+from ui.list_state import STATE_EMPTY, STATE_ERROR, STATE_LOADING, StateLabel
 from ui.layout import (
     SPACE_LG,
     SPACE_MD,
@@ -90,26 +91,8 @@ def _press_colors(
     return color, _mix_color(color, "#000000", max(0.0, min(0.9, float(darken))))
 
 
-#: États d'une zone qui dépend de données : charger, vide et échec se disent
-#: différemment, parce qu'une liste vide n'est pas une panne et qu'une panne
-#: silencieuse ressemble à une liste vide.
-STATE_LOADING = "chargement"
-STATE_EMPTY = "vide"
-STATE_ERROR = "erreur"
-
 #: Couleur de la pastille de session selon l'état : neutre, en cours, en échec.
 _STATUS_COLORS = {"idle": "#ABC6A6", "busy": "#D7F5CF", "error": _UI_RED}
-
-
-def list_state_text(
-    state: str, *, subject: str, loading: str = "", empty: str = "", reason: str = ""
-) -> str:
-    """Phrase d'une liste selon son état, jamais un vide ambigu."""
-    if state == STATE_LOADING:
-        return loading
-    if state == STATE_ERROR:
-        return f"{subject} indisponible : {reason.strip() or 'cause inconnue'}"
-    return empty
 
 
 def _press_frames(
@@ -1952,11 +1935,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             table = KeyTable(
                 rows_frame, ctk, on_reset=reset, on_remove=remove
             )
-            table.render_state(
-                list_state_text(
-                    STATE_LOADING, subject="Clés", loading="Chargement des clés…"
-                )
-            )
+            table.show_state(STATE_LOADING)
 
             def refresh() -> None:
                 """Relit les clés toutes les 2 s ; une panne devient un état à l'écran.
@@ -1990,9 +1969,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                         logger.debug(
                             "panneau des clés : lecture impossible", exc_info=True
                         )
-                        table.render_state(
-                            list_state_text(STATE_ERROR, subject="Clés", reason=str(exc))
-                        )
+                        table.show_state(STATE_ERROR, reason=str(exc))
                     window.after(2000, refresh)
                 except Exception:  # noqa: BLE001 - fenêtre refermée pendant le rafraîchissement
                     logger.debug("panneau des clés refermé", exc_info=True)
@@ -2194,18 +2171,14 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             window.transient(self)
             frame = ctk.CTkScrollableFrame(window, label_text=str(path))
             frame.pack(fill="both", expand=True, padx=SPACE_MD, pady=SPACE_MD)
-            state_label = ctk.CTkLabel(
+            state = StateLabel(
+                ctk,
                 frame,
-                text=list_state_text(
-                    STATE_LOADING, subject="Journal", loading="Chargement du journal…"
-                ),
-                justify="left",
-                anchor="w",
+                subject="Journal",
+                loading="Chargement du journal…",
+                empty="",
             )
-            state_label.pack(fill="x", padx=SPACE_SM, pady=SPACE_SM)
-            # Peint l'état de chargement avant la lecture : sur un journal
-            # volumineux, la fenêtre ne reste pas muette.
-            window.update_idletasks()
+            state.flush()
             try:
                 records = AutonomyJournal(
                     path,
@@ -2213,12 +2186,10 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                     max_bytes=self.settings.autonomy.journal_max_bytes,
                 ).tail(50)
             except Exception as exc:  # noqa: BLE001 - la panne est dite à l'écran
-                state_label.configure(
-                    text=list_state_text(STATE_ERROR, subject="Journal", reason=str(exc))
-                )
+                state.show(STATE_ERROR, reason=str(exc))
                 return
-            state_label.configure(
-                text=format_autonomy_journal(records),
+            state.text(
+                format_autonomy_journal(records),
                 wraplength=max(280, dialog_width - 70),
                 font=(self.settings.ui.font_family, self.settings.ui.font_size - 1),
             )
@@ -2238,35 +2209,24 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             window.transient(self)
             frame = ctk.CTkScrollableFrame(window, label_text="En attente d'approbation")
             frame.pack(fill="both", expand=True, padx=SPACE_MD, pady=SPACE_MD)
-            state_label = ctk.CTkLabel(
+            state = StateLabel(
+                ctk,
                 frame,
-                text=list_state_text(
-                    STATE_LOADING,
-                    subject="Propositions",
-                    loading="Chargement des propositions…",
-                ),
-                anchor="w",
-                justify="left",
+                subject="Propositions",
+                loading="Chargement des propositions…",
+                empty="Aucune proposition en attente (mode --autonomy-propose).",
+                pady=SPACE_LG,
             )
-            state_label.pack(fill="x", padx=SPACE_SM, pady=SPACE_LG)
-            window.update_idletasks()
+            state.flush()
             try:
                 pending = pending_proposals(self.settings)
             except Exception as exc:  # noqa: BLE001 - la panne est dite à l'écran
-                state_label.configure(
-                    text=list_state_text(STATE_ERROR, subject="Propositions", reason=str(exc))
-                )
+                state.show(STATE_ERROR, reason=str(exc))
                 return
             if not pending:
-                state_label.configure(
-                    text=list_state_text(
-                        STATE_EMPTY,
-                        subject="Propositions",
-                        empty="Aucune proposition en attente (mode --autonomy-propose).",
-                    )
-                )
+                state.show(STATE_EMPTY)
                 return
-            state_label.destroy()
+            state.destroy()
             for record in pending:
                 row = ctk.CTkFrame(frame)
                 row.pack(fill="x", pady=SPACE_XS)
