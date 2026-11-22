@@ -1221,6 +1221,112 @@ def _client(handler, *, backend="deepseek", **cfg_overrides) -> LLMClient:
     return LLMClient(cfg, client=client, sleep=lambda _s: None)
 
 
+def test_llm_client_speaks_the_anthropic_messages_api(monkeypatch) -> None:
+    """Une clé sk-ant- passe par `/messages`, en-têtes et blocs compris."""
+    monkeypatch.setenv("TEST_LLM_KEY", "sk-ant-api03-abcdefghijklmnop")
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["headers"] = dict(request.headers)
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-5",
+                "content": [
+                    {"type": "text", "text": "Bonjour"},
+                    {
+                        "type": "tool_use",
+                        "id": "tu_1",
+                        "name": "echo",
+                        "input": {"text": "salut"},
+                    },
+                ],
+                "stop_reason": "tool_use",
+                "usage": {"input_tokens": 12, "output_tokens": 7},
+            },
+        )
+
+    client = _client(
+        handler,
+        backend="anthropic",
+        base_url="https://api.anthropic.com/v1",
+        model="claude-sonnet-4-5",
+    )
+    response = client.complete(
+        [
+            {"role": "system", "content": "Tu es bref."},
+            {"role": "user", "content": "salue"},
+        ],
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "echo",
+                    "description": "répète",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"text": {"type": "string"}},
+                    },
+                },
+            }
+        ],
+    )
+
+    assert seen["url"] == "https://api.anthropic.com/v1/messages"
+    assert seen["headers"]["x-api-key"] == "sk-ant-api03-abcdefghijklmnop"
+    assert seen["headers"]["anthropic-version"] == "2023-06-01"
+    assert "authorization" not in seen["headers"]
+    body = seen["body"]
+    assert body["system"] == "Tu es bref."
+    assert body["messages"] == [{"role": "user", "content": "salue"}]
+    assert body["tools"][0]["name"] == "echo"
+    assert body["tools"][0]["input_schema"]["properties"]["text"]["type"] == "string"
+    assert body["max_tokens"] == client.cfg.max_output_tokens
+    assert "tool_choice" not in body, "l'API Messages ne prend pas ce champ"
+
+    assert response.text == "Bonjour"
+    assert [call.name for call in response.tool_calls] == ["echo"]
+    assert response.tool_calls[0].arguments == {"text": "salut"}
+    assert response.tool_calls[0].call_id == "tu_1"
+    assert response.finish_reason == "tool_use"
+    assert response.usage["prompt_tokens"] == 12
+    assert response.usage["completion_tokens"] == 7
+
+
+def test_llm_client_gives_an_anthropic_answer_as_one_stream_block(monkeypatch) -> None:
+    monkeypatch.setenv("TEST_LLM_KEY", "sk-ant-api03-abcdefghijklmnop")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "model": "claude-sonnet-4-5",
+                "content": [{"type": "text", "text": "Bien reçu"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 3, "output_tokens": 2},
+            },
+        )
+
+    client = _client(
+        handler, backend="anthropic", base_url="https://api.anthropic.com/v1"
+    )
+    chunks: list[str] = []
+    response = client.stream_complete(
+        [{"role": "user", "content": "test"}], on_token=chunks.append
+    )
+
+    assert chunks == ["Bien reçu"], "le tour est rendu d'un bloc, sans fragment"
+    assert response.text == "Bien reçu"
+    assert list(client.stream_text([{"role": "user", "content": "test"}])) == [
+        "Bien reçu"
+    ]
+
+
 def test_llm_client_stream_complete_feeds_chunks_and_tool_calls(monkeypatch) -> None:
     monkeypatch.setenv("TEST_LLM_KEY", VALID_TEST_KEY)
     captured: list[dict] = []

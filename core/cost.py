@@ -37,6 +37,9 @@ DEFAULT_PRICES: dict[str, tuple[float, float]] = {
     "o3-mini": (1.10, 4.40),
     "claude-3-5-haiku": (0.80, 4.00),
     "claude-3-5-sonnet": (3.00, 15.00),
+    "claude-haiku-4-5": (1.00, 5.00),
+    "claude-sonnet-4-5": (3.00, 15.00),
+    "claude-opus-4-1": (15.00, 75.00),
 }
 
 

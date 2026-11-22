@@ -440,7 +440,9 @@ def api_key_problem(key: str, *, provider: str, origin: str) -> str:
 class LLMConfig:
     """Backend de génération (DeepSeek, endpoint compatible OpenAI, Ollama)."""
 
-    backend: Literal["deepseek", "openai_compatible", "ollama"] = "deepseek"
+    backend: Literal["deepseek", "openai_compatible", "anthropic", "ollama"] = (
+        "deepseek"
+    )
     base_url: str = "https://api.deepseek.com/v1"
     api_key_env: str = "DEEPSEEK_API_KEY"
     model: str = "deepseek-chat"
