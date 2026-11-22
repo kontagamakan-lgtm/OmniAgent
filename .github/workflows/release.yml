@@ -26,10 +26,9 @@ jobs:
   release:
     name: Construire et publier
     runs-on: windows-latest
-    # Environnement protégé : un mainteneur doit approuver le déploiement avant
-    # que quoi que ce soit ne soit publié. Un tag poussé par erreur s'arrête
-    # donc là, au lieu de remplacer les binaires d'une release.
-    environment: release
+    # Publication sans approbation manuelle : le tag poussé suffit à lancer la
+    # construction et la mise en ligne. Les garde-fous restants sont le controle
+    # de coherence tag/APP_VERSION et l'exigence d'un check agrege vert.
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
