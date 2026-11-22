@@ -1,5 +1,5 @@
 {
-  "capture_backend": "PIL.ImageGrab",
+  "capture_backend": "PrintWindow (Win32 GDI)",
   "viewport": [
     "900x620",
     "1280x860",
