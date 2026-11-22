@@ -15,6 +15,14 @@ Deux règles que le workflow de publication énonçait sans les vérifier :
    commit et exige que le check agrégé — le seul que la protection de `master`
    exige — soit terminé et réussi.
 
+   Ce check n'existe pas encore quand le tag part juste après la fusion :
+   l'agrégat du commit de fusion est créé quelques dizaines de secondes plus
+   tard, puis court plusieurs minutes. Le premier passage de la 1.1.1 a échoué
+   là-dessus. Le contrôle réinterroge donc l'API pendant
+   `--wait-check` secondes (600 par défaut) tant que le check est absent ou en
+   cours ; une conclusion déjà mauvaise (échec, annulation) échoue sans
+   attendre, puisqu'une attente n'y changerait rien.
+
 Usage :
     python build_smoke/check_release_gate.py --tag v1.0.2 \
         --repo kontagamakan-lgtm/OmniAgent --require-ci
@@ -39,13 +47,25 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import Callable
 
 API = "https://api.github.com"
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG = ROOT / "config.py"
 DEFAULT_REQUIRED_CHECK = "Vérifications obligatoires"
+DEFAULT_WAIT_S = 600.0
+_POLL_INTERVAL_S = 15.0
 _ATTEMPTS = 3
 _BACKOFF_S = 2.0
+# Conclusions qui ne changeront plus : attendre ne sert à rien.
+_FINAL_CONCLUSIONS = {
+    "failure",
+    "cancelled",
+    "timed_out",
+    "action_required",
+    "stale",
+    "startup_failure",
+}
 
 _VERSION_RE = re.compile(r'^APP_VERSION\s*=\s*"([^"]+)"', re.MULTILINE)
 
@@ -132,6 +152,66 @@ def evaluate_check_runs(
     return state
 
 
+def _still_pending(payload: dict[str, object], required: str) -> bool:
+    """Vrai tant que l'état du check exigé peut encore changer."""
+    raw = payload.get("check_runs")
+    if not isinstance(raw, list):
+        return True
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("name", "")).strip() != required:
+            continue
+        if str(item.get("status", "")).strip() != "completed":
+            return True
+        conclusion = str(item.get("conclusion") or "").strip()
+        return conclusion not in _FINAL_CONCLUSIONS
+    # Aucun check-run, ou pas encore celui qu'on attend : la CI peut encore
+    # le créer (c'est le cas juste après la poussée du tag).
+    return True
+
+
+def await_required_check(
+    fetch: Callable[[], dict[str, object]],
+    required: str = DEFAULT_REQUIRED_CHECK,
+    *,
+    timeout_s: float = DEFAULT_WAIT_S,
+    interval_s: float = _POLL_INTERVAL_S,
+    clock: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+    log: Callable[[str], None] | None = None,
+) -> dict[str, object]:
+    """Interroge les check-runs jusqu'à ce que `required` ait conclu.
+
+    Renvoie la dernière réponse de `fetch` quand le check est réussi ; lève
+    `GateError` sur une conclusion définitive ou une fois `timeout_s` écoulé.
+    `fetch`, `clock` et `sleep` sont injectés pour rendre l'attente testable.
+    """
+    deadline = clock() + max(0.0, timeout_s)
+    tries = 0
+    last = ""
+    while True:
+        payload = fetch()
+        tries += 1
+        try:
+            evaluate_check_runs(payload, required)
+            return payload
+        except GateError as error:
+            last = str(error)
+            if not _still_pending(payload, required):
+                raise
+        remaining = deadline - clock()
+        if remaining <= 0:
+            raise GateError(
+                f"{last} (après {tries} essais sur {timeout_s:.0f} s d'attente ; "
+                "augmentez --wait-check si la CI est plus lente)"
+            )
+        pause = min(interval_s, remaining)
+        if log is not None:
+            log(f"attente : {last} — nouvel essai dans {pause:.0f} s")
+        sleep(pause)
+
+
 def fetch_check_runs(repo: str, sha: str, token: str) -> dict[str, object]:
     """Check-runs du commit, avec quelques essais sur incident réseau."""
     url = f"{API}/repos/{repo}/commits/{sha}/check-runs?per_page=100"
@@ -195,6 +275,14 @@ def main(argv: list[str]) -> int:
         help="commit à vérifier (défaut : celui du tag, résolu par git rev-parse)",
     )
     parser.add_argument(
+        "--wait-check",
+        type=float,
+        default=DEFAULT_WAIT_S,
+        metavar="SECONDES",
+        help="attente maximale du check agrégé, absent ou en cours "
+        f"(défaut : {DEFAULT_WAIT_S:.0f})",
+    )
+    parser.add_argument(
         "--config",
         default=str(CONFIG),
         help="chemin de config.py (défaut : celui du dépôt)",
@@ -229,9 +317,13 @@ def main(argv: list[str]) -> int:
                     "aucun jeton : renseignez GH_TOKEN pour vérifier la CI."
                 )
             sha = args.sha.strip() or resolve_commit(args.tag)
-            state = evaluate_check_runs(
-                fetch_check_runs(args.repo, sha, token), args.required_check
+            payload = await_required_check(
+                lambda: fetch_check_runs(args.repo, sha, token),
+                args.required_check,
+                timeout_s=args.wait_check,
+                log=lambda message: print(message, flush=True),
             )
+            state = evaluate_check_runs(payload, args.required_check)
             print(
                 f"OK : {args.tag} -> {sha[:7]}, check « {args.required_check} » "
                 f"{state}."
