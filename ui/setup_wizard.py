@@ -262,7 +262,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                     "Ces valeurs sont enregistrées localement. La clé va dans .env, "
                     "jamais dans config.json."
                 ),
-                text_color="#98A2AE",
+                text_color=("#556070", "#8A95A3"),
                 anchor="w",
                 justify="left",
                 wraplength=580,
@@ -317,7 +317,11 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             self.confirm_entry.grid(row=4, column=1, columnspan=2, sticky="ew", padx=SPACE_MD, pady=SPACE_SM)
 
             self.message = ctk.CTkLabel(
-                self, text="", text_color="#E08B82", anchor="w", wraplength=580
+                self,
+                text="",
+                text_color=("#A33B33", "#E08B82"),
+                anchor="w",
+                wraplength=580,
             )
             self.message.pack(fill="x", padx=SPACE_LG, pady=(SPACE_XS, 0))
 
