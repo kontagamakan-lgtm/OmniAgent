@@ -33,7 +33,7 @@ _DECISIONS = {decision for decision, _label in APPROVAL_CHOICES}
 
 def dialog_title(tool: str) -> str:
     """Titre stable utilisé par la fenêtre et le contrôle visuel."""
-    return f"Confirmation requise — {tool}"
+    return f"Confirmation requise - {tool}"
 
 
 def decision_for(choice: str | None) -> str:

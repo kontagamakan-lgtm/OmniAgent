@@ -10,6 +10,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 __all__ = [
+    "SPACING_SCALE",
+    "SPACE_LG",
+    "SPACE_MD",
+    "SPACE_SM",
+    "SPACE_XL",
+    "SPACE_XS",
+    "SPACE_XXL",
     "LayoutPlan",
     "fit_dialog_geometry",
     "plan_layout",
@@ -17,9 +24,22 @@ __all__ = [
     "wrap_length",
 ]
 
+#: Échelle d'espacement unique de l'interface, en pixels logiques : multiples
+#: de 4, du plus petit écart à la marge de page. Tout `padx`/`pady` de la
+#: fenêtre principale vient de ces valeurs ; un écart hors échelle (7, 13, 22)
+#: est un accident de réglage, pas une intention, et se voit comme une rupture
+#: de rythme entre deux blocs voisins.
+SPACE_XS = 4
+SPACE_SM = 8
+SPACE_MD = 12
+SPACE_LG = 16
+SPACE_XL = 24
+SPACE_XXL = 32
+SPACING_SCALE = (0, SPACE_XS, SPACE_SM, SPACE_MD, SPACE_LG, SPACE_XL, SPACE_XXL)
+
 _MIN_WRAP = 160
-_WRAP_PADDING = 32
-_HEADING_GAP = 24
+_WRAP_PADDING = SPACE_XXL
+_HEADING_GAP = SPACE_XL
 
 
 @dataclass(frozen=True)
@@ -93,14 +113,14 @@ def plan_layout(
             prompt_height=52,
             nav_height=30,
             nav_pady=0,
-            brand_pady=(14, 0),
-            workspace_pady=(12, 10),
-            workspace_label_pady=(0, 4),
-            config_label_pady=(10, 4),
-            sidebar_bottom_pady=8,
-            heading_pady=(0, 10),
-            content_pady=(8, 10),
-            welcome_center_pady=(8, 8),
+            brand_pady=(SPACE_MD, 0),
+            workspace_pady=(SPACE_MD, SPACE_SM),
+            workspace_label_pady=(0, SPACE_XS),
+            config_label_pady=(SPACE_SM, SPACE_XS),
+            sidebar_bottom_pady=SPACE_SM,
+            heading_pady=(0, SPACE_SM),
+            content_pady=(SPACE_SM, SPACE_SM),
+            welcome_center_pady=(SPACE_SM, SPACE_SM),
             welcome_icon_visible=False,
             welcome_subtitle_visible=False,
             summary_visible=False,
@@ -114,15 +134,15 @@ def plan_layout(
         heading_wrap_length=0,
         prompt_height=62,
         nav_height=38,
-        nav_pady=2,
-        brand_pady=(28, 0),
-        workspace_pady=(28, 22),
-        workspace_label_pady=(0, 8),
-        config_label_pady=(24, 8),
-        sidebar_bottom_pady=16,
-        heading_pady=(6, 22),
-        content_pady=(12, 20),
-        welcome_center_pady=(22, 12),
+        nav_pady=SPACE_XS,
+        brand_pady=(SPACE_XL, 0),
+        workspace_pady=(SPACE_XL, SPACE_XL),
+        workspace_label_pady=(0, SPACE_SM),
+        config_label_pady=(SPACE_XL, SPACE_SM),
+        sidebar_bottom_pady=SPACE_LG,
+        heading_pady=(SPACE_SM, SPACE_XL),
+        content_pady=(SPACE_MD, SPACE_XL),
+        welcome_center_pady=(SPACE_XL, SPACE_MD),
         welcome_icon_visible=True,
         welcome_subtitle_visible=True,
         summary_visible=True,

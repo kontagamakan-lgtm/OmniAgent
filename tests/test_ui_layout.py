@@ -7,6 +7,7 @@ navigation et cadrage des fenêtres secondaires.
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -15,11 +16,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from support import run  # noqa: E402
 
 from ui.layout import (  # noqa: E402
+    SPACING_SCALE,
     fit_dialog_geometry,
     plan_layout,
     sidebar_needs_scroll,
     wrap_length,
 )
+
+ROOT = Path(__file__).resolve().parent.parent
 
 
 def test_normal_layout_uses_measured_requirements() -> None:
@@ -236,6 +240,78 @@ def test_dialog_geometry_keeps_desired_size_when_it_fits() -> None:
 
     assert (width, height) == (760, 640)
     assert (x, y) == (260, 110)
+
+
+def test_plan_paddings_stay_on_the_unique_scale() -> None:
+    """Un écart hors échelle (7, 13, 22) casse le rythme entre deux blocs."""
+    plans = (
+        plan_layout(1280, 860, required_width=1006, required_height=722),
+        plan_layout(900, 620, required_width=1006, required_height=722),
+    )
+    for plan in plans:
+        values = [
+            plan.nav_pady,
+            plan.sidebar_bottom_pady,
+            *plan.brand_pady,
+            *plan.workspace_pady,
+            *plan.workspace_label_pady,
+            *plan.config_label_pady,
+            *plan.heading_pady,
+            *plan.content_pady,
+            *plan.welcome_center_pady,
+        ]
+        assert set(values) <= set(SPACING_SCALE), values
+
+
+def test_window_source_has_no_off_scale_padding_literal() -> None:
+    """Le source ne doit pas réintroduire un écart hors échelle."""
+    source = (ROOT / "ui" / "app_gui.py").read_text(encoding="utf-8")
+    numbers = {
+        int(number)
+        for match in re.findall(r"pad[xy]=\(([^)]*)\)", source)
+        for number in re.findall(r"\d+", match)
+    }
+    numbers |= {int(match) for match in re.findall(r"pad[xy]=(\d+)\b", source)}
+    assert numbers <= set(SPACING_SCALE), sorted(numbers - set(SPACING_SCALE))
+
+
+def test_press_motion_lasts_between_150_and_300_ms() -> None:
+    """Un retour visuel plus court est subliminal, plus long il gêne."""
+    from ui.app_gui import _PRESS_STEP_MS, _PRESS_STEPS
+
+    assert 150 <= _PRESS_STEP_MS * _PRESS_STEPS <= 300
+
+
+def test_press_motion_darkens_the_button_then_returns() -> None:
+    """Les pas d'appui vont du repos à la teinte enfoncée, sans à-coup."""
+    from ui.app_gui import _PRESS_STEPS, _hex_channels, _press_colors, _press_frames
+
+    rest, pressed = _press_colors("#B7EDB2")
+    assert rest == "#B7EDB2"
+    assert pressed != rest
+    for before, after in zip(
+        _hex_channels(rest), _hex_channels(pressed), strict=True
+    ):
+        assert after <= before, "l'appui assombrit chaque canal"
+
+    frames = _press_frames(rest, pressed)
+    assert len(frames) == _PRESS_STEPS + 1
+    assert frames[0] == rest and frames[-1] == pressed
+    # L'appui saute le repos déjà affiché ; le relâchement le retrouve.
+    assert len(frames[1:]) == _PRESS_STEPS
+    assert list(reversed(frames))[1:][-1] == rest
+
+
+def test_press_colours_reject_non_opaque_values() -> None:
+    """Un bouton transparent n'a pas de couleur à interpoler : on l'ignore."""
+    import pytest
+
+    from ui.app_gui import _press_colors
+
+    with pytest.raises(ValueError):
+        _press_colors("transparent")
+    with pytest.raises(ValueError):
+        _press_colors("#FFF")
 
 
 class _LongText:
