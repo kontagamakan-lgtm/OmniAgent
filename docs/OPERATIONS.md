@@ -375,6 +375,13 @@ Règles :
 - un corps composé d'un seul caractère répété après `sk-` est refusé, par
   exemple `sk-00000000000000000000` ou `sk-aaaaaaaaaaaaaaaaaaaa`.
 
+Pour les autres fournisseurs, `config.api_key_problem()` ne refuse que le
+vide, un espace interne, une longueur inférieure à 12 caractères et les
+valeurs d'exemple : OpenAI (`sk-proj-`), Gemini (`AIza`) et Groq (`gsk_`) ont
+des formats incompatibles avec un préfixe unique, et leur HTTP 401 est plus
+précis qu'une devinette locale. Anthropic n'existe que dans le routeur
+multi-clés : son API Messages n'est pas le protocole du client unique.
+
 Un échec de préflight rend `needs_setup()` vrai et le contrôle « clé du
 fournisseur » bloquant dans `app.diagnostics()`. Le routeur refuse la clé avant
 de l'écrire dans le coffre. Les messages d'erreur indiquent la variable ou le

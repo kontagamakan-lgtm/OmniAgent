@@ -2,11 +2,13 @@
 
 Un nouvel utilisateur lançait l'exécutable devant une fenêtre qui répondait
 « clé absente » à chaque envoi, sans moyen de la renseigner. Cet assistant
-recueille les quatre réglages indispensables - clé API, dossier de travail,
-canal du navigateur, phrase du coffre - puis les persiste :
+recueille les réglages indispensables - fournisseur et clé API, dossier de
+travail, canal du navigateur, phrase du coffre - puis les persiste :
 
-* clé API  -> variable d'environnement du fournisseur (``llm.api_key_env``) et
-  fichier ``.env`` du répertoire d'installation (jamais ``config.json``) ;
+* clé API  -> variable d'environnement du fournisseur choisi (``llm.api_key_env``)
+  et fichier ``.env`` du répertoire d'installation (jamais ``config.json``) ;
+  le fournisseur est imposé par la liste ou déduit du préfixe de la clé, ce
+  qui règle ``llm.backend``, ``llm.base_url`` et le trio de modèles ;
 * dossier  -> ajouté à ``files.allowed_roots`` (le confinement du
   ``FileManager`` le prend en compte au démarrage suivant) ;
 * canal    -> ``browser.channel`` (``""`` = Chromium embarqué, sinon Edge/Chrome
@@ -23,12 +25,22 @@ import logging
 import os
 from pathlib import Path
 
-from config import APP_ID, Settings, deepseek_key_problem, expand_path, install_dir
+from config import (
+    APP_ID,
+    Settings,
+    api_key_problem,
+    expand_path,
+    insecure_http_url,
+    install_dir,
+)
+from core.llm_router import PROVIDERS, detect_provider
 from ui.layout import SPACE_LG, SPACE_MD, SPACE_SM, SPACE_XS
 
 __all__ = [
     "CHANNELS",
+    "PROVIDER_CHOICES",
     "apply_setup",
+    "current_provider",
     "needs_setup",
     "run_setup",
     "write_env_value",
@@ -44,6 +56,135 @@ CHANNELS: tuple[tuple[str, str], ...] = (
 )
 _ALLOWED_CHANNELS = frozenset(value for _label, value in CHANNELS)
 _MIN_PASSPHRASE = 8
+
+#: Fournisseurs que le client unique sait appeler : ils exposent tous un
+#: endpoint compatible OpenAI. Anthropic parle son API Messages et n'existe que
+#: dans le routeur multi-clés ; le proposer ici ferait échouer chaque requête.
+#: « custom » couvre tout autre service compatible OpenAI : l'adresse et le
+#: modèle sont alors saisis à la main.
+#: slug -> (variable d'environnement, modèle, modèle rapide, raisonnement).
+_PROVIDER_SETTINGS: dict[str, tuple[str, str, str, str]] = {
+    "deepseek": (
+        "DEEPSEEK_API_KEY",
+        "deepseek-chat",
+        "deepseek-chat",
+        "deepseek-reasoner",
+    ),
+    "openai": ("OPENAI_API_KEY", "gpt-5-mini", "gpt-5-mini", "gpt-5"),
+    "gemini": (
+        "GEMINI_API_KEY",
+        "gemini-2.5-flash",
+        "gemini-2.5-flash",
+        "gemini-2.5-pro",
+    ),
+    "groq": (
+        "GROQ_API_KEY",
+        "llama-3.3-70b-versatile",
+        "llama-3.3-70b-versatile",
+        "llama-3.3-70b-versatile",
+    ),
+    "openrouter": (
+        "OPENROUTER_API_KEY",
+        "deepseek/deepseek-chat",
+        "deepseek/deepseek-chat",
+        "deepseek/deepseek-reasoner",
+    ),
+    "mistral": (
+        "MISTRAL_API_KEY",
+        "mistral-large-latest",
+        "mistral-small-latest",
+        "mistral-large-latest",
+    ),
+    #: Tout autre service parlant `/chat/completions` : l'adresse et le modèle
+    #: viennent des champs de l'assistant.
+    "custom": ("OMNIAGENT_API_KEY", "", "", ""),
+}
+
+#: Choix affiché -> slug. « Automatique » lit le préfixe de la clé.
+PROVIDER_CHOICES: tuple[tuple[str, str], ...] = (
+    ("Automatique (d'après la clé)", "auto"),
+    ("DeepSeek", "deepseek"),
+    ("OpenAI", "openai"),
+    ("Google Gemini", "gemini"),
+    ("Groq", "groq"),
+    ("OpenRouter", "openrouter"),
+    ("Mistral", "mistral"),
+    ("Autre (compatible OpenAI)", "custom"),
+)
+_LABELS = {slug: label for label, slug in PROVIDER_CHOICES if slug != "auto"}
+
+_ANTHROPIC_HINT = (
+    "Anthropic parle l'API Messages, que le client unique ne prend pas en "
+    "charge : ajoutez la clé dans « Clés API et modèles », avec le routeur "
+    "multi-LLM et le coffre déverrouillé"
+)
+
+
+def current_provider(settings: Settings) -> str:
+    """Fournisseur déjà configuré, déduit de la variable de clé attendue."""
+    env = settings.llm.api_key_env
+    for slug, values in _PROVIDER_SETTINGS.items():
+        if values[0] == env:
+            return slug
+    return "deepseek"
+
+
+def _resolve_provider(settings: Settings, provider: str, key: str) -> tuple[str, str]:
+    """Slug retenu pour cette saisie, et refus éventuel à afficher.
+
+    Un fournisseur vide garde celui déjà configuré : l'assistant rouvert pour
+    changer de modèle ne doit pas changer de fournisseur par surprise.
+    """
+    requested = str(provider or "").strip().lower()
+    if not requested:
+        return current_provider(settings), ""
+    if requested == "auto":
+        try:
+            detected = detect_provider(key)
+        except ValueError:
+            return "", "fournisseur indétectable d'après la clé : choisissez-le dans la liste"
+        if detected == "anthropic":
+            return "", _ANTHROPIC_HINT
+        return detected, ""
+    if requested == "anthropic":
+        return "", _ANTHROPIC_HINT
+    if requested not in _PROVIDER_SETTINGS:
+        return "", f"fournisseur inconnu : {provider!r}"
+    return requested, ""
+
+
+def _configure_llm(
+    settings: Settings, slug: str, *, base_url: str = "", model: str = ""
+) -> list[str]:
+    """Aligne le client unique sur le fournisseur retenu.
+
+    Un modèle choisi à la main dans `config.json` n'est pas écrasé par un
+    réenregistrement de clé du même fournisseur : les modèles par défaut ne
+    s'appliquent qu'au changement de fournisseur, et le champ « Modèle » ne
+    prime que s'il diffère de ce défaut.
+    """
+    env_var, default_model, fast_model, reasoning_model = _PROVIDER_SETTINGS[slug]
+    llm = settings.llm
+    provider = PROVIDERS.get(slug)
+    updates: list[str] = []
+    endpoint = base_url.strip() or (provider.base_url if provider else "")
+    chosen = model.strip()
+    if chosen and chosen != default_model:
+        llm.model = chosen
+        llm.fast_model = chosen
+        llm.reasoning_model = chosen
+        updates.append(f"modèle : {chosen}")
+    elif llm.api_key_env != env_var and default_model:
+        llm.model = default_model
+        llm.fast_model = fast_model
+        llm.reasoning_model = reasoning_model
+        updates.append(f"modèles : {default_model} et {reasoning_model}")
+    if endpoint and endpoint != llm.base_url:
+        updates.append(f"adresse : {endpoint}")
+    llm.backend = "deepseek" if slug == "deepseek" else "openai_compatible"
+    llm.base_url = endpoint
+    llm.api_key_env = env_var
+    return updates
 
 
 def needs_setup(settings: Settings) -> bool:
@@ -98,6 +239,20 @@ def _quote_env(value: str) -> str:
     return value
 
 
+def _custom_endpoint_problem(endpoint: str, model: str) -> str:
+    """Un fournisseur libre doit fournir son adresse et son modèle."""
+    if not endpoint:
+        return (
+            "adresse de base requise pour un fournisseur compatible OpenAI "
+            "(par exemple https://api.exemple.com/v1)"
+        )
+    if not endpoint.startswith(("http://", "https://")):
+        return f"adresse de base invalide : {endpoint!r} (http:// ou https:// attendu)"
+    if not model.strip():
+        return "modèle requis pour un fournisseur compatible OpenAI"
+    return ""
+
+
 def _normalize_roots(settings: Settings, workdir: str) -> tuple[str, str | None]:
     """Valide le dossier choisi et retourne (chemin, erreur éventuelle)."""
     candidate = workdir.strip()
@@ -116,6 +271,9 @@ def apply_setup(
     settings: Settings,
     *,
     api_key: str = "",
+    provider: str = "",
+    base_url: str = "",
+    model: str = "",
     workdir: str = "",
     channel: str | None = None,
     passphrase: str = "",
@@ -135,25 +293,37 @@ def apply_setup(
     key = api_key.strip()
     # Une clé malformée était acceptée puis écrite dans `.env` : l'application
     # la rejetait au démarrage suivant, et l'utilisateur devait tout ressaisir
-    # sans savoir pourquoi. Le préflight qui sert déjà à `needs_setup` la
-    # refuse ici, avant l'écriture.
-    problem = (
-        deepseek_key_problem(key, origin=settings.llm.api_key_env or "DEEPSEEK_API_KEY")
-        if key and settings.llm.backend == "deepseek"
-        else ""
-    )
-    if problem:
-        errors.append(problem)
-    elif key:
-        if settings.llm.api_key_env:
-            os.environ[settings.llm.api_key_env] = key
-        updates.append(f"clé {settings.llm.api_key_env or 'API'} enregistrée")
-        target_env = Path(env_path) if env_path else install_dir() / ".env"
-        try:
-            write_env_value(target_env, settings.llm.api_key_env or "OMNIAGENT_API_KEY", key)
-            updates.append(f"clé écrite dans {target_env}")
-        except OSError as exc:
-            errors.append(f"impossible d'écrire {target_env} : {exc} (clé gardée en mémoire)")
+    # sans savoir pourquoi. Le préflight la refuse ici, avant l'écriture, avec
+    # les règles du fournisseur retenu plutôt que celles de DeepSeek.
+    if key:
+        slug, problem = _resolve_provider(settings, provider, key)
+        env_var = _PROVIDER_SETTINGS[slug][0] if slug else settings.llm.api_key_env
+        endpoint = base_url.strip()
+        if not problem and slug == "custom":
+            problem = _custom_endpoint_problem(endpoint, model)
+        if not problem and endpoint and insecure_http_url(endpoint):
+            problem = (
+                "adresse de base en clair refusée : https est requis hors "
+                "boucle locale, sinon la clé traverse le réseau lisible"
+            )
+        if not problem:
+            problem = api_key_problem(key, provider=slug, origin=env_var)
+        if problem:
+            errors.append(problem)
+        else:
+            os.environ[env_var] = key
+            updates.append(f"clé {_LABELS[slug]} enregistrée dans {env_var}")
+            updates.extend(
+                _configure_llm(settings, slug, base_url=endpoint, model=model)
+            )
+            target_env = Path(env_path) if env_path else install_dir() / ".env"
+            try:
+                write_env_value(target_env, env_var, key)
+                updates.append(f"clé écrite dans {target_env}")
+            except OSError as exc:
+                errors.append(
+                    f"impossible d'écrire {target_env} : {exc} (clé gardée en mémoire)"
+                )
     elif needs_setup(settings):
         errors.append(
             f"clé API requise : renseignez {settings.llm.api_key_env} pour générer des réponses"
@@ -250,7 +420,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             title_font = (settings.ui.font_family, settings.ui.font_size + 2, "bold")
             ctk.CTkLabel(
                 self,
-                text="Bienvenue : quatre réglages avant de commencer",
+                text="Bienvenue : branchez votre fournisseur et votre clé",
                 font=title_font,
                 anchor="w",
                 justify="left",
@@ -269,27 +439,58 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             ).pack(fill="x", padx=SPACE_LG, pady=(0, SPACE_MD))
 
             form = ctk.CTkFrame(self)
-            form.pack(fill="both", expand=True, padx=SPACE_LG, pady=SPACE_XS)
+            # `fill="x"` sans `expand` : huit lignes remplissent la fenêtre, et
+            # l'espace résiduel ne se creuse pas entre la confirmation et les
+            # boutons quand un champ de plus est ajouté.
+            form.pack(fill="x", padx=SPACE_LG, pady=SPACE_XS)
             form.grid_columnconfigure(1, weight=1)
 
-            ctk.CTkLabel(form, text="Clé API", anchor="w").grid(
+            ctk.CTkLabel(form, text="Fournisseur", anchor="w").grid(
                 row=0, column=0, sticky="w", padx=SPACE_MD, pady=SPACE_SM
             )
-            self.key_entry = ctk.CTkEntry(form, show="•", placeholder_text="sk-…")
-            self.key_entry.grid(row=0, column=1, columnspan=2, sticky="ew", padx=SPACE_MD, pady=SPACE_SM)
+            labels = [label for label, _slug in PROVIDER_CHOICES]
+            slugs = [slug for _label, slug in PROVIDER_CHOICES]
+            start = current_provider(settings)
+            self.provider_menu = ctk.CTkOptionMenu(form, values=labels)
+            self.provider_menu.set(labels[slugs.index(start)] if start in slugs else labels[1])
+            self.provider_menu.grid(
+                row=0, column=1, columnspan=2, sticky="ew", padx=SPACE_MD, pady=SPACE_SM
+            )
+
+            ctk.CTkLabel(form, text="Clé API", anchor="w").grid(
+                row=1, column=0, sticky="w", padx=SPACE_MD, pady=SPACE_SM
+            )
+            self.key_entry = ctk.CTkEntry(
+                form, show="•", placeholder_text="collez la clé du fournisseur"
+            )
+            self.key_entry.grid(row=1, column=1, columnspan=2, sticky="ew", padx=SPACE_MD, pady=SPACE_SM)
+
+            ctk.CTkLabel(form, text="Adresse de base", anchor="w").grid(
+                row=2, column=0, sticky="w", padx=SPACE_MD, pady=SPACE_SM
+            )
+            self.base_entry = ctk.CTkEntry(
+                form, placeholder_text="https://api.exemple.com/v1"
+            )
+            self.base_entry.grid(row=2, column=1, columnspan=2, sticky="ew", padx=SPACE_MD, pady=SPACE_SM)
+
+            ctk.CTkLabel(form, text="Modèle", anchor="w").grid(
+                row=3, column=0, sticky="w", padx=SPACE_MD, pady=SPACE_SM
+            )
+            self.model_entry = ctk.CTkEntry(form, placeholder_text="nom du modèle")
+            self.model_entry.grid(row=3, column=1, columnspan=2, sticky="ew", padx=SPACE_MD, pady=SPACE_SM)
 
             ctk.CTkLabel(form, text="Dossier de travail", anchor="w").grid(
-                row=1, column=0, sticky="w", padx=SPACE_MD, pady=SPACE_SM
+                row=4, column=0, sticky="w", padx=SPACE_MD, pady=SPACE_SM
             )
             default_root = settings.files.allowed_roots[0] if settings.files.allowed_roots else ""
             self.dir_entry = ctk.CTkEntry(form, placeholder_text=default_root)
-            self.dir_entry.grid(row=1, column=1, sticky="ew", padx=(SPACE_MD, SPACE_SM), pady=SPACE_SM)
+            self.dir_entry.grid(row=4, column=1, sticky="ew", padx=(SPACE_MD, SPACE_SM), pady=SPACE_SM)
             ctk.CTkButton(form, text="Parcourir…", width=110, command=self._pick_dir).grid(
-                row=1, column=2, sticky="e", padx=(0, SPACE_MD), pady=SPACE_SM
+                row=4, column=2, sticky="e", padx=(0, SPACE_MD), pady=SPACE_SM
             )
 
             ctk.CTkLabel(form, text="Navigateur", anchor="w").grid(
-                row=2, column=0, sticky="w", padx=SPACE_MD, pady=SPACE_SM
+                row=5, column=0, sticky="w", padx=SPACE_MD, pady=SPACE_SM
             )
             current = settings.browser.channel
             labels = [label for label, value in CHANNELS]
@@ -297,7 +498,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             start = labels[values.index(current)] if current in values else labels[0]
             self.channel_menu = ctk.CTkOptionMenu(form, values=labels)
             self.channel_menu.set(start)
-            self.channel_menu.grid(row=2, column=1, columnspan=2, sticky="ew", padx=SPACE_MD, pady=SPACE_SM)
+            self.channel_menu.grid(row=5, column=1, columnspan=2, sticky="ew", padx=SPACE_MD, pady=SPACE_SM)
 
             vault_hint = (
                 "Coffre existant : laissez vide pour le conserver"
@@ -305,16 +506,22 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 else "Crée le coffre-fort des identifiants (optionnel)"
             )
             ctk.CTkLabel(form, text="Phrase du coffre", anchor="w").grid(
-                row=3, column=0, sticky="w", padx=SPACE_MD, pady=SPACE_SM
+                row=6, column=0, sticky="w", padx=SPACE_MD, pady=SPACE_SM
             )
             self.pass_entry = ctk.CTkEntry(form, show="•", placeholder_text=vault_hint)
-            self.pass_entry.grid(row=3, column=1, columnspan=2, sticky="ew", padx=SPACE_MD, pady=SPACE_SM)
+            self.pass_entry.grid(row=6, column=1, columnspan=2, sticky="ew", padx=SPACE_MD, pady=SPACE_SM)
 
             ctk.CTkLabel(form, text="Confirmation", anchor="w").grid(
-                row=4, column=0, sticky="w", padx=SPACE_MD, pady=SPACE_SM
+                row=7, column=0, sticky="w", padx=SPACE_MD, pady=SPACE_SM
             )
             self.confirm_entry = ctk.CTkEntry(form, show="•")
-            self.confirm_entry.grid(row=4, column=1, columnspan=2, sticky="ew", padx=SPACE_MD, pady=SPACE_SM)
+            self.confirm_entry.grid(row=7, column=1, columnspan=2, sticky="ew", padx=SPACE_MD, pady=SPACE_SM)
+
+            # L'adresse et le modèle suivent le fournisseur choisi : le menu
+            # les remplit avec ses valeurs, puis l'utilisateur peut les corriger
+            # (« Autre » part d'une page blanche).
+            self.provider_menu.configure(command=self._sync_provider_fields)
+            self._sync_provider_fields()
 
             self.message = ctk.CTkLabel(
                 self,
@@ -349,6 +556,24 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 self.dir_entry.delete(0, "end")
                 self.dir_entry.insert(0, chosen)
 
+        def _sync_provider_fields(self, _choice: str | None = None) -> None:
+            slug = self._selected_provider()
+            provider = PROVIDERS.get(slug)
+            self.base_entry.delete(0, "end")
+            self.model_entry.delete(0, "end")
+            if provider is not None:
+                self.base_entry.insert(0, provider.base_url)
+            default_model = _PROVIDER_SETTINGS.get(slug, ("", "", "", ""))[1]
+            if default_model:
+                self.model_entry.insert(0, default_model)
+
+        def _selected_provider(self) -> str:
+            label = self.provider_menu.get()
+            for text, slug in PROVIDER_CHOICES:
+                if text == label:
+                    return slug
+            return ""
+
         def _selected_channel(self) -> str:
             label = self.channel_menu.get()
             for text, value in CHANNELS:
@@ -360,6 +585,9 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             errors = apply_setup(
                 self.settings,
                 api_key=self.key_entry.get(),
+                provider=self._selected_provider(),
+                base_url=self.base_entry.get(),
+                model=self.model_entry.get(),
                 workdir=self.dir_entry.get(),
                 channel=self._selected_channel(),
                 passphrase=self.pass_entry.get(),

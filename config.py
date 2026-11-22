@@ -368,7 +368,9 @@ def deepseek_key_problem(key: str, *, origin: str = "DEEPSEEK_API_KEY") -> str:
     if not clean.startswith("sk-"):
         return (
             f"clé d'API invalide dans {origin} : le préfixe « sk- » "
-            "attendu pour DeepSeek est absent"
+            "attendu pour DeepSeek est absent. Si la clé vient d'OpenAI, "
+            "Gemini, Groq, OpenRouter ou Mistral, choisissez ce fournisseur : "
+            "elle sera écrite dans sa propre variable."
         )
     if len(clean) < _MIN_DEEPSEEK_KEY_LENGTH:
         return (
@@ -386,6 +388,50 @@ def deepseek_key_problem(key: str, *, origin: str = "DEEPSEEK_API_KEY") -> str:
         return (
             f"clé d'API manifestement factice dans {origin} : "
             "remplacez-la par une clé DeepSeek réelle"
+        )
+    return ""
+
+
+def api_key_problem(key: str, *, provider: str, origin: str) -> str:
+    """Préflight d'une clé pour le fournisseur choisi, sans révéler sa valeur.
+
+    DeepSeek impose son préfixe et sa longueur ; les autres fournisseurs n'ont
+    pas de format commun (``sk-proj-`` chez OpenAI, ``AIza`` chez Gemini,
+    ``gsk_`` chez Groq), donc seuls le vide, un espace interne, une longueur
+    dérisoire et les valeurs d'exemple sont refusés ici. Le reste est laissé au
+    fournisseur : son HTTP 401 est plus précis qu'une devinette locale.
+    """
+    if provider == "deepseek":
+        return deepseek_key_problem(key, origin=origin)
+    clean = str(key or "").strip()
+    if not clean:
+        return f"clé d'API absente : renseignez la variable {origin}"
+    if any(char.isspace() for char in clean):
+        return f"clé d'API invalide dans {origin} : elle contient un espace"
+    if len(clean) < 12:
+        return (
+            f"clé d'API trop courte dans {origin} ({len(clean)} caractères) : "
+            "copiez la clé complète fournie par le fournisseur"
+        )
+    # Les marqueurs sont comparés à la valeur entière, jamais en sous-chaîne :
+    # « test » ou « xxx » apparaissent au hasard dans une vraie clé Gemini ou
+    # Groq de quarante caractères, et refuser un vrai secret pour ce motif est
+    # exactement le bug qu'on corrige. Seule une valeur qui *est* un exemple,
+    # ou un corps fait d'un caractère répété, est refusée.
+    body = clean
+    for prefix in ("sk-proj-", "sk-ant-", "sk-", "gsk_", "AIza"):
+        if clean.startswith(prefix):
+            body = clean[len(prefix) :]
+            break
+    if clean.casefold() in _FAKE_API_KEY_MARKERS:
+        return (
+            f"clé d'API manifestement factice dans {origin} : "
+            "remplacez-la par une clé réelle"
+        )
+    if len(body) >= 4 and len(set(body.casefold())) == 1:
+        return (
+            f"clé d'API manifestement factice dans {origin} : "
+            "le corps de la clé est un caractère unique répété"
         )
     return ""
 

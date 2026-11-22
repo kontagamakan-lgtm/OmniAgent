@@ -254,7 +254,8 @@ chaque envoi échouera tant qu'aucune clé n'est renseignée.
 
 | Réglage | Où il est enregistré | Quand il prend effet |
 |---|---|---|
-| **Clé API** | variable `DEEPSEEK_API_KEY` (ou `llm.api_key_env`) de la session, et fichier `.env` du dossier d'installation : à côté de `OmniAgent.exe`, racine du projet en source. Jamais dans `config.json`. | immédiatement |
+| **Fournisseur** | `llm.backend`, `llm.base_url`, `llm.api_key_env` et le trio de modèles dans `config.json` : DeepSeek, OpenAI, Gemini, Groq, OpenRouter, Mistral, un autre service compatible OpenAI (adresse et modèle saisis à la main), ou « automatique » d'après le préfixe de la clé. Anthropic (API Messages) reste réservé au routeur multi-clés. | immédiatement |
+| **Clé API** | variable du fournisseur choisi (`DEEPSEEK_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY`, `MISTRAL_API_KEY`) de la session, et fichier `.env` du dossier d'installation : à côté de `OmniAgent.exe`, racine du projet en source. Jamais dans `config.json`. | immédiatement |
 | **Dossier de travail** | ajouté à `files.allowed_roots` dans `config.json` (`%LOCALAPPDATA%\OmniAgent\config.json` pour l'exe, `data\config.json` en source) | au prochain démarrage (il borne les outils fichiers) |
 | **Canal navigateur** | `browser.channel` dans le même `config.json` : vide = Chromium embarqué sinon Edge/Chrome du système, ou `msedge` / `chrome` | au prochain démarrage |
 | **Phrase du coffre** | crée `vault.enc` (Argon2id + AES-256-GCM) ; les phrases trop courtes ou non concordantes sont refusées, un coffre existant est conservé | immédiatement, coffre laissé déverrouillé |

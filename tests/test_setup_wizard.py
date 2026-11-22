@@ -149,6 +149,171 @@ def test_apply_setup_requires_a_key_when_generating(monkeypatch) -> None:
         assert any("clé API requise" in line for line in errors), errors
 
 
+def test_apply_setup_accepts_another_provider_and_switches_the_client(monkeypatch) -> None:
+    """Une clé OpenAI n'est plus refusée pour un préfixe DeepSeek absent."""
+    with tmpdir("setup-openai") as tmp:
+        settings = make_settings(tmp)
+        settings.ensure_directories()
+        env_file = tmp / ".env"
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv(settings.llm.api_key_env, raising=False)
+        key = "sk-proj-abcdefghijklmnopqrstuvwxyz"
+
+        errors = apply_setup(
+            settings, api_key=key, provider="openai", env_path=env_file
+        )
+
+        assert errors == [], errors
+        assert os.environ["OPENAI_API_KEY"] == key, "la clé est active tout de suite"
+        text = env_file.read_text(encoding="utf-8")
+        assert f"OPENAI_API_KEY={key}" in text
+        assert "DEEPSEEK_API_KEY" not in text, "l'ancienne variable ne doit pas être réécrite"
+        assert settings.llm.backend == "openai_compatible"
+        assert settings.llm.base_url == "https://api.openai.com/v1"
+        assert settings.llm.api_key_env == "OPENAI_API_KEY"
+        assert settings.llm.model == "gpt-5-mini"
+        assert needs_setup(settings) is False
+
+
+def test_apply_setup_detects_the_provider_from_the_key_prefix(monkeypatch) -> None:
+    with tmpdir("setup-auto") as tmp:
+        settings = make_settings(tmp)
+        monkeypatch.delenv("GROQ_API_KEY", raising=False)
+        key = "gsk_abcdefghij1234567890"
+
+        errors = apply_setup(settings, api_key=key, provider="auto")
+
+        assert errors == [], errors
+        assert os.environ["GROQ_API_KEY"] == key
+        assert settings.llm.backend == "openai_compatible"
+        assert settings.llm.base_url == "https://api.groq.com/openai/v1"
+        assert settings.llm.model == "llama-3.3-70b-versatile"
+
+
+def test_apply_setup_refuses_a_key_of_unknown_provider(monkeypatch) -> None:
+    with tmpdir("setup-unknown-provider") as tmp:
+        settings = make_settings(tmp)
+        settings.ensure_directories()
+        env_file = tmp / ".env"
+
+        errors = apply_setup(
+            settings, api_key="pas-une-cle-du-tout", provider="auto", env_path=env_file
+        )
+
+        assert any("indétectable" in line for line in errors), errors
+        assert not env_file.exists(), "rien ne doit être écrit dans .env"
+
+
+def test_apply_setup_sends_anthropic_to_the_multi_key_router(monkeypatch) -> None:
+    """Le client unique ne parle pas l'API Messages : le dire, sans écrire."""
+    with tmpdir("setup-anthropic") as tmp:
+        settings = make_settings(tmp)
+        settings.ensure_directories()
+        env_file = tmp / ".env"
+
+        errors = apply_setup(
+            settings,
+            api_key="sk-ant-api03-abcdefghijklmnop",
+            provider="anthropic",
+            env_path=env_file,
+        )
+
+        assert any("routeur" in line for line in errors), errors
+        assert not env_file.exists()
+        assert settings.llm.api_key_env == "DEEPSEEK_API_KEY"
+
+
+def test_apply_setup_keeps_the_models_of_the_same_provider(monkeypatch) -> None:
+    """Réenregistrer une clé ne doit pas écraser un modèle choisi à la main."""
+    with tmpdir("setup-same-provider") as tmp:
+        settings = make_settings(tmp)
+        settings.llm.api_key_env = "OPENAI_API_KEY"
+        settings.llm.model = "gpt-4.1-mini"
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+        errors = apply_setup(
+            settings, api_key="sk-proj-abcdefghijklmnopqrstuvwxyz", provider="openai"
+        )
+
+        assert errors == [], errors
+        assert settings.llm.model == "gpt-4.1-mini"
+
+
+def test_apply_setup_accepts_a_key_that_merely_contains_a_marker(monkeypatch) -> None:
+    """Une vraie clé contient parfois « test » : ce n'est pas une valeur d'exemple."""
+    with tmpdir("setup-real-key") as tmp:
+        settings = make_settings(tmp)
+        monkeypatch.delenv("GROQ_API_KEY", raising=False)
+        key = "gsk_contest4b7f9c2a1d8e6f3b5a9c"
+
+        errors = apply_setup(settings, api_key=key, provider="groq")
+
+        assert errors == [], errors
+        assert os.environ["GROQ_API_KEY"] == key
+
+
+def test_apply_setup_accepts_any_openai_compatible_endpoint(monkeypatch) -> None:
+    """« Autre » : une adresse et un modèle libres, donc n'importe quelle clé."""
+    with tmpdir("setup-custom") as tmp:
+        settings = make_settings(tmp)
+        env_file = tmp / ".env"
+        monkeypatch.delenv("OMNIAGENT_API_KEY", raising=False)
+        key = "cle-libre-de-32-caracteres-abcd"
+
+        errors = apply_setup(
+            settings,
+            api_key=key,
+            provider="custom",
+            base_url="https://api.exemple.fr/v1",
+            model="mon-modele-7b",
+            env_path=env_file,
+        )
+
+        assert errors == [], errors
+        assert os.environ["OMNIAGENT_API_KEY"] == key
+        assert f"OMNIAGENT_API_KEY={key}" in env_file.read_text(encoding="utf-8")
+        assert settings.llm.backend == "openai_compatible"
+        assert settings.llm.base_url == "https://api.exemple.fr/v1"
+        assert settings.llm.api_key_env == "OMNIAGENT_API_KEY"
+        assert settings.llm.model == "mon-modele-7b"
+
+
+def test_apply_setup_requires_the_endpoint_of_a_custom_provider(monkeypatch) -> None:
+    with tmpdir("setup-custom-missing") as tmp:
+        settings = make_settings(tmp)
+        settings.ensure_directories()
+        env_file = tmp / ".env"
+        monkeypatch.delenv("OMNIAGENT_API_KEY", raising=False)
+
+        errors = apply_setup(
+            settings,
+            api_key="cle-libre-de-32-caracteres-abcd",
+            provider="custom",
+            model="mon-modele-7b",
+            env_path=env_file,
+        )
+
+        assert any("adresse de base requise" in line for line in errors), errors
+        assert not env_file.exists(), "aucune clé sans adresse valide"
+        assert "OMNIAGENT_API_KEY" not in os.environ
+
+
+def test_apply_setup_refuses_a_custom_endpoint_in_clear(monkeypatch) -> None:
+    with tmpdir("setup-custom-http") as tmp:
+        settings = make_settings(tmp)
+        monkeypatch.delenv("OMNIAGENT_API_KEY", raising=False)
+
+        errors = apply_setup(
+            settings,
+            api_key="cle-libre-de-32-caracteres-abcd",
+            provider="custom",
+            base_url="http://api.exemple.fr/v1",
+            model="mon-modele-7b",
+        )
+
+        assert any("clair" in line for line in errors), errors
+
+
 def test_write_env_value_preserves_other_lines() -> None:
     with tmpdir("setup") as tmp:
         env_file = tmp / ".env"
