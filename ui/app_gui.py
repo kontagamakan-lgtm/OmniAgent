@@ -23,6 +23,12 @@ from ui.controller import AgentController
 from ui.hotkey import HotkeyListener
 from ui.key_panel import KeyTable
 from ui.layout import (
+    SPACE_LG,
+    SPACE_MD,
+    SPACE_SM,
+    SPACE_XL,
+    SPACE_XS,
+    SPACE_XXL,
     LayoutPlan,
     fit_dialog_geometry,
     plan_layout,
@@ -51,6 +57,53 @@ _UI_TEXT = "#ECF0ED"
 _UI_MUTED = "#8C9691"
 _UI_ACCENT_DARK = "#263B29"
 _UI_RED = "#ED8F89"
+
+#: Micro-mouvement des états d'appui : 12 pas de 16 ms, soit 192 ms. La
+#: fenêtre de 150 à 300 ms est celle d'un retour qu'on voit sans qu'il retarde
+#: l'action ; en dessous il est subliminal, au-delà il gêne.
+_PRESS_STEPS = 12
+_PRESS_STEP_MS = 16
+#: Assombrissement de la couleur au repos quand le bouton est enfoncé.
+_PRESS_DARKEN = 0.18
+
+
+def _hex_channels(color: str) -> tuple[int, int, int]:
+    """Canaux d'une couleur `#RRGGBB`, refusée si elle n'est pas opaque."""
+    text = str(color).strip().lstrip("#")
+    if len(text) != 6:
+        raise ValueError(f"couleur opaque #RRGGBB attendue : {color!r}")
+    return int(text[0:2], 16), int(text[2:4], 16), int(text[4:6], 16)
+
+
+def _mix_color(start: str, end: str, ratio: float) -> str:
+    """Mélange deux couleurs (`0` = début, `1` = fin), canal par canal."""
+    share = max(0.0, min(1.0, float(ratio)))
+    first, second = _hex_channels(start), _hex_channels(end)
+    mixed = [round(a + (b - a) * share) for a, b in zip(first, second, strict=True)]
+    return "#" + "".join(f"{value:02X}" for value in mixed)
+
+
+def _press_colors(
+    color: str, *, darken: float = _PRESS_DARKEN
+) -> tuple[str, str]:
+    """Couleur au repos et couleur enfoncée : la seconde assombrit la première."""
+    red, green, blue = _hex_channels(color)
+    pressed = [round(channel * (1.0 - max(0.0, min(0.9, float(darken))))) for channel in (red, green, blue)]
+    return color, "#" + "".join(f"{value:02X}" for value in pressed)
+
+
+def _press_frames(
+    start: str, end: str, *, steps: int = _PRESS_STEPS
+) -> list[str]:
+    """Trajet complet d'un appui : repos, puis un pas par palier, puis enfoncé.
+
+    Le repos est inclus en tête pour que le relâchement rejoue exactement le
+    même trajet à l'envers et retrouve la couleur d'origine, sans arrondi
+    résiduel : presser puis relâcher ne laisse pas le bouton plus sombre.
+    """
+    count = max(1, int(steps))
+    return [_mix_color(start, end, index / count) for index in range(count + 1)]
+
 
 _TOOL_LABELS = {
     "fs_read_text": "lecture d'un fichier",
@@ -408,7 +461,9 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                     border_width=1,
                     border_color=_UI_LINE,
                 )
-            return ctk.CTkButton(parent, **options)
+            button = ctk.CTkButton(parent, **options)
+            self._bind_press_motion(button)
+            return button
 
         def _nav(
             self,
@@ -435,7 +490,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                     hover_color="#2E4032",
                     text_color=self._accent,
                 )
-            button.pack(fill="x", pady=2)
+            button.pack(fill="x", pady=SPACE_XS)
             self._nav_buttons.append(button)
             return button
 
@@ -450,7 +505,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
 
         def _panel_title(self, parent: Any, title: str) -> Any:
             header = ctk.CTkFrame(parent, fg_color="transparent", height=44)
-            header.pack(fill="x", padx=16)
+            header.pack(fill="x", padx=SPACE_LG)
             header.pack_propagate(False)
             ctk.CTkLabel(
                 header,
@@ -522,7 +577,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 self._sidebar_scrollbar.grid_remove()
 
             brand = ctk.CTkFrame(side, fg_color="transparent")
-            brand.pack(fill="x", padx=16, pady=(28, 0))
+            brand.pack(fill="x", padx=SPACE_LG, pady=(SPACE_XL, 0))
             self.side_brand = brand
             ctk.CTkLabel(
                 brand, text="Omni", font=self._font(8, "bold"), text_color=_UI_TEXT
@@ -541,20 +596,20 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 border_color=_UI_LINE,
                 corner_radius=8,
             )
-            workspace_switch.pack(fill="x", padx=16, pady=(28, 22))
+            workspace_switch.pack(fill="x", padx=SPACE_LG, pady=(SPACE_XL, SPACE_XL))
             self.workspace_switch = workspace_switch
             workspace_text = ctk.CTkFrame(workspace_switch, fg_color="transparent")
-            workspace_text.pack(side="left", padx=(14, 8), pady=9)
+            workspace_text.pack(side="left", padx=(SPACE_MD, SPACE_SM), pady=SPACE_SM)
             ctk.CTkLabel(
                 workspace_text,
-                text="Espace personnel",
+                text="Ce poste",
                 font=self._font(-1, "bold"),
                 text_color=_UI_TEXT,
                 anchor="w",
             ).pack(fill="x")
             ctk.CTkLabel(
                 workspace_text,
-                text="Windows · Local",
+                text="Windows, hors cloud",
                 font=self._font(-3),
                 text_color=_UI_MUTED,
                 anchor="w",
@@ -567,10 +622,10 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 text_color="#68746D",
                 anchor="w",
             )
-            self.workspace_label.pack(fill="x", padx=24, pady=(0, 8))
+            self.workspace_label.pack(fill="x", padx=SPACE_XL, pady=(0, SPACE_SM))
             self._nav_buttons: list[Any] = []
             primary_nav = ctk.CTkFrame(side, fg_color="transparent")
-            primary_nav.pack(fill="x", padx=12)
+            primary_nav.pack(fill="x", padx=SPACE_MD)
             self._nav(
                 primary_nav,
                 "Assistant",
@@ -594,9 +649,9 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 text_color="#68746D",
                 anchor="w",
             )
-            self.config_label.pack(fill="x", padx=24, pady=(24, 8))
+            self.config_label.pack(fill="x", padx=SPACE_XL, pady=(SPACE_XL, SPACE_SM))
             config_nav = ctk.CTkFrame(side, fg_color="transparent")
-            config_nav.pack(fill="x", padx=12)
+            config_nav.pack(fill="x", padx=SPACE_MD)
             self._nav(
                 config_nav, "Autonomie", self._toggle_autonomy
             )
@@ -618,11 +673,11 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             )
 
             sidebar_bottom = ctk.CTkFrame(side, fg_color="transparent")
-            sidebar_bottom.pack(side="bottom", fill="x", padx=16, pady=16)
+            sidebar_bottom.pack(side="bottom", fill="x", padx=SPACE_LG, pady=SPACE_LG)
             self.sidebar_bottom = sidebar_bottom
             ctk.CTkFrame(
                 sidebar_bottom, height=1, fg_color=_UI_LINE
-            ).pack(fill="x", pady=(0, 12))
+            ).pack(fill="x", pady=(0, SPACE_MD))
             profile = ctk.CTkFrame(sidebar_bottom, fg_color="transparent")
             profile.pack(fill="x")
             ctk.CTkLabel(
@@ -636,7 +691,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 font=self._font(-2, "bold"),
             ).pack(side="left")
             profile_text = ctk.CTkFrame(profile, fg_color="transparent")
-            profile_text.pack(side="left", padx=9)
+            profile_text.pack(side="left", padx=SPACE_SM)
             ctk.CTkLabel(
                 profile_text,
                 text="OmniAgent",
@@ -661,7 +716,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             topbar = ctk.CTkFrame(
                 main, height=75, fg_color=_UI_BG, corner_radius=0
             )
-            topbar.grid(row=0, column=0, sticky="ew", padx=34)
+            topbar.grid(row=0, column=0, sticky="ew", padx=SPACE_XXL)
             topbar.grid_propagate(False)
             topbar.grid_columnconfigure(1, weight=1)
 
@@ -678,7 +733,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 text="/",
                 font=self._font(-2),
                 text_color="#48514B",
-            ).pack(side="left", padx=9)
+            ).pack(side="left", padx=SPACE_SM)
             ctk.CTkLabel(
                 crumbs,
                 text="Assistant",
@@ -695,13 +750,13 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 border_color=_UI_LINE,
                 corner_radius=4,
             )
-            version.pack(side="left", padx=(0, 10))
+            version.pack(side="left", padx=(0, SPACE_SM))
             ctk.CTkLabel(
                 version,
                 text=f"v{APP_VERSION}",
                 font=self._font(-3),
                 text_color=_UI_MUTED,
-            ).pack(padx=7, pady=3)
+            ).pack(padx=SPACE_SM, pady=SPACE_XS)
             self._button(
                 top_actions,
                 "?",
@@ -718,48 +773,55 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 text_color="#B4C5A8",
                 fg_color="#243027",
                 corner_radius=4,
-                padx=6,
-                pady=3,
+                padx=SPACE_SM,
+                pady=SPACE_XS,
             )
             # Affiché uniquement en compact par `_apply_layout_mode`.
 
             content = ctk.CTkFrame(main, fg_color=_UI_BG, corner_radius=0)
             content.grid(
-                row=1, column=0, sticky="nsew", padx=34, pady=(12, 20)
+                row=1,
+                column=0,
+                sticky="nsew",
+                padx=SPACE_XXL,
+                pady=(SPACE_MD, SPACE_XL),
             )
             self.content_panel = content
             content.grid_columnconfigure(0, weight=1)
             content.grid_rowconfigure(2, weight=1)
 
             heading = ctk.CTkFrame(content, fg_color="transparent")
-            heading.grid(row=0, column=0, sticky="ew", pady=(6, 22))
+            heading.grid(row=0, column=0, sticky="ew", pady=(SPACE_SM, SPACE_XL))
             self.heading = heading
             heading.grid_columnconfigure(0, weight=1)
             heading_text = ctk.CTkFrame(heading, fg_color="transparent")
             heading_text.grid(row=0, column=0, sticky="w")
             ctk.CTkLabel(
                 heading_text,
-                text="VOTRE COPILOTE AU QUOTIDIEN",
+                text="AGENT LOCAL, SANS CLOUD",
                 font=self._font(-3, "bold"),
                 text_color=self._accent,
                 anchor="w",
-            ).pack(fill="x", pady=(0, 8))
+            ).pack(fill="x", pady=(0, SPACE_SM))
             self.heading_title = ctk.CTkLabel(
                 heading_text,
-                text="À vous de donner le cap.",
-                font=self._font(9, "bold"),
+                text="Décrivez la tâche, validez chaque étape.",
+                font=self._font(8, "bold"),
                 text_color=_UI_TEXT,
                 anchor="w",
             )
             self.heading_title.pack(fill="x")
             self.heading_subtitle = ctk.CTkLabel(
                 heading_text,
-                text="Une tâche en tête ? Votre agent s'occupe de la suite.",
+                text=(
+                    "Chaque outil s'exécute après votre accord ; fichiers et "
+                    "traces restent sur ce poste."
+                ),
                 font=self._font(-1),
                 text_color=_UI_MUTED,
                 anchor="w",
             )
-            self.heading_subtitle.pack(fill="x", pady=(6, 0))
+            self.heading_subtitle.pack(fill="x", pady=(SPACE_SM, 0))
             heading_actions = ctk.CTkFrame(heading, fg_color="transparent")
             heading_actions.grid(row=0, column=1, sticky="e")
             self.heading_actions = heading_actions
@@ -769,108 +831,87 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 self._open_journal,
                 ghost=True,
                 width=130,
-            ).pack(side="left", padx=(0, 8))
+            ).pack(side="left", padx=(0, SPACE_SM))
             self._button(
                 heading_actions,
-                "+  Nouvelle session",
+                "Nouvelle session",
                 self._new_session,
                 primary=True,
                 width=145,
             ).pack(side="left")
 
             summary = ctk.CTkFrame(content, fg_color="transparent")
-            summary.grid(row=1, column=0, sticky="ew", pady=(0, 20))
+            summary.grid(row=1, column=0, sticky="ew", pady=(0, SPACE_XL))
             self.summary_panel = summary
             for column in range(3):
                 summary.grid_columnconfigure(column, weight=1, uniform="stat")
 
+            # Trois cartes de synthèse : un grand chiffre, un libellé discret.
+            # Les pastilles d'icônes qui doublaient chaque valeur ont disparu :
+            # elles attiraient l'œil autant que le chiffre et lisaient moins
+            # vite. Le « USD » de la carte budget suivait la même logique, le
+            # symbole étant déjà dans la valeur.
             stat_agent = self._card(summary)
-            stat_agent.grid(row=0, column=0, sticky="nsew", padx=(0, 7))
-            stat_agent.grid_columnconfigure(0, weight=1)
+            stat_agent.grid(row=0, column=0, sticky="nsew", padx=(0, SPACE_SM))
             ctk.CTkLabel(
                 stat_agent,
-                text="Statut de l'agent",
+                text="Agent local",
                 font=self._font(-3),
                 text_color="#96A197",
                 anchor="w",
-            ).grid(row=0, column=0, sticky="sw", padx=(14, 11), pady=(14, 0))
+            ).grid(row=0, column=0, sticky="w", padx=SPACE_LG, pady=(SPACE_MD, 0))
             self.status = ctk.CTkLabel(
                 stat_agent,
-                text="Prêt à travailler",
-                font=self._font(1, "bold"),
+                text="Prêt",
+                font=self._font(4, "bold"),
                 text_color=_UI_TEXT,
                 anchor="w",
                 justify="left",
-                wraplength=240,
+                wraplength=200,
             )
-            self.status.grid(row=1, column=0, sticky="nw", padx=(14, 11), pady=(2, 14))
+            self.status.grid(
+                row=1, column=0, sticky="w", padx=SPACE_LG, pady=(0, SPACE_MD)
+            )
 
             stat_tasks = self._card(summary)
-            stat_tasks.grid(row=0, column=1, sticky="nsew", padx=7)
-            stat_tasks.grid_columnconfigure(1, weight=1)
+            stat_tasks.grid(row=0, column=1, sticky="nsew", padx=SPACE_SM)
             ctk.CTkLabel(
                 stat_tasks,
-                text="✓",
-                width=38,
-                height=38,
-                corner_radius=8,
-                fg_color="#232B24",
-                text_color="#A6BBA5",
-                font=self._font(4, "bold"),
-            ).grid(row=0, column=0, rowspan=2, padx=(14, 11), pady=14)
-            ctk.CTkLabel(
-                stat_tasks,
-                text="Tâches effectuées",
+                text="Tâches terminées",
                 font=self._font(-3),
                 text_color="#96A197",
                 anchor="w",
-            ).grid(row=0, column=1, sticky="sw", pady=(14, 0))
+            ).grid(row=0, column=0, sticky="w", padx=SPACE_LG, pady=(SPACE_MD, 0))
             self.task_count_label = ctk.CTkLabel(
                 stat_tasks,
                 text="0",
-                font=self._font(1, "bold"),
+                font=self._font(7, "bold"),
                 text_color=_UI_TEXT,
                 anchor="w",
             )
-            self.task_count_label.grid(row=1, column=1, sticky="nw", pady=(2, 14))
+            self.task_count_label.grid(
+                row=1, column=0, sticky="w", padx=SPACE_LG, pady=(0, SPACE_MD)
+            )
 
             stat_budget = self._card(summary)
-            stat_budget.grid(row=0, column=2, sticky="nsew", padx=(7, 0))
-            stat_budget.grid_columnconfigure(1, weight=1)
+            stat_budget.grid(row=0, column=2, sticky="nsew", padx=(SPACE_SM, 0))
             ctk.CTkLabel(
                 stat_budget,
-                text="$",
-                width=38,
-                height=38,
-                corner_radius=8,
-                fg_color="#232B24",
-                text_color="#A6BBA5",
-                font=self._font(3, "bold"),
-            ).grid(row=0, column=0, rowspan=2, padx=(14, 11), pady=14)
-            ctk.CTkLabel(
-                stat_budget,
-                text="Budget utilisé aujourd'hui",
+                text="Coût aujourd'hui",
                 font=self._font(-3),
                 text_color="#96A197",
                 anchor="w",
-            ).grid(row=0, column=1, sticky="sw", pady=(14, 0))
+            ).grid(row=0, column=0, sticky="w", padx=SPACE_LG, pady=(SPACE_MD, 0))
             self.budget_card_label = ctk.CTkLabel(
                 stat_budget,
                 text="0,00 $",
-                font=self._font(1, "bold"),
+                font=self._font(7, "bold"),
                 text_color=_UI_TEXT,
                 anchor="w",
             )
-            self.budget_card_label.grid(row=1, column=1, sticky="nw", pady=(2, 14))
-            ctk.CTkLabel(
-                stat_budget,
-                text="USD",
-                font=self._font(-3, "bold"),
-                text_color="#B4D6AB",
-                fg_color="#28392B",
-                corner_radius=4,
-                width=30,
-            ).grid(row=1, column=2, sticky="e", padx=(0, 12))
+            self.budget_card_label.grid(
+                row=1, column=0, sticky="w", padx=SPACE_LG, pady=(0, SPACE_MD)
+            )
 
             workspace = ctk.CTkFrame(content, fg_color="transparent")
             workspace.grid(row=2, column=0, sticky="nsew")
@@ -892,11 +933,11 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             panel_header.grid_columnconfigure(0, weight=1)
             ctk.CTkLabel(
                 panel_header,
-                text="Votre assistant",
+                text="Conversation",
                 font=self._font(-2, "bold"),
                 text_color=_UI_TEXT,
                 anchor="w",
-            ).grid(row=0, column=0, sticky="w", padx=20, pady=20)
+            ).grid(row=0, column=0, sticky="w", padx=SPACE_XL, pady=SPACE_XL)
             self.session_status = ctk.CTkLabel(
                 panel_header,
                 text="● En ligne",
@@ -904,12 +945,12 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 text_color="#ABC6A6",
                 fg_color="#243027",
                 corner_radius=20,
-                padx=9,
-                pady=4,
+                padx=SPACE_SM,
+                pady=SPACE_XS,
                 justify="right",
                 wraplength=220,
             )
-            self.session_status.grid(row=0, column=1, sticky="e", padx=18)
+            self.session_status.grid(row=0, column=1, sticky="e", padx=SPACE_LG)
 
             conversation = ctk.CTkFrame(assistant, fg_color=_UI_SURFACE)
             conversation.grid(row=1, column=0, sticky="nsew")
@@ -921,7 +962,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             welcome_center = ctk.CTkFrame(
                 self.welcome_frame, fg_color="transparent"
             )
-            welcome_center.pack(expand=True, pady=(22, 12))
+            welcome_center.pack(expand=True, pady=(SPACE_XL, SPACE_MD))
             self.welcome_center = welcome_center
             self.welcome_icon = ctk.CTkLabel(
                 welcome_center,
@@ -936,22 +977,23 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             self.welcome_icon.pack()
             self.welcome_title = ctk.CTkLabel(
                 welcome_center,
-                text="Moins de tâches. Plus de possibilités.",
-                font=self._font(5, "bold"),
+                text="Aucune tâche en cours.",
+                font=self._font(6, "bold"),
                 text_color=_UI_TEXT,
             )
-            self.welcome_title.pack(pady=(15, 5))
+            self.welcome_title.pack(pady=(SPACE_LG, SPACE_XS))
             self.welcome_subtitle = ctk.CTkLabel(
                 welcome_center,
                 text=(
-                    "Décrivez ce que vous souhaitez accomplir.\n"
-                    "Je planifie, j'exécute, vous gardez le contrôle."
+                    "Écrivez une demande : il planifie, propose les outils un "
+                    "par un, et laisse une trace lisible.\n"
+                    "Rien ne part sans votre accord."
                 ),
                 font=self._font(-1),
                 text_color=_UI_MUTED,
                 justify="center",
             )
-            self.welcome_subtitle.pack(pady=(0, 17))
+            self.welcome_subtitle.pack(pady=(0, SPACE_LG))
 
             self.transcript = ctk.CTkTextbox(
                 conversation,
@@ -965,12 +1007,24 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 scrollbar_button_color="#3A4739",
                 scrollbar_button_hover_color="#4B5A42",
             )
-            self.transcript.grid(row=0, column=0, sticky="nsew", padx=18, pady=12)
+            self.transcript.grid(
+                row=0,
+                column=0,
+                sticky="nsew",
+                padx=SPACE_LG,
+                pady=SPACE_MD,
+            )
             self.transcript.grid_remove()
             self._buffer = TranscriptBuffer(self.transcript, max_lines=6000)
 
             composer_wrap = ctk.CTkFrame(assistant, fg_color=_UI_SURFACE)
-            composer_wrap.grid(row=2, column=0, sticky="ew", padx=17, pady=(2, 13))
+            composer_wrap.grid(
+                row=2,
+                column=0,
+                sticky="ew",
+                padx=SPACE_LG,
+                pady=(SPACE_XS, SPACE_MD),
+            )
             composer = ctk.CTkFrame(
                 composer_wrap,
                 fg_color=_UI_FIELD,
@@ -988,11 +1042,11 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 text_color=_UI_TEXT,
                 font=self._font(-1),
             )
-            self.prompt.pack(fill="x", padx=11, pady=(8, 0))
+            self.prompt.pack(fill="x", padx=SPACE_MD, pady=(SPACE_SM, 0))
             self.prompt.bind("<Control-Return>", lambda _event: self._send())
 
             composer_bottom = ctk.CTkFrame(composer, fg_color="transparent")
-            composer_bottom.pack(fill="x", padx=9, pady=(2, 8))
+            composer_bottom.pack(fill="x", padx=SPACE_SM, pady=(SPACE_XS, SPACE_SM))
             composer_tools = ctk.CTkFrame(
                 composer_bottom, fg_color="transparent"
             )
@@ -1015,7 +1069,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 height=26,
                 font_delta=-3,
             )
-            self.undo_button.pack(side="left", padx=2)
+            self.undo_button.pack(side="left", padx=SPACE_XS)
             self._button(
                 composer_tools,
                 "Journal",
@@ -1045,10 +1099,12 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 font_delta=-2,
             )
             self.cancel_button.configure(state="disabled")
-            self.cancel_button.pack(side="right", padx=(0, 4))
+            self.cancel_button.pack(side="right", padx=(0, SPACE_XS))
 
             composer_note = ctk.CTkFrame(assistant, fg_color=_UI_SURFACE)
-            composer_note.grid(row=3, column=0, sticky="ew", padx=20, pady=(0, 12))
+            composer_note.grid(
+                row=3, column=0, sticky="ew", padx=SPACE_LG, pady=(0, SPACE_MD)
+            )
             self.composer_note_label = ctk.CTkLabel(
                 composer_note,
                 text="Ctrl + Entrée pour envoyer  ·  Entrée pour une nouvelle ligne",
@@ -1061,18 +1117,18 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
 
             # -- colonne de droite ---------------------------------------------
             right = ctk.CTkFrame(workspace, fg_color=_UI_BG)
-            right.grid(row=0, column=1, sticky="nsew", padx=(20, 0))
+            right.grid(row=0, column=1, sticky="nsew", padx=(SPACE_XL, 0))
             right.grid_columnconfigure(0, weight=1)
             right.grid_rowconfigure(0, weight=1)
 
             session = self._card(right)
             session.grid(row=0, column=0, sticky="new")
-            self._panel_title(session, "Contrôle de la session")
+            self._panel_title(session, "Réglages de session")
             session_body = ctk.CTkFrame(session, fg_color="transparent")
-            session_body.pack(fill="x", padx=16, pady=(2, 10))
+            session_body.pack(fill="x", padx=SPACE_LG, pady=(SPACE_XS, SPACE_MD))
 
             mode_row = ctk.CTkFrame(session_body, fg_color="transparent")
-            mode_row.pack(fill="x", pady=3)
+            mode_row.pack(fill="x", pady=SPACE_XS)
             ctk.CTkLabel(
                 mode_row,
                 text="Mode d'exécution",
@@ -1088,7 +1144,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             self.mode_label.pack(side="right")
 
             autonomy_row = ctk.CTkFrame(session_body, fg_color="transparent")
-            autonomy_row.pack(fill="x", pady=3)
+            autonomy_row.pack(fill="x", pady=SPACE_XS)
             ctk.CTkLabel(
                 autonomy_row,
                 text="Session autonome",
@@ -1107,7 +1163,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             self.autonomy_button.pack(side="right")
 
             trace_row = ctk.CTkFrame(session_body, fg_color="transparent")
-            trace_row.pack(fill="x", pady=3)
+            trace_row.pack(fill="x", pady=SPACE_XS)
             ctk.CTkLabel(
                 trace_row,
                 text="Traces détaillées",
@@ -1132,7 +1188,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 self.trace_switch.deselect()
 
             ctk.CTkFrame(session_body, height=1, fg_color=_UI_LINE).pack(
-                fill="x", pady=(8, 6)
+                fill="x", pady=(SPACE_SM, SPACE_XS)
             )
             budget_row = ctk.CTkFrame(session_body, fg_color="transparent")
             budget_row.pack(fill="x")
@@ -1159,7 +1215,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 fg_color="#2E362B",
                 progress_color=self._accent,
             )
-            self.budget_progress.pack(fill="x", pady=(10, 5))
+            self.budget_progress.pack(fill="x", pady=(SPACE_SM, SPACE_XS))
             self.budget_progress.set(0)
             self.budget_reset_label = ctk.CTkLabel(
                 session_body,
@@ -1180,11 +1236,11 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 font_delta=-3,
             )
             self.emergency_button.grid(
-                row=1, column=0, sticky="ew", pady=(12, 0)
+                row=1, column=0, sticky="ew", pady=(SPACE_MD, 0)
             )
 
             footer = ctk.CTkFrame(content, fg_color="transparent")
-            footer.grid(row=3, column=0, sticky="ew", pady=(16, 0))
+            footer.grid(row=3, column=0, sticky="ew", pady=(SPACE_LG, 0))
             self.footer = footer
             ctk.CTkLabel(
                 footer,
@@ -1194,6 +1250,54 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 anchor="w",
             ).pack(side="left")
             self.bind_all("<Control-Alt-s>", lambda _event: self._emergency_stop())
+
+        def _bind_press_motion(self, button: Any) -> None:
+            """Donne à un bouton ses états d'appui animés (192 ms).
+
+            La couleur de repos est relue à chaque appui : les entrées de
+            navigation changent de fond quand elles deviennent actives, et une
+            base figée à la construction ramènerait l'ancienne teinte. Les
+            boutons « transparents » n'ont rien à interpoler et sont laissés
+            tels quels.
+            """
+            state: dict[str, list[str]] = {"frames": []}
+
+            def animate(sequence: list[str]) -> None:
+                def step(index: int = 0) -> None:
+                    if not button.winfo_exists():
+                        return
+                    try:
+                        button.configure(fg_color=sequence[index])
+                    except Exception:  # noqa: BLE001 - bouton détruit en route
+                        return
+                    if index + 1 < len(sequence):
+                        self.after(_PRESS_STEP_MS, lambda: step(index + 1))
+
+                step()
+
+            def on_press(_event: Any = None) -> None:
+                try:
+                    current = button.cget("fg_color")
+                except Exception:  # noqa: BLE001 - bouton détruit
+                    return
+                if not isinstance(current, str) or not current.startswith("#"):
+                    return
+                try:
+                    rest, pressed = _press_colors(current)
+                except ValueError:
+                    return
+                state["frames"] = _press_frames(rest, pressed)
+                # Le premier élément est déjà la couleur courante : on l'omet
+                # pour que l'appui dure exactement `_PRESS_STEPS` pas.
+                animate(state["frames"][1:])
+
+            def on_release(_event: Any = None) -> None:
+                frames = state.get("frames") or []
+                if frames:
+                    animate(list(reversed(frames))[1:])
+
+            button.bind("<ButtonPress-1>", on_press, add="+")
+            button.bind("<ButtonRelease-1>", on_release, add="+")
 
         def _on_window_configure(self, event: Any) -> None:
             """Bascule le mode compact sans traiter les Configure des enfants."""
@@ -1333,8 +1437,8 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 self.welcome_subtitle.pack_forget()
                 self.welcome_title.configure(wraplength=0)
                 self.welcome_icon.pack()
-                self.welcome_title.pack(pady=(15, 5))
-                self.welcome_subtitle.pack(pady=(0, 17))
+                self.welcome_title.pack(pady=(SPACE_LG, SPACE_XS))
+                self.welcome_subtitle.pack(pady=(0, SPACE_LG))
             else:
                 self.welcome_icon.pack_forget()
                 self.welcome_subtitle.pack_forget()
@@ -1347,7 +1451,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             if plan.budget_details_visible:
                 self.budget_progress.pack_forget()
                 self.budget_reset_label.pack_forget()
-                self.budget_progress.pack(fill="x", pady=(10, 5))
+                self.budget_progress.pack(fill="x", pady=(SPACE_SM, SPACE_XS))
                 self.budget_reset_label.pack(fill="x")
             else:
                 self.budget_progress.pack_forget()
@@ -1361,7 +1465,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             self.config_label.pack_configure(pady=plan.config_label_pady)
             self.sidebar_bottom.pack_configure(pady=plan.sidebar_bottom_pady)
             if plan.badge_visible:
-                self.layout_badge.pack(side="left", padx=(0, 8))
+                self.layout_badge.pack(side="left", padx=(0, SPACE_SM))
             else:
                 self.layout_badge.pack_forget()
             self.composer_note_label.configure(
@@ -1639,9 +1743,9 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                     "bold",
                 ),
             )
-            header.pack(fill="x", padx=16, pady=(14, 6))
+            header.pack(fill="x", padx=SPACE_LG, pady=(SPACE_MD, SPACE_SM))
             journal = ctk.CTkTextbox(window, wrap="word")
-            journal.pack(fill="both", expand=True, padx=16, pady=6)
+            journal.pack(fill="both", expand=True, padx=SPACE_LG, pady=SPACE_SM)
             journal.configure(state="disabled")
 
             def refresh() -> None:
@@ -1672,7 +1776,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
 
             ctk.CTkButton(
                 window, text="Forcer un cycle maintenant", command=force
-            ).pack(pady=(0, 12))
+            ).pack(pady=(0, SPACE_MD))
             refresh()
 
         # -- Gestionnaire de clés et de modèles -----------------------------
@@ -1696,14 +1800,14 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 wraplength=840,
                 font=(self.settings.ui.font_family, self.settings.ui.font_size + 1, "bold"),
             )
-            header.pack(fill="x", padx=16, pady=(14, 4))
+            header.pack(fill="x", padx=SPACE_LG, pady=(SPACE_MD, SPACE_XS))
 
             vault_frame = ctk.CTkFrame(window)
-            vault_frame.pack(fill="x", padx=16, pady=4)
+            vault_frame.pack(fill="x", padx=SPACE_LG, pady=SPACE_XS)
             passphrase = ctk.CTkEntry(
                 vault_frame, placeholder_text="phrase secrète du coffre", show="*"
             )
-            passphrase.pack(side="left", fill="x", expand=True, padx=(8, 6), pady=8)
+            passphrase.pack(side="left", fill="x", expand=True, padx=(SPACE_SM, SPACE_SM), pady=SPACE_SM)
 
             def unlock() -> None:
                 secret = passphrase.get().strip()
@@ -1722,11 +1826,11 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 feedback.configure(text="coffre déverrouillé")
 
             ctk.CTkButton(vault_frame, text="Déverrouiller", width=120, command=unlock).pack(
-                side="left", padx=(0, 8), pady=8
+                side="left", padx=(0, SPACE_SM), pady=SPACE_SM
             )
 
             add_frame = ctk.CTkFrame(window)
-            add_frame.pack(fill="x", padx=16, pady=4)
+            add_frame.pack(fill="x", padx=SPACE_LG, pady=SPACE_XS)
             provider_var = ctk.StringVar(value="auto")
             provider_menu = ctk.CTkOptionMenu(
                 add_frame,
@@ -1734,9 +1838,9 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 variable=provider_var,
                 width=150,
             )
-            provider_menu.grid(row=0, column=0, padx=8, pady=(8, 2), sticky="n")
+            provider_menu.grid(row=0, column=0, padx=SPACE_SM, pady=(SPACE_SM, SPACE_XS), sticky="n")
             keys_input = ctk.CTkTextbox(add_frame, height=80, wrap="none")
-            keys_input.grid(row=0, column=1, padx=8, pady=(8, 2), sticky="ew")
+            keys_input.grid(row=0, column=1, padx=SPACE_SM, pady=(SPACE_SM, SPACE_XS), sticky="ew")
             add_frame.grid_columnconfigure(1, weight=1)
             feedback = ctk.CTkLabel(
                 window,
@@ -1745,7 +1849,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 justify="left",
                 wraplength=840,
             )
-            feedback.pack(fill="x", padx=16)
+            feedback.pack(fill="x", padx=SPACE_LG)
 
             def add_keys() -> None:
                 lines = [
@@ -1773,10 +1877,10 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
 
             ctk.CTkButton(
                 add_frame, text="Ajouter le lot", width=140, command=add_keys
-            ).grid(row=0, column=2, padx=8, pady=(8, 2), sticky="n")
+            ).grid(row=0, column=2, padx=SPACE_SM, pady=(SPACE_SM, SPACE_XS), sticky="n")
 
             keys_frame = ctk.CTkScrollableFrame(window, label_text="Clés enregistrées")
-            keys_frame.pack(fill="both", expand=True, padx=16, pady=8)
+            keys_frame.pack(fill="both", expand=True, padx=SPACE_LG, pady=SPACE_SM)
             rows_frame = ctk.CTkFrame(keys_frame)
             rows_frame.pack(fill="x", expand=True)
 
@@ -1845,9 +1949,9 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                     "bold",
                 ),
             )
-            header.pack(fill="x", padx=16, pady=(14, 6))
+            header.pack(fill="x", padx=SPACE_LG, pady=(SPACE_MD, SPACE_SM))
             body = ctk.CTkTextbox(window, wrap="word")
-            body.pack(fill="both", expand=True, padx=16, pady=6)
+            body.pack(fill="both", expand=True, padx=SPACE_LG, pady=SPACE_SM)
             body.configure(state="disabled")
 
             def refresh() -> None:
@@ -1893,21 +1997,21 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 justify="left",
                 wraplength=max(280, dialog_width - 32),
                 anchor="w",
-            ).pack(fill="x", padx=16, pady=(16, 10))
+            ).pack(fill="x", padx=SPACE_LG, pady=(SPACE_LG, SPACE_MD))
             buttons = ctk.CTkFrame(window)
-            buttons.pack(fill="x", padx=16, pady=(0, 12))
+            buttons.pack(fill="x", padx=SPACE_LG, pady=(0, SPACE_MD))
             ctk.CTkButton(
                 buttons,
                 text="Enregistrer la tâche",
                 command=self._install_schedule_task,
-            ).pack(side="left", padx=(0, 8))
+            ).pack(side="left", padx=(0, SPACE_SM))
             ctk.CTkButton(
                 buttons,
                 text="Désinscrire",
                 fg_color="#B91C1C",
                 hover_color="#991B1B",
                 command=self._uninstall_schedule_task,
-            ).pack(side="left", padx=(0, 8))
+            ).pack(side="left", padx=(0, SPACE_SM))
             ctk.CTkButton(buttons, text="Fermer", command=window.destroy).pack(
                 side="left"
             )
@@ -2019,7 +2123,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             dialog_width, _ = self._fit_dialog(window, 780, 520)
             window.transient(self)
             frame = ctk.CTkScrollableFrame(window, label_text=str(path))
-            frame.pack(fill="both", expand=True, padx=10, pady=10)
+            frame.pack(fill="both", expand=True, padx=SPACE_MD, pady=SPACE_MD)
             ctk.CTkLabel(
                 frame,
                 text=format_autonomy_journal(records),
@@ -2027,7 +2131,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 anchor="w",
                 wraplength=max(280, dialog_width - 70),
                 font=(self.settings.ui.font_family, self.settings.ui.font_size - 1),
-            ).pack(fill="x", padx=6, pady=6)
+            ).pack(fill="x", padx=SPACE_SM, pady=SPACE_SM)
 
         def _open_proposals(self) -> None:
             """Propositions autonomes en attente : approuver ou rejeter, sans exécuter."""
@@ -2043,16 +2147,16 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             dialog_width, _ = self._fit_dialog(window, 780, 460)
             window.transient(self)
             frame = ctk.CTkScrollableFrame(window, label_text="En attente d'approbation")
-            frame.pack(fill="both", expand=True, padx=10, pady=10)
+            frame.pack(fill="both", expand=True, padx=SPACE_MD, pady=SPACE_MD)
             pending = pending_proposals(self.settings)
             if not pending:
                 ctk.CTkLabel(
                     frame, text="Aucune proposition en attente (mode --autonomy-propose)."
-                ).pack(pady=20)
+                ).pack(pady=SPACE_LG)
                 return
             for record in pending:
                 row = ctk.CTkFrame(frame)
-                row.pack(fill="x", pady=4)
+                row.pack(fill="x", pady=SPACE_XS)
                 detail = f"[{record.get('risk', 'inconnu')}] {record.get('task', '')}"
                 if record.get("tools"):
                     detail += f"\n    outils : {', '.join(record['tools'])}"
@@ -2062,7 +2166,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                     anchor="w",
                     justify="left",
                     wraplength=max(260, dialog_width - 280),
-                ).pack(side="left", padx=8, fill="x", expand=True)
+                ).pack(side="left", padx=SPACE_SM, fill="x", expand=True)
 
                 def approve(proposal_id: str = str(record.get("id"))) -> None:
                     approved = approve_proposal(self.settings, proposal_id)
@@ -2092,13 +2196,13 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                         self._open_proposals()
 
                 ctk.CTkButton(row, text="Modifier", width=70, command=edit).pack(
-                    side="right", padx=4, pady=4
+                    side="right", padx=SPACE_XS, pady=SPACE_XS
                 )
                 ctk.CTkButton(row, text="Rejeter", width=70, command=reject).pack(
-                    side="right", padx=4, pady=4
+                    side="right", padx=SPACE_XS, pady=SPACE_XS
                 )
                 ctk.CTkButton(row, text="Approuver", width=80, command=approve).pack(
-                    side="right", padx=4, pady=4
+                    side="right", padx=SPACE_XS, pady=SPACE_XS
                 )
 
         def _support_bundle(self) -> None:
@@ -2120,7 +2224,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             dialog_width, _ = self._fit_dialog(window, 760, 480)
             window.transient(self)
             toolbar = ctk.CTkFrame(window)
-            toolbar.pack(fill="x", padx=10, pady=(10, 0))
+            toolbar.pack(fill="x", padx=SPACE_MD, pady=(SPACE_MD, 0))
             report_label = ctk.CTkLabel(
                 toolbar,
                 text="",
@@ -2166,10 +2270,10 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                     text=label_text,
                     width=110,
                     command=lambda r=rebuild: run_maintenance(rebuild=r),
-                ).pack(side="left", padx=(0, 6), pady=4)
+                ).pack(side="left", padx=(0, SPACE_SM), pady=SPACE_XS)
             ctk.CTkButton(
                 toolbar, text="Diagnostic", width=110, command=run_doctor
-            ).pack(side="left", padx=(0, 6), pady=4)
+            ).pack(side="left", padx=(0, SPACE_SM), pady=SPACE_XS)
 
             def show_metrics() -> None:
                 from core.metrics import MetricsRecorder, format_summary, metrics_path
@@ -2179,10 +2283,10 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
 
             ctk.CTkButton(
                 toolbar, text="Métriques", width=100, command=show_metrics
-            ).pack(side="left", padx=(0, 6), pady=4)
-            report_label.pack(fill="x", pady=(2, 4))
+            ).pack(side="left", padx=(0, SPACE_SM), pady=SPACE_XS)
+            report_label.pack(fill="x", pady=(SPACE_XS, SPACE_XS))
             filters = ctk.CTkFrame(window)
-            filters.pack(fill="x", padx=10, pady=(2, 0))
+            filters.pack(fill="x", padx=SPACE_MD, pady=(SPACE_XS, 0))
             state_var = ctk.StringVar(value="tous")
             ctk.CTkLabel(filters, text="État").pack(side="left")
             ctk.CTkOptionMenu(
@@ -2191,7 +2295,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 variable=state_var,
                 width=120,
                 command=lambda _value: refresh(),
-            ).pack(side="left", padx=(4, 10))
+            ).pack(side="left", padx=(SPACE_XS, SPACE_MD))
             model_var = ctk.StringVar()
             workspace_var = ctk.StringVar()
             days_var = ctk.StringVar()
@@ -2200,12 +2304,14 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                 ("Atelier", workspace_var, 100),
                 ("Depuis (j)", days_var, 70),
             ):
-                ctk.CTkLabel(filters, text=label).pack(side="left", padx=(0, 3))
+                ctk.CTkLabel(filters, text=label).pack(
+                    side="left", padx=(0, SPACE_XS)
+                )
                 entry = ctk.CTkEntry(filters, textvariable=variable, width=width)
-                entry.pack(side="left", padx=(0, 8))
+                entry.pack(side="left", padx=(0, SPACE_SM))
                 entry.bind("<KeyRelease>", lambda _event: refresh())
             frame = ctk.CTkScrollableFrame(window, label_text=str(directory))
-            frame.pack(fill="both", expand=True, padx=10, pady=(4, 10))
+            frame.pack(fill="both", expand=True, padx=SPACE_MD, pady=(SPACE_XS, SPACE_MD))
             # L'index est un cache : absent ou illisible, la liste reste possible.
             entries: dict[str, Any] = {}
             if directory.is_dir():
@@ -2306,7 +2412,7 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                         continue
                     shown += 1
                     row = ctk.CTkFrame(frame)
-                    row.pack(fill="x", pady=2)
+                    row.pack(fill="x", pady=SPACE_XS)
                     stamp = time.strftime("%d/%m %H:%M", time.localtime(stat.st_mtime))
                     label = f"{stem}   {stamp}   {max(1, stat.st_size // 1024)} Kio"
                     if state:
@@ -2329,16 +2435,16 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
                         width=24,
                         variable=variable,
                         command=lambda v=variable, t=toggle: t(bool(v.get())),
-                    ).pack(side="left", padx=(4, 0), pady=4)
+                    ).pack(side="left", padx=(SPACE_XS, 0), pady=SPACE_XS)
                     ctk.CTkLabel(row, text=label, anchor="w").pack(
-                        side="left", padx=8, fill="x", expand=True
+                        side="left", padx=SPACE_SM, fill="x", expand=True
                     )
                     ctk.CTkButton(
                         row, text="Lire", width=70, command=lambda p=path: self._show_trace(p)
-                    ).pack(side="right", padx=6, pady=4)
+                    ).pack(side="right", padx=SPACE_SM, pady=SPACE_XS)
                 if not shown:
                     text = "Aucune trace enregistrée." if not files else "Aucun run ne correspond au filtre."
-                    ctk.CTkLabel(frame, text=text).pack(pady=20)
+                    ctk.CTkLabel(frame, text=text).pack(pady=SPACE_LG)
 
             ctk.CTkButton(filters, text="Comparer", width=90, command=compare).pack(
                 side="right"
