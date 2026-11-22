@@ -98,6 +98,29 @@ def test_each_variant_uses_an_existing_spec_and_its_own_folder() -> None:
     assert (ROOT / "OmniAgent.spec").is_file()
 
 
+def test_package_embeds_the_interface_theme_and_the_installer_copies_it() -> None:
+    """Le thème doit voyager dans le paquet et dans l'installateur.
+
+    `ui/app_gui.py` lit `assets/theme.json` à côté du paquet ; une ressource
+    oubliée ne casse rien visiblement, la fenêtre retombe sur le thème par
+    défaut de CustomTkinter. L'installateur doit ensuite copier l'arbre entier
+    de `dist\\OmniAgent`, sinon le fichier reste dans le dossier de build.
+    """
+    from pyinstaller_recipe import project_assets
+
+    assets = {
+        Path(source).name: destination for source, destination in project_assets(ROOT)
+    }
+    assert assets.get("theme.json") == "assets", assets
+    assert assets.get("icon.ico") == "assets", assets
+
+    installer = (ROOT / "installer" / "OmniAgent.iss").read_text(encoding="utf-8")
+    assert 'Source: "{#SourcePath}\\..\\dist\\OmniAgent\\*"' in installer, installer
+    assert "recursesubdirs createallsubdirs" in installer, (
+        "l'installateur doit copier les sous-dossiers du paquet"
+    )
+
+
 def test_all_builds_main_and_lite_and_no_smoke_disables_smokes() -> None:
     text = _text()
     all_match = re.search(r'if "%ALL%"=="1" \((.*?)\n\)', text, re.S)

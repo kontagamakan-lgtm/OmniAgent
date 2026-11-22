@@ -79,6 +79,23 @@ def _ocr_assets(root: Path) -> list[tuple[str, str]]:
     return [(str(path), "assets/tessdata") for path in sorted(data.glob("*.traineddata"))]
 
 
+def project_assets(root: Path) -> list[tuple[str, str]]:
+    """Ressources du dépôt embarquées telles quelles, et leur dossier d'arrivée.
+
+    `ui/app_gui.py` charge son thème par chemin relatif au paquet
+    (`<paquet>/assets/theme.json`) : la destination doit rester `assets`, sinon
+    la fenêtre retombe silencieusement sur le thème de CustomTkinter. Une
+    ressource absente du dépôt est simplement ignorée, pour que les variantes
+    sans icône continuent de se construire.
+    """
+    assets: list[tuple[str, str]] = []
+    for asset in ("icon.ico", "theme.json"):
+        candidate = root / "assets" / asset
+        if candidate.is_file():
+            assets.append((str(candidate), "assets"))
+    return assets
+
+
 def build_package(
     root: Path,
     *,
@@ -119,10 +136,7 @@ def build_package(
             datas.append((str(candidate), "data"))
 
     # Ressources de l'interface, chargées par chemin relatif.
-    for asset in ("icon.ico", "theme.json"):
-        candidate = root / "assets" / asset
-        if candidate.is_file():
-            datas.append((str(candidate), "assets"))
+    datas += project_assets(root)
 
     # OCR sans installation système : DLL du moteur et données de langue.
     ocr_binaries = _tesserocr_binaries()
