@@ -432,8 +432,9 @@ pause courte. Enfin, Ollama local
 (`llm_router.ollama_model`) est tenté même sans clé.
 
 Le routeur n'expose pas de flux (`supports_stream = False`) : la bascule
-prime avant le streaming. Anthropic utilise son API Messages native ; les
-autres fournisseurs passent par un endpoint OpenAI-compatible.
+prime avant le streaming. Anthropic utilise son API Messages native, Ollama
+son API locale `/api/chat` ; les autres fournisseurs passent par un endpoint
+OpenAI-compatible.
 
 ## Isolation par run
 
