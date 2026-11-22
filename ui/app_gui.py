@@ -304,14 +304,6 @@ if ctk is not None:  # pragma: no branch - une seule branche est définie
             self.protocol("WM_DELETE_WINDOW", self._on_close)
 
             self._build_widgets()
-            # Verre dépoli : DWM floute lui-même ce qui est derrière la fenêtre.
-            # Sans effet hors Windows, et l'interface reste opaque si DWM refuse.
-            try:
-                from ui.glass import apply_glass_backdrop
-
-                apply_glass_backdrop(self)
-            except Exception:  # noqa: BLE001 - un effet visuel n'est pas bloquant
-                logger.debug("verre dépoli non appliqué", exc_info=True)
             self.bind("<Configure>", self._on_window_configure, add="+")
             self.bind("<F6>", self._focus_navigation)
             self.bind("<Shift-F6>", lambda _event: self._focus_composer())
