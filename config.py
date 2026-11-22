@@ -1784,6 +1784,8 @@ def configure_logging(
 # Point d'entrée CLI
 # ---------------------------------------------------------------------------
 
+# Doit rester identique au `.env.example` livré à la racine (voir tests/test_config.py) :
+# le fichier est la référence lisible, cette copie sert quand il n'existe pas encore.
 _DEFAULT_ENV_EXAMPLE = """\
 # OmniAgent Windows — secrets locaux (ne jamais committer ce fichier)
 # Copiez .env.example vers .env puis renseignez vos clés.
