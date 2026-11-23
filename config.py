@@ -1,9 +1,10 @@
 """OmniAgent Windows — configuration centrale, validation et persistance.
 
 Ce module est l'unique source de vérité pour tous les réglages de
-l'application. Il n'utilise *que* la bibliothèque standard afin de rester
-lisible, validable et exécutable avant même l'installation des paquets
-(`python config.py --validate`).
+l'application. Il n'utilise *que* la bibliothèque standard, plus
+`key_formats.py` — le registre local des préfixes de clés, lui aussi sans
+dépendance — afin de rester lisible, validable et exécutable avant même
+l'installation des paquets (`python config.py --validate`).
 
 Principes de conception
 -----------------------

@@ -100,7 +100,14 @@ _ENDPOINTS: dict[str, tuple[str, str]] = {
 
 
 def _provider(key_format: KeyFormat) -> Provider:
-    base_url, style = _ENDPOINTS[key_format.slug]
+    try:
+        base_url, style = _ENDPOINTS[key_format.slug]
+    except KeyError:
+        raise RuntimeError(
+            f"fournisseur « {key_format.slug} » déclaré dans key_formats.py "
+            "sans endpoint : ajoutez son adresse et son protocole à "
+            "core/llm_router._ENDPOINTS"
+        ) from None
     return Provider(
         key_format.slug, key_format.label, base_url, style, key_format.prefixes
     )
