@@ -86,16 +86,16 @@ def pick_previous_tag(tag: str, tags: list[str]) -> str:
     return best_tag
 
 
-def _remote_tags(repository: str) -> list[str]:
-    """Tags du dépôt, lus par l'API GitHub (`gh` est déjà authentifié)."""
+def _released_tags(repository: str) -> list[str]:
+    """Tags ayant une release publiée (`gh` est déjà authentifié)."""
     completed = subprocess.run(
         [
             "gh",
             "api",
-            f"repos/{repository}/tags?per_page=100",
+            f"repos/{repository}/releases?per_page=100",
             "--paginate",
             "--jq",
-            ".[].name",
+            ".[].tag_name",
         ],
         capture_output=True,
         text=True,
@@ -110,14 +110,20 @@ def _remote_tags(repository: str) -> list[str]:
 def previous_tag(tag: str, repository: str = "") -> str:
     """Tag publié avant `tag` (garde-fou : sans lui, GitHub liste tout).
 
-    `git describe` est essayé d'abord : il donne l'ancêtre réel, ce que l'API
-    ne sait pas dire. Il est inutilisable dans le workflow de publication, où
-    `actions/checkout` ne récupère que le commit du tag (clone superficiel) :
-    `1.2.0` y a échoué en « Not a valid object name ». On retombe donc sur la
-    liste des tags du dépôt, dont le prédécesseur est le plus grand numéro
-    strictement inférieur. Vide quand aucun prédécesseur n'existe (première
-    version) : `releases/generate-notes` liste alors tout, ce qui reste vrai.
+    La comparaison porte sur les **releases publiées**, jamais sur les tags
+    seuls : la 1.2.0 a laissé un tag sans release, et la page de la 1.2.1
+    annonçait alors « changements depuis 1.2.0 », donc aucun des correctifs
+    qu'elle apportait. Un tag orphelin ne peut plus fausser la page.
+
+    `git describe` sert quand aucun dépôt n'est donné (usage hors ligne) : il
+    donne l'ancêtre réel. Il est inutilisable dans le workflow de publication,
+    où `actions/checkout` ne récupère que le commit du tag (clone superficiel) :
+    `1.2.0` y a échoué en « Not a valid object name ». Vide quand aucune
+    version n'a été publiée avant : `releases/generate-notes` liste alors
+    tout, ce qui reste vrai.
     """
+    if repository:
+        return pick_previous_tag(tag, _released_tags(repository))
     completed = subprocess.run(
         ["git", "describe", "--tags", "--abbrev=0", f"{tag}^"],
         capture_output=True,
@@ -128,11 +134,9 @@ def previous_tag(tag: str, repository: str = "") -> str:
         check=False,
     )
     previous = completed.stdout.strip()
-    if completed.returncode == 0 and previous:
-        return previous
-    if not repository:
+    if completed.returncode != 0:
         return ""
-    return pick_previous_tag(tag, _remote_tags(repository))
+    return previous
 
 
 def _notes_command(tag: str, previous: str, repository: str) -> list[str]:
