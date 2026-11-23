@@ -124,6 +124,23 @@ def test_package_embeds_the_interface_theme_and_the_installer_copies_it() -> Non
     )
 
 
+def test_installer_fallback_version_matches_the_application_version() -> None:
+    """Le workflow passe `/DMyAppVersion`, mais l'installateur garde un repli.
+
+    Construire l'installateur à la main (`ISCC installer\\OmniAgent.iss`) sans
+    ce drapeau produit un `OmniAgent-<repli>-Setup.exe` : si le repli prend du
+    retard sur `APP_VERSION`, deux fichiers du même nom de version coexistent
+    et celui qui reste installé n'est plus identifiable. Le garde-fou de
+    publication ne lit que `config.py`, donc seul ce test relie les deux.
+    """
+    import config
+
+    installer = (ROOT / "installer" / "OmniAgent.iss").read_text(encoding="utf-8")
+    match = re.search(r'^\s*#define MyAppVersion "([^"]+)"', installer, re.MULTILINE)
+    assert match is not None, installer
+    assert match.group(1) == config.APP_VERSION
+
+
 #: Répertoires dont les imports ne partent pas dans l'exécutable.
 _NOT_SHIPPED = frozenset({"tests", "build", "dist", "data", ".git", ".venv", "installer"})
 
