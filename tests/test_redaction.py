@@ -110,6 +110,15 @@ def test_query_string_secret_is_masked() -> None:
     assert "user=jean" in result
 
 
+def test_any_provider_key_variable_is_masked() -> None:
+    """`GROQ_API_KEY=…` : le souligné empêchait la limite de mot de s'appliquer."""
+    for name in ("GROQ_API_KEY", "MISTRAL_API_KEY", "OMNIAGENT_API_KEY", "X_API_KEY"):
+        valeur = "AbCdEf0123456789"
+        result = redact(f"{name}={valeur}")
+        assert valeur not in result, (name, result)
+        assert name in result, result
+
+
 def test_structured_redaction_masks_secret_fields() -> None:
     payload = {
         "service": "github.com",

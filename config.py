@@ -38,6 +38,8 @@ from pathlib import Path
 from typing import Any, Literal, get_args, get_origin, get_type_hints
 from urllib.parse import urlsplit
 
+from key_formats import all_prefixes, foreign_prefixes
+
 # ---------------------------------------------------------------------------
 # Identité de l'application
 # ---------------------------------------------------------------------------
@@ -325,17 +327,9 @@ def default_allowed_roots() -> list[str]:
 
 #: Préfixes qui désignent un autre fournisseur, reconnus même quand DeepSeek
 #: est sélectionné : mieux vaut le nommer que laisser partir la clé vers
-#: `api.deepseek.com` pour y récolter un HTTP 401.
-_OTHER_VENDOR_PREFIXES = (
-    ("sk-proj-", "OpenAI"),
-    ("sk-svcacct-", "OpenAI"),
-    ("sk-ant-", "Anthropic"),
-    ("sk-or-", "OpenRouter"),
-    ("sk-mistral-", "Mistral"),
-    ("gsk_", "Groq"),
-    ("AIza", "Google Gemini"),
-    ("AQ.", "Google Gemini"),
-)
+#: `api.deepseek.com` pour y récolter un HTTP 401. La liste vient de
+#: `key_formats.py`, partagée avec le routeur et le masquage des journaux.
+_OTHER_VENDOR_PREFIXES = foreign_prefixes("deepseek")
 
 _MIN_DEEPSEEK_KEY_LENGTH = 20
 _FAKE_API_KEY_MARKERS = (
@@ -416,11 +410,10 @@ def api_key_problem(key: str, *, provider: str, origin: str) -> str:
     """Préflight d'une clé pour le fournisseur choisi, sans révéler sa valeur.
 
     DeepSeek impose son préfixe et sa longueur ; les autres fournisseurs n'ont
-    pas de format commun (``sk-proj-`` chez OpenAI, ``AIza`` ou ``AQ.`` chez
-    Gemini, ``gsk_`` chez Groq), donc seuls le vide, un espace interne, une
-    longueur dérisoire et les valeurs d'exemple sont refusés ici. Le reste est
-    laissé au fournisseur : son HTTP 401 est plus précis qu'une devinette
-    locale.
+    pas de format commun (voir ``key_formats.py``), donc seuls le vide, un
+    espace interne, une longueur dérisoire et les valeurs d'exemple sont
+    refusés ici. Le reste est laissé au fournisseur : son HTTP 401 est plus
+    précis qu'une devinette locale.
     """
     if provider == "deepseek":
         return deepseek_key_problem(key, origin=origin)
@@ -440,7 +433,7 @@ def api_key_problem(key: str, *, provider: str, origin: str) -> str:
     # exactement le bug qu'on corrige. Seule une valeur qui *est* un exemple,
     # ou un corps fait d'un caractère répété, est refusée.
     body = clean
-    for prefix in ("sk-proj-", "sk-ant-", "sk-", "gsk_", "AIza", "AQ."):
+    for prefix in all_prefixes():
         if clean.startswith(prefix):
             body = clean[len(prefix) :]
             break

@@ -18,6 +18,8 @@ import re
 from functools import partial
 from typing import Any, Iterable, Mapping
 
+from key_formats import key_patterns
+
 __all__ = [
     "DEFAULT_REPLACEMENT",
     "SECRET_KEY_NAMES",
@@ -61,8 +63,11 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "assigned_secret",
         re.compile(
-            r"(?i)\b(password|passwd|pwd|secret|token|api[_-]?key|apikey|"
-            r"access[_-]?key|client[_-]?secret|authorization)\b"
+            # `(?<![A-Za-z0-9])` et non `\b` : dans `GROQ_API_KEY=…`, le
+            # souligné est un caractère de mot, donc `\b` interdisait le
+            # masquage et la clé partait en clair dans les journaux.
+            r"(?i)(?<![A-Za-z0-9])(password|passwd|pwd|secret|token|"
+            r"api[_-]?key|apikey|access[_-]?key|client[_-]?secret|authorization)\b"
             r"(\s*[:=]\s*)"
             r"(?:(?:bearer|basic|token|digest)\s+)?"
             r"(?!\[MASQUÉ)"
@@ -91,31 +96,15 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     # mot, donc la limite de mot ne peut pas être satisfaite et la clé
     # échapperait au masquage. Le lookahead interdit seulement de couper un
     # jeton plus long.
-    (
-        "openai_key",
-        re.compile(r"\bsk-[A-Za-z0-9_\-]{16,256}(?![A-Za-z0-9_\-])"),
-    ),
-    (
-        "anthropic_key",
-        re.compile(r"\bsk-ant-[A-Za-z0-9_\-]{16,256}(?![A-Za-z0-9_\-])"),
-    ),
+    # Un motif par préfixe de fournisseur d'IA, du plus spécifique au plus
+    # général, générés depuis `key_formats.py` : aucune clé d'un fournisseur
+    # géré ne peut plus manquer au masquage.
+    *key_patterns(),
     ("github_token", re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,255}\b")),
     ("aws_key", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")),
     (
         "slack_token",
         re.compile(r"\bxox[baprs]-[A-Za-z0-9\-]{10,255}(?![A-Za-z0-9\-])"),
-    ),
-    (
-        # Deux formats coexistent chez Google : `AIza…` pour les clés
-        # historiques et `AQ.…` pour celles d'AI Studio ; les deux doivent
-        # disparaître des journaux. Longueur plancher côté `AQ.`, dont le corps
-        # n'a pas d'alphabet assez distinctif : sans elle, une mention de
-        # « AQ. » en prose serait masquée.
-        "google_key",
-        re.compile(
-            r"\b(?:AIza[0-9A-Za-z_\-]{30,64}"
-            r"|AQ\.[A-Za-z0-9_\-]{20,256})(?![A-Za-z0-9_\-])"
-        ),
     ),
     (
         # Numero de carte : 16 chiffres, espaces ou tirets tolerés. Un motif

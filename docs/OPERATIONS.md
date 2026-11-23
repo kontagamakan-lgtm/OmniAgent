@@ -365,6 +365,11 @@ partagé par `LLMConfig.api_key_problem()` et `LLMRouter.add_key()` : il
 s'applique donc au client unique, à l'assistant de démarrage, au panneau de
 diagnostics et aux clés ajoutées au routeur multi-LLM.
 
+Les préfixes sont déclarés une seule fois, dans `key_formats.py` : le
+préflight, la détection du fournisseur, le masquage des journaux et cette page
+en dérivent. Un fournisseur ajouté là est aussitôt reconnu, refusé chez les
+autres et masqué, sans autre modification.
+
 Règles :
 
 - un préfixe d'un autre fournisseur (`sk-proj-`, `sk-svcacct-`, `sk-ant-`,
