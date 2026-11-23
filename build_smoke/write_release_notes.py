@@ -14,11 +14,12 @@ Le script est appelé par `.github/workflows/release.yml` :
 from __future__ import annotations
 
 import argparse
+import re
 import subprocess
 import sys
 from pathlib import Path
 
-__all__ = ["compose", "previous_tag"]
+__all__ = ["compose", "pick_previous_tag", "previous_tag"]
 
 #: Section stable : elle ne dépend pas du contenu de la version.
 _INTRO = (
@@ -26,6 +27,7 @@ _INTRO = (
     "droits administrateur). Les données personnelles restent dans "
     "`%LOCALAPPDATA%\\OmniAgent` pendant une mise à jour."
 )
+_TAG_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
 _VERIFY = (
     "`SHA256SUMS.txt` porte l'empreinte de chaque fichier publié ; "
     "`BUILD-INFO.txt` donne la version de Python, celle de PyInstaller et le "
@@ -54,8 +56,68 @@ def compose(version: str, generated: str) -> str:
     )
 
 
-def previous_tag(tag: str) -> str:
-    """Tag publié avant `tag` (garde-fou : sans lui, GitHub liste tout)."""
+def _version_key(tag: str) -> tuple[int, ...] | None:
+    """Clé de tri d'un tag `vX.Y.Z` ; `None` si le tag n'en est pas un."""
+    match = _TAG_RE.match(tag.strip())
+    if match is None:
+        return None
+    return tuple(int(part) for part in match.groups())
+
+
+def pick_previous_tag(tag: str, tags: list[str]) -> str:
+    """Plus grand tag de version strictement inférieur à `tag`.
+
+    Le workflow publie une version après l'autre : le prédécesseur est celui
+    dont le numéro est immédiatement inférieur. Les tags qui ne sont pas des
+    versions (`derniere`, essais datés) ne peuvent pas servir de point de
+    comparaison à `releases/generate-notes` et sont ignorés.
+    """
+    current = _version_key(tag)
+    if current is None:
+        return ""
+    best: tuple[int, ...] | None = None
+    best_tag = ""
+    for candidate in tags:
+        key = _version_key(candidate)
+        if key is None or key >= current:
+            continue
+        if best is None or key > best:
+            best, best_tag = key, candidate.strip()
+    return best_tag
+
+
+def _remote_tags(repository: str) -> list[str]:
+    """Tags du dépôt, lus par l'API GitHub (`gh` est déjà authentifié)."""
+    completed = subprocess.run(
+        [
+            "gh",
+            "api",
+            f"repos/{repository}/tags?per_page=100",
+            "--paginate",
+            "--jq",
+            ".[].name",
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    if completed.returncode != 0:
+        return []
+    return [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+
+
+def previous_tag(tag: str, repository: str = "") -> str:
+    """Tag publié avant `tag` (garde-fou : sans lui, GitHub liste tout).
+
+    `git describe` est essayé d'abord : il donne l'ancêtre réel, ce que l'API
+    ne sait pas dire. Il est inutilisable dans le workflow de publication, où
+    `actions/checkout` ne récupère que le commit du tag (clone superficiel) :
+    `1.2.0` y a échoué en « Not a valid object name ». On retombe donc sur la
+    liste des tags du dépôt, dont le prédécesseur est le plus grand numéro
+    strictement inférieur. Vide quand aucun prédécesseur n'existe (première
+    version) : `releases/generate-notes` liste alors tout, ce qui reste vrai.
+    """
     completed = subprocess.run(
         ["git", "describe", "--tags", "--abbrev=0", f"{tag}^"],
         capture_output=True,
@@ -66,27 +128,32 @@ def previous_tag(tag: str) -> str:
         check=False,
     )
     previous = completed.stdout.strip()
-    if completed.returncode != 0 or not previous:
-        raise SystemExit(
-            f"tag précédent introuvable pour {tag} : "
-            f"{completed.stderr.strip() or 'aucune sortie'}"
-        )
-    return previous
+    if completed.returncode == 0 and previous:
+        return previous
+    if not repository:
+        return ""
+    return pick_previous_tag(tag, _remote_tags(repository))
+
+
+def _notes_command(tag: str, previous: str, repository: str) -> list[str]:
+    """Commande `gh api` de génération des notes."""
+    command = [
+        "gh",
+        "api",
+        f"repos/{repository}/releases/generate-notes",
+        "-f",
+        f"tag_name={tag}",
+    ]
+    # Un `previous_tag_name` vide fait échouer l'API : on l'omet, GitHub liste
+    # alors tout l'historique.
+    if previous:
+        command += ["-f", f"previous_tag_name={previous}"]
+    return command + ["--jq", ".body"]
 
 
 def _generated_notes(tag: str, previous: str, repository: str) -> str:
     completed = subprocess.run(
-        [
-            "gh",
-            "api",
-            f"repos/{repository}/releases/generate-notes",
-            "-f",
-            f"tag_name={tag}",
-            "-f",
-            f"previous_tag_name={previous}",
-            "--jq",
-            ".body",
-        ],
+        _notes_command(tag, previous, repository),
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -120,7 +187,9 @@ def main(argv: list[str] | None = None) -> int:
     generated = args.generated
     if not generated:
         repository = args.repository or _env("GITHUB_REPOSITORY")
-        generated = _generated_notes(args.tag, previous_tag(args.tag), repository)
+        generated = _generated_notes(
+            args.tag, previous_tag(args.tag, repository), repository
+        )
     target = Path(args.output)
     target.write_text(compose(args.version, generated), encoding="utf-8")
     print(f"Notes de release écrites : {target}")
