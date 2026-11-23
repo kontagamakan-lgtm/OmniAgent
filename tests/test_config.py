@@ -232,6 +232,17 @@ def test_http_sur_la_boucle_locale_reste_accepte() -> None:
     assert errors == []
 
 
+def test_une_cle_gemini_dans_deepseek_est_nommee_par_son_fournisseur() -> None:
+    """Le format `AQ.` de Google doit être reconnu, pas seulement `AIza`."""
+    for key in ("AIzaSyAbcdef123456", "AQ.fake-clede-test-0123456789abcdef"):
+        message = config.deepseek_key_problem(key, origin="DEEPSEEK_API_KEY")
+        assert "Google Gemini" in message, message
+        closer = config.api_key_problem(
+            key, provider="gemini", origin="GEMINI_API_KEY"
+        )
+        assert closer == "", closer
+
+
 def test_env_example_matches_the_init_template() -> None:
     """`config.py --init` doit produire le même gabarit que le fichier livré."""
     root_example = Path(config.__file__).resolve().parent / ".env.example"
