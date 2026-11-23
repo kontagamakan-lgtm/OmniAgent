@@ -140,12 +140,29 @@ jobs:
             $app = Start-Process -Wait -PassThru -FilePath (Join-Path $target "OmniAgent.exe") -ArgumentList @("--version")
             if ($app.ExitCode -ne 0) { throw "OmniAgent.exe --version : code $($app.ExitCode)" }
           } finally {
+            # Un installateur qui laisse son exécutable derrière lui casse la
+            # mise à jour suivante : la désinstallation fait partie du contrôle,
+            # pas d'un nettoyage facultatif.
             $uninstaller = Join-Path $target "unins000.exe"
-            if (Test-Path $uninstaller) {
-              $uninstall = Start-Process -Wait -PassThru -FilePath $uninstaller -ArgumentList @(
-                "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"
-              )
-              if ($uninstall.ExitCode -ne 0) { throw "désinstallation silencieuse : code $($uninstall.ExitCode)" }
+            if (-not (Test-Path $uninstaller)) {
+              throw "désinstalleur absent : $uninstaller"
+            }
+            $uninstall = Start-Process -Wait -PassThru -FilePath $uninstaller -ArgumentList @(
+              "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"
+            )
+            if ($uninstall.ExitCode -ne 0) { throw "désinstallation silencieuse : code $($uninstall.ExitCode)" }
+            $exe = Join-Path $target "OmniAgent.exe"
+            $deadline = (Get-Date).AddSeconds(60)
+            while ((Test-Path $exe) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
+            if (Test-Path $exe) {
+              throw "désinstallation incomplète : OmniAgent.exe encore présent dans $target"
+            }
+            $leftovers = @(Get-ChildItem -Path $target -Recurse -File -ErrorAction SilentlyContinue)
+            if ($leftovers.Count -gt 0) {
+              Write-Host "après désinstallation, $($leftovers.Count) fichier(s) restant(s) :"
+              $leftovers | ForEach-Object { Write-Host "  $($_.FullName)" }
+            } else {
+              Write-Host "désinstallation vérifiée : $target est vide."
             }
           }
 
@@ -181,6 +198,12 @@ jobs:
             "dist/SHA256SUMS.txt",
             "dist/BUILD-INFO.txt"
           )
+          # Corps de la release : page française stable (quoi installer,
+          # comment vérifier l'empreinte), dont seule la liste des pull
+          # requests vient de GitHub. Voir build_smoke/write_release_notes.py.
+          $notes = Join-Path $env:RUNNER_TEMP "release-notes.md"
+          python build_smoke\write_release_notes.py --tag "$tag" --version "$version" --output "$notes"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           # Relancer une publication déjà existante remplace ses fichiers au lieu
           # d'échouer sur une release qui existe déjà.
           #
@@ -209,7 +232,8 @@ jobs:
               Write-Host "Assets précédents conservés sous precedent-* ($($keep.Count))."
             }
             gh release upload $tag @assets --clobber
+            gh release edit $tag --notes-file $notes
           } else {
-            gh release create $tag @assets --title $tag --generate-notes
+            gh release create $tag @assets --title $tag --notes-file $notes
           }
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
