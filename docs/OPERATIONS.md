@@ -370,6 +370,14 @@ préflight, la détection du fournisseur, le masquage des journaux et cette page
 en dérivent. Un fournisseur ajouté là est aussitôt reconnu, refusé chez les
 autres et masqué, sans autre modification.
 
+Le masquage s'applique au moment de l'écriture : une clé consignée par une
+version antérieure à la 1.1.3 est encore en clair dans les journaux déjà
+écrits. `python app.py --redact-logs` les relit et annonce les lignes
+concernées ; `--redact-logs-apply` les masque réellement (l'aperçu ne réécrit
+rien). Le périmètre est limité aux journaux et aux données de l'autonomie : le
+journal d'audit n'est jamais réécrit, sous peine de rompre la chaîne
+d'empreintes.
+
 Règles :
 
 - un préfixe d'un autre fournisseur (`sk-proj-`, `sk-svcacct-`, `sk-ant-`,

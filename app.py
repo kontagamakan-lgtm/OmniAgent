@@ -217,6 +217,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="purge réellement les fichiers annoncés par --clean",
     )
     parser.add_argument(
+        "--redact-logs",
+        action="store_true",
+        help="repère les clés en clair dans les journaux et les traces, puis quitte",
+    )
+    parser.add_argument(
+        "--redact-logs-apply",
+        action="store_true",
+        help="masque réellement les clés en clair trouvées par --redact-logs",
+    )
+    parser.add_argument(
         "--check",
         action="store_true",
         help="affiche l'état de l'installation (dépendances, configuration) et quitte",
@@ -495,6 +505,23 @@ def _clean(settings: Settings, *, apply: bool) -> int:
         )
         failures += int(item["failed"])
     return 1 if failures else 0
+
+
+def _redact_logs(settings: Settings, *, apply: bool) -> int:
+    """Repère puis, sur demande explicite, masque les clés déjà écrites.
+
+    Le masquage de `security/redaction.py` s'applique à l'écriture : les
+    journaux produits avant la 1.1.3 peuvent encore contenir une clé en clair.
+    """
+    from core.log_scrub import scrub_tree, targets
+
+    try:
+        report = scrub_tree(targets(settings), apply=apply)
+    except OSError as exc:
+        print(f"Épuration impossible : {exc}", file=sys.stderr)
+        return 1
+    print(report.format())
+    return 0
 
 
 def _report(settings: Settings, *, fix: bool = False) -> int:
@@ -1221,6 +1248,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.clean or args.clean_apply:
         return _clean(settings, apply=args.clean_apply)
+
+    if args.redact_logs or args.redact_logs_apply:
+        return _redact_logs(settings, apply=args.redact_logs_apply)
 
     if args.notify_install:
         from core.notify import install_notifications
