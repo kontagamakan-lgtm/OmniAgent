@@ -44,9 +44,10 @@ def test_slack_token_ending_with_a_separator_is_masked() -> None:
 
 
 def test_google_key_ending_with_a_separator_is_masked() -> None:
-    for separator in ("-", "_"):
-        secret = "AIza" + "a" * 30 + separator
-        _assert_masked(secret)
+    # Les deux formats de Google : `AIza…` (historique) et `AQ.…` (AI Studio).
+    for body in ("AIza" + "a" * 30, "AQ." + "a" * 30):
+        for separator in ("-", "_"):
+            _assert_masked(body + separator)
 
 
 def test_separator_masking_is_idempotent() -> None:
@@ -54,6 +55,7 @@ def test_separator_masking_is_idempotent() -> None:
         "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abcdefgh-",
         "xoxb-abcdefghij-",
         "AIza" + "a" * 30 + "_",
+        "AQ." + "a" * 30 + "_",
     )
     once = redact("jetons : " + " ".join(secrets))
     for secret in secrets:

@@ -106,8 +106,16 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         re.compile(r"\bxox[baprs]-[A-Za-z0-9\-]{10,255}(?![A-Za-z0-9\-])"),
     ),
     (
+        # Deux formats coexistent chez Google : `AIza…` pour les clés
+        # historiques et `AQ.…` pour celles d'AI Studio ; les deux doivent
+        # disparaître des journaux. Longueur plancher côté `AQ.`, dont le corps
+        # n'a pas d'alphabet assez distinctif : sans elle, une mention de
+        # « AQ. » en prose serait masquée.
         "google_key",
-        re.compile(r"\bAIza[0-9A-Za-z_\-]{30,64}(?![A-Za-z0-9_\-])"),
+        re.compile(
+            r"\b(?:AIza[0-9A-Za-z_\-]{30,64}"
+            r"|AQ\.[A-Za-z0-9_\-]{20,256})(?![A-Za-z0-9_\-])"
+        ),
     ),
     (
         # Numero de carte : 16 chiffres, espaces ou tirets tolerés. Un motif
