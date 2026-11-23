@@ -384,7 +384,8 @@ def deepseek_key_problem(key: str, *, origin: str = "DEEPSEEK_API_KEY") -> str:
         return (
             f"clé d'API invalide dans {origin} : le préfixe « sk- » "
             "attendu pour DeepSeek est absent. Si la clé vient d'OpenAI, "
-            "Gemini, Groq, OpenRouter ou Mistral, choisissez ce fournisseur : "
+            "Gemini, Groq, OpenRouter, Mistral, xAI, Perplexity ou Fireworks, "
+            "choisissez ce fournisseur : "
             "elle sera écrite dans sa propre variable."
         )
     if len(clean) < _MIN_DEEPSEEK_KEY_LENGTH:
@@ -1794,6 +1795,9 @@ GEMINI_API_KEY=
 GROQ_API_KEY=
 OPENROUTER_API_KEY=
 MISTRAL_API_KEY=
+XAI_API_KEY=
+PERPLEXITY_API_KEY=
+FIREWORKS_API_KEY=
 
 # Recherche Brave (optionnel, sans clé le moteur est ignoré)
 BRAVE_API_KEY=

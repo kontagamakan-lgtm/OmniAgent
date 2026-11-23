@@ -95,6 +95,10 @@ _ENDPOINTS: dict[str, tuple[str, str]] = {
     "groq": ("https://api.groq.com/openai/v1", "openai"),
     "openrouter": ("https://openrouter.ai/api/v1", "openai"),
     "mistral": ("https://api.mistral.ai/v1", "openai"),
+    "xai": ("https://api.x.ai/v1", "openai"),
+    #: Pas de `/v1` : l'API Perplexity sert `/chat/completions` à la racine.
+    "perplexity": ("https://api.perplexity.ai", "openai"),
+    "fireworks": ("https://api.fireworks.ai/inference/v1", "openai"),
     "ollama": ("", "ollama"),
 }
 

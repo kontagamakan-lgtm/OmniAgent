@@ -219,8 +219,8 @@ forgées, le journal des cycles et permet de forcer un cycle. Réglages
 
 `llm_router.enabled = true` remplace le client unique par
 `core/llm_router.py` : un pool illimité de clés par fournisseur (DeepSeek,
-OpenAI, Anthropic, Gemini, Groq, OpenRouter, Mistral) et un secours local
-Ollama. Les clés sont ajoutées depuis le panneau **Clés & LLM** et leur secret
+OpenAI, Anthropic, Gemini, Groq, OpenRouter, Mistral, xAI, Perplexity,
+Fireworks) et un secours local Ollama. Les clés sont ajoutées depuis le panneau **Clés & LLM** et leur secret
 reste dans le coffre chiffré ; `data/llm_router/keys.json` ne contient qu'un
 indice masqué, les états et les compteurs.
 
@@ -255,7 +255,7 @@ chaque envoi échouera tant qu'aucune clé n'est renseignée.
 
 | Réglage | Où il est enregistré | Quand il prend effet |
 |---|---|---|
-| **Fournisseur** | `llm.backend`, `llm.base_url`, `llm.api_key_env` et le trio de modèles dans `config.json` : DeepSeek, OpenAI, Anthropic, Gemini, Groq, OpenRouter, Mistral, un autre service compatible OpenAI (adresse et modèle saisis à la main), ou « automatique » d'après le préfixe de la clé. | immédiatement |
+| **Fournisseur** | `llm.backend`, `llm.base_url`, `llm.api_key_env` et le trio de modèles dans `config.json` : DeepSeek, OpenAI, Anthropic, Gemini, Groq, OpenRouter, Mistral, xAI, Perplexity, Fireworks, un autre service compatible OpenAI (adresse et modèle saisis à la main), ou « automatique » d'après le préfixe de la clé. | immédiatement |
 | **Clé API** | variable du fournisseur choisi (`DEEPSEEK_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY`, `MISTRAL_API_KEY`) de la session, et fichier `.env` du dossier d'installation : à côté de `OmniAgent.exe`, racine du projet en source. Jamais dans `config.json`. | immédiatement |
 | **Dossier de travail** | ajouté à `files.allowed_roots` dans `config.json` (`%LOCALAPPDATA%\OmniAgent\config.json` pour l'exe, `data\config.json` en source) | au prochain démarrage (il borne les outils fichiers) |
 | **Canal navigateur** | `browser.channel` dans le même `config.json` : vide = Chromium embarqué sinon Edge/Chrome du système, ou `msedge` / `chrome` | au prochain démarrage |

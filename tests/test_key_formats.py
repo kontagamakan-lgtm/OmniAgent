@@ -31,6 +31,9 @@ SAMPLES: dict[str, str] = {
     "groq": "gsk_AbCdEf0123456789AbCdEf",
     "openrouter": "sk-or-v1-AbCdEf0123456789AbCdEf",
     "mistral": "sk-mistral-AbCdEf0123456789AbCdEf",
+    "xai": "xai-AbCdEf0123456789AbCdEf0123456789",
+    "perplexity": "pplx-AbCdEf0123456789AbCdEf",
+    "fireworks": "fw_AbCdEf0123456789AbCdEf",
 }
 
 _LABELS = {key_format.slug: key_format.label for key_format in KEY_FORMATS}

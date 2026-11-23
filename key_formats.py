@@ -66,6 +66,9 @@ KEY_FORMATS: tuple[KeyFormat, ...] = (
     KeyFormat("groq", "Groq", "GROQ_API_KEY", ("gsk_",)),
     KeyFormat("openrouter", "OpenRouter", "OPENROUTER_API_KEY", ("sk-or-",)),
     KeyFormat("mistral", "Mistral", "MISTRAL_API_KEY", ("sk-mistral-",)),
+    KeyFormat("xai", "xAI (Grok)", "XAI_API_KEY", ("xai-",)),
+    KeyFormat("perplexity", "Perplexity", "PERPLEXITY_API_KEY", ("pplx-",)),
+    KeyFormat("fireworks", "Fireworks AI", "FIREWORKS_API_KEY", ("fw_",)),
     KeyFormat("ollama", "Ollama (local)"),
 )
 
