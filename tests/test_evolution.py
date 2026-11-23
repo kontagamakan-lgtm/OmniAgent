@@ -212,6 +212,22 @@ def test_cycle_forges_a_tested_skill_and_updates_the_learning_prompt() -> None:
         assert any(record.get("type") == "cycle_finished" and record.get("ok") for record in records)
 
 
+def test_the_evolution_journal_redacts_keys_in_errors() -> None:
+    """Un échec de cycle peut citer une clé vue dans une page ou un prompt."""
+    from core.self_evolver import _Journal
+
+    with tmpdir("evolution-secrets") as tmp:
+        path = Path(tmp) / "journal.jsonl"
+        key = "gsk_AbCdEf0123456789AbCdEf"
+        _Journal(path, max_entries=10, max_bytes=4096).append(
+            {"type": "cycle_failed", "error": f"HTTP 401 avec {key} refusée"}
+        )
+
+        body = path.read_text(encoding="utf-8")
+        assert key not in body, body
+        assert json.loads(body.splitlines()[0])["type"] == "cycle_failed"
+
+
 def test_router_ranking_is_journaled_after_a_cycle() -> None:
     class _FakeRouter:
         def summary(self):

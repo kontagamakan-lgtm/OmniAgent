@@ -347,6 +347,25 @@ def test_the_journal_keeps_only_the_latest_entries() -> None:
         assert [json.loads(line)["cycle"] for line in lines] == [4, 5, 6]
 
 
+def test_the_journal_redacts_keys_in_free_text() -> None:
+    """L'extrait d'un cycle recopie la réponse du modèle : elle peut contenir une clé."""
+    with tmpdir("journal-secrets") as tmp:
+        path = Path(tmp) / "journal.jsonl"
+        key = "AQ.AbCdEf0123456789AbCdEf0123456789"
+        AutonomyJournal(path).append(
+            {
+                "type": "cycle_finished",
+                "cycle": 1,
+                "ok": False,
+                "excerpt": f"réponse : la clé {key} a été refusée",
+            }
+        )
+
+        body = path.read_text(encoding="utf-8")
+        assert key not in body, body
+        assert json.loads(body.splitlines()[0])["cycle"] == 1
+
+
 def test_the_journal_is_bounded_by_size_but_keeps_the_last_cycle() -> None:
     with tmpdir("journal-taille") as tmp:
         path = Path(tmp) / "journal.jsonl"
