@@ -12,7 +12,9 @@ from typing import Any, Iterable
 
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
-__all__ = ["build_package"]
+from core import SUBMODULES
+
+__all__ = ["build_package", "hidden_imports"]
 
 #: Paquets dont les données accompagnent l'exécutable.
 _DATA_PACKAGES = ("playwright", "certifi", "tiktoken")
@@ -53,6 +55,35 @@ _TESSEROCR_LIB_PREFIXES = (
     "msvcp140-",
     "vcruntime140",
 )
+
+
+def hidden_imports(excluded: Iterable[str] = ()) -> list[str]:
+    """Modules atteints seulement à l'exécution, à déclarer à PyInstaller.
+
+    L'analyse statique ne voit ni les imports en méthode (`pytesseract`,
+    `tools.ocr`), ni `__import__` (`tools.file_manager._require`), ni les
+    sous-modules de `core` résolus paresseusement (PEP 562) : sans cette
+    liste, l'exécutable lève `ModuleNotFoundError: No module named
+    'core.runner'` au premier `from core import AgentRunner`.
+    """
+    excluded = tuple(str(item) for item in excluded)
+    result = collect_submodules("customtkinter") + list(_EXTRA_HIDDENIMPORTS)
+    if "PIL" not in excluded:
+        # Uniquement utile quand Pillow est présent : il ferait sinon rentrer
+        # le paquet dans la variante qui l'exclut.
+        result.append("PIL._tkinter_finder")
+    result += [
+        "core",
+        *SUBMODULES,
+        "ui.app_gui",
+        "tools.browser_agent",
+        "tools.web_search",
+        "tools.vault",
+        # `pytesseract` est importé à l'intérieur des méthodes d'`Ocr` :
+        # l'analyse statique ne le voit pas, il faut le déclarer.
+        "tools.ocr",
+    ]
+    return result
 
 
 def _tesserocr_binaries() -> list[tuple[str, str]]:
@@ -142,21 +173,7 @@ def build_package(
     ocr_binaries = _tesserocr_binaries()
     datas += _ocr_assets(root)
 
-    hiddenimports = collect_submodules("customtkinter") + list(_EXTRA_HIDDENIMPORTS)
-    if "PIL" not in excluded:
-        # Uniquement utile quand Pillow est présent : il ferait sinon rentrer
-        # le paquet dans la variante qui l'exclut.
-        hiddenimports.append("PIL._tkinter_finder")
-    hiddenimports += [
-        "core",
-        "ui.app_gui",
-        "tools.browser_agent",
-        "tools.web_search",
-        "tools.vault",
-        # `pytesseract` est importé à l'intérieur des méthodes d'`Ocr` :
-        # l'analyse statique ne le voit pas, il faut le déclarer.
-        "tools.ocr",
-    ]
+    hiddenimports = hidden_imports(excluded)
 
     analysis = analysis_cls(
         [str(root / "app.py")],

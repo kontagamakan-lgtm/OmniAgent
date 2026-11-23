@@ -38,6 +38,11 @@ _MODULES: dict[str, tuple[str, ...]] = {
     "core.tool_registry": ("ToolError", "ToolRegistry", "ToolSpec"),
 }
 
+#: Sous-modules résolus paresseusement. Aucune instruction d'import statique
+#: ne les mentionne : l'analyse de PyInstaller ne les voit donc pas, et
+#: `pyinstaller_recipe.hidden_imports` les déclare explicitement.
+SUBMODULES: tuple[str, ...] = tuple(_MODULES)
+
 #: Symbole -> module d'origine, pour la résolution paresseuse.
 _EXPORTS: dict[str, str] = {
     name: module for module, names in _MODULES.items() for name in names

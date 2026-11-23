@@ -121,6 +121,23 @@ def test_package_embeds_the_interface_theme_and_the_installer_copies_it() -> Non
     )
 
 
+def test_hidden_imports_cover_the_lazily_resolved_core_submodules() -> None:
+    """`core` résout ses sous-modules par PEP 562 : l'analyse ne les voit pas.
+
+    Sans déclaration, `from core import AgentRunner` lève dans le paquet figé
+    `ModuleNotFoundError: No module named 'core.runner'` ; le contrôle
+    `--compat-smoke` de la CI y est resté bloqué jusqu'au délai de 240 s.
+    """
+    import core
+    from pyinstaller_recipe import hidden_imports
+
+    declared = set(hidden_imports())
+    missing = set(core.SUBMODULES) - declared
+    assert missing == set(), "sous-module de core absent des imports cachés : " + ", ".join(
+        sorted(missing)
+    )
+
+
 def test_all_builds_main_and_lite_and_no_smoke_disables_smokes() -> None:
     text = _text()
     all_match = re.search(r'if "%ALL%"=="1" \((.*?)\n\)', text, re.S)
