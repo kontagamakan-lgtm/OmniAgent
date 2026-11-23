@@ -129,6 +129,11 @@ class ProposalStore:
         return records
 
     def append(self, record: dict[str, Any]) -> bool:
+        # Décision : pas de `redact_data` ici. La `task` d'une proposition est
+        # exécutée telle qu'elle a été approuvée ; la masquer ferait exécuter
+        # autre chose que ce que l'humain a lu et validé. Le masquage reste la
+        # règle du journal d'autonomie (`AutonomyJournal`) et des erreurs du
+        # fournisseur. `tests/test_proposals.py` fige ce choix.
         body = {"at": datetime.now(tz=timezone.utc).isoformat(), **record}
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)

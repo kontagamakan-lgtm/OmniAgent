@@ -127,6 +127,24 @@ def test_agent_receives_active_notes_and_not_stale_ones() -> None:
         assert "La base est en lecture seule" not in _user_text(llm.messages[-1])
 
 
+def test_a_note_is_stored_verbatim_even_when_it_looks_like_a_key() -> None:
+    """Décision figée : la mémoire n'est pas masquée, contrairement aux journaux.
+
+    Une note est un texte de l'utilisateur, relu et modifié dans l'éditeur : un
+    masque silencieux remplacerait sa note par un texte qu'il n'a pas saisi.
+    `save_notes` ne passe donc pas par `redact_data`.
+    """
+    with tmpdir("memoire-verbatim") as tmp:
+        settings = make_settings(tmp)
+        key = "sk-proj-AbCdEf0123456789AbCdEf0123456789"
+        assert add_note(settings, f"la clé de test est {key}")
+
+        stored = [note.text for note in load_notes(settings)]
+        assert stored and key in stored[0], stored
+        # La mémoire n'est pas un journal : l'épuration ne la relit pas.
+        assert "MASQUÉ" not in stored[0]
+
+
 if __name__ == "__main__":
     from support import run
 
