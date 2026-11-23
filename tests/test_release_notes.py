@@ -49,17 +49,54 @@ def test_le_contenu_github_est_conserve_tel_quel() -> None:
 
 
 def test_le_tag_precedent_est_le_plus_grand_numero_inferieur() -> None:
-    """Le prédécesseur ne dépend pas de l'historique git du clone.
+    """Le prédécesseur ne dépend ni de l'historique git ni d'un tag orphelin.
 
     La publication de 1.2.0 a échoué sur un clone superficiel : `git describe`
-    ne trouvait pas le tag. La liste des tags du dépôt le remplace ; elle doit
-    ignorer les versions plus récentes (republication d'un tag historique) et
-    les tags qui ne sont pas des versions.
+    ne trouvait pas le tag. La liste vient donc de l'API, et elle ne contient
+    que les releases publiées : un tag resté sans release ne doit pas devenir
+    le point de comparaison. Les versions plus récentes (republication d'un tag
+    historique) et les tags non versionnés sont ignorés aussi.
     """
     tags = ["v1.0.4", "v1.1.0", "v1.1.3", "v1.2.0", "v1.3.0", "derniere"]
     assert pick_previous_tag("v1.2.0", tags) == "v1.1.3"
     assert pick_previous_tag("v1.1.0", tags) == "v1.0.4"
     assert pick_previous_tag("v1.0.4", tags) == ""
+
+
+def test_un_tag_sans_release_n_est_jamais_le_precedent(monkeypatch) -> None:
+    """Régression de la 1.2.1 : son tag 1.2.0 voisin n'avait pas de release.
+
+    Comparée à tous les tags, la page annonçait « changements depuis 1.2.0 »,
+    donc aucun des correctifs livrés. Seules les releases publiées comptent.
+    """
+    import write_release_notes as module
+
+    monkeypatch.setattr(
+        module, "_released_tags", lambda repository: ["v1.1.2", "v1.1.3", "v1.2.1"]
+    )
+    assert module.previous_tag("v1.2.1", "o/r") == "v1.1.3"
+
+
+def test_les_versions_publiees_sont_lues_dans_les_releases(monkeypatch) -> None:
+    """La source est `releases`, pas `tags` : c'est tout le correctif."""
+    import subprocess
+
+    import write_release_notes as module
+
+    captured: dict[str, list[str]] = {}
+
+    class _Done:
+        returncode = 0
+        stdout = "v1.1.3\n\n v1.2.1\n"
+        stderr = ""
+
+    def fake_run(command, **kwargs):
+        captured["command"] = list(command)
+        return _Done()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert module._released_tags("o/r") == ["v1.1.3", "v1.2.1"]
+    assert "repos/o/r/releases?per_page=100" in captured["command"]
 
 
 def test_une_version_sans_predecesseur_omet_le_tag_precedent() -> None:
