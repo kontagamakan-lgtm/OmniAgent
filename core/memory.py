@@ -135,6 +135,11 @@ def load_notes(settings: Settings) -> list[MemoryNote]:
 
 
 def save_notes(settings: Settings, notes: Iterable[MemoryNote]) -> bool:
+    # Décision : les notes ne passent pas par `redact_data`. Ce sont des textes
+    # de l'utilisateur, écrits et relus dans l'éditeur : un masque silencieux
+    # remplacerait sa note par un texte qu'il n'a pas saisi. Le masquage
+    # s'applique aux journaux (`security/redaction.py`) et à leur épuration
+    # rétroactive (`core/log_scrub.py`). `tests/test_memory.py` fige ce choix.
     path = memory_path(settings)
     payload = {
         "version": 1,

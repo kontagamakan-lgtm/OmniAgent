@@ -9,7 +9,10 @@ n'est plus acceptée ou qu'une recette manque.
 
 from __future__ import annotations
 
+import ast
+import importlib.util
 import re
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -121,6 +124,78 @@ def test_package_embeds_the_interface_theme_and_the_installer_copies_it() -> Non
     )
 
 
+#: Répertoires dont les imports ne partent pas dans l'exécutable.
+_NOT_SHIPPED = frozenset({"tests", "build", "dist", "data", ".git", ".venv", "installer"})
+
+
+def _dynamic_targets() -> dict[str, str]:
+    """Cible -> « fichier:ligne » pour chaque import dynamique littéral.
+
+    PyInstaller ne suit pas un nom calculé à l'exécution : `__import__`,
+    `importlib.import_module` et les aides du type `FileManager._require`
+    doivent déclarer leur cible en `hiddenimports`, sinon le module manque
+    silencieusement une fois figé.
+    """
+    targets: dict[str, str] = {}
+    for path in sorted(ROOT.rglob("*.py")):
+        if _NOT_SHIPPED & set(path.relative_to(ROOT).parts):
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+        except SyntaxError:  # fichier de données ou fragment : hors périmètre
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not node.args:
+                continue
+            function = node.func
+            name = (
+                function.id
+                if isinstance(function, ast.Name)
+                else getattr(function, "attr", "")
+            )
+            if name not in {"__import__", "import_module"} and not name.endswith(
+                "_require"
+            ):
+                continue
+            argument = node.args[0]
+            if not (isinstance(argument, ast.Constant) and isinstance(argument.value, str)):
+                continue
+            targets.setdefault(
+                argument.value,
+                f"{path.relative_to(ROOT).as_posix()}:{node.lineno}",
+            )
+    return targets
+
+
+def test_dynamic_imports_are_declared_as_hidden_imports() -> None:
+    """Tout module importé par une chaîne doit être déclaré et installable."""
+    from pyinstaller_recipe import hidden_imports
+
+    declared = {name.split(".")[0] for name in hidden_imports()}
+    declared |= {"core", "tools", "ui", "security"}  # analysés statiquement
+    targets = _dynamic_targets()
+    assert targets, "aucun import dynamique détecté : le balayage est cassé"
+
+    undeclared = {
+        top: origin
+        for target, origin in targets.items()
+        for top in [target.split(".")[0]]
+        if top not in declared and top not in sys.stdlib_module_names
+    }
+    assert undeclared == {}, (
+        "module importé dynamiquement mais absent des imports cachés : "
+        + ", ".join(f"{top} ({origin})" for top, origin in sorted(undeclared.items()))
+    )
+
+    unresolvable = [
+        name for name in hidden_imports() if importlib.util.find_spec(name) is None
+    ]
+    assert unresolvable == [], (
+        "import caché introuvable (faute de frappe ou dépendance manquante) : "
+        + ", ".join(unresolvable)
+    )
+
+
 def test_hidden_imports_cover_the_lazily_resolved_core_submodules() -> None:
     """`core` résout ses sous-modules par PEP 562 : l'analyse ne les voit pas.
 
@@ -135,6 +210,48 @@ def test_hidden_imports_cover_the_lazily_resolved_core_submodules() -> None:
     missing = set(core.SUBMODULES) - declared
     assert missing == set(), "sous-module de core absent des imports cachés : " + ", ".join(
         sorted(missing)
+    )
+
+
+#: Lignes de vérification du README : `python tests/test_x.py :: N/M`.
+_COUNTER = re.compile(r"^python tests/(test_\w+)\.py\s+:: (\d+)/(\d+)$", re.M)
+_GOLDEN = re.compile(r"^python tests/golden_traces\.py\s+:: (\d+) scénarios", re.M)
+
+
+def test_readme_test_counters_match_the_test_files() -> None:
+    """Les compteurs du README sont une promesse : ils doivent être vrais.
+
+    Quatre des cinq annoncés avaient dérivé (crypto, redaction, vault,
+    integration) : un lecteur lançait la commande et croyait à une régression
+    ou à un test manquant. Le nombre affiché est celui des `test_*` du module,
+    exactement ce que `support.run` exécute.
+    """
+    readme = README.read_text(encoding="utf-8")
+    counters = _COUNTER.findall(readme)
+    assert counters, "aucun compteur `python tests/test_*.py :: N/M` dans le README"
+
+    mismatches = []
+    for module, shown, total in counters:
+        source = (ROOT / "tests" / f"{module}.py").read_text(
+            encoding="utf-8", errors="replace"
+        )
+        declared = len(re.findall(r"^def test_", source, re.M))
+        if shown != str(declared) or total != str(declared):
+            mismatches.append(
+                f"{module}.py : README {shown}/{total}, {declared} test(s) réels"
+            )
+    assert mismatches == [], "compteurs du README périmés : " + "; ".join(mismatches)
+
+    golden = _GOLDEN.search(readme)
+    assert golden is not None, "le README ne cite plus les golden traces"
+    sys.path.insert(0, str(ROOT / "tests"))
+    try:
+        import golden_traces
+    finally:
+        sys.path.pop(0)
+    assert int(golden.group(1)) == len(golden_traces.SCENARIOS), (
+        f"golden traces : README {golden.group(1)}, "
+        f"{len(golden_traces.SCENARIOS)} scénario(s) réels"
     )
 
 

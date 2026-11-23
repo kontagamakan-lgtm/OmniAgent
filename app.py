@@ -217,6 +217,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="purge réellement les fichiers annoncés par --clean",
     )
     parser.add_argument(
+        "--redact-logs",
+        action="store_true",
+        help="repère les clés en clair dans les journaux et les traces, puis quitte",
+    )
+    parser.add_argument(
+        "--redact-logs-apply",
+        action="store_true",
+        help="masque réellement les clés en clair trouvées par --redact-logs",
+    )
+    parser.add_argument(
         "--check",
         action="store_true",
         help="affiche l'état de l'installation (dépendances, configuration) et quitte",
@@ -497,6 +507,23 @@ def _clean(settings: Settings, *, apply: bool) -> int:
     return 1 if failures else 0
 
 
+def _redact_logs(settings: Settings, *, apply: bool) -> int:
+    """Repère puis, sur demande explicite, masque les clés déjà écrites.
+
+    Le masquage de `security/redaction.py` s'applique à l'écriture : les
+    journaux produits avant la 1.1.3 peuvent encore contenir une clé en clair.
+    """
+    from core.log_scrub import scrub_tree, targets
+
+    try:
+        report = scrub_tree(targets(settings), apply=apply)
+    except OSError as exc:
+        print(f"Épuration impossible : {exc}", file=sys.stderr)
+        return 1
+    print(report.format())
+    return 0
+
+
 def _report(settings: Settings, *, fix: bool = False) -> int:
     print(f"{APP_NAME} {APP_VERSION}")
     blocking = 0
@@ -719,6 +746,7 @@ def compat_smoke(settings: Settings) -> int:
     fonctionne encore une fois empaqueté. Le fournisseur est local et
     scripté, donc aucun appel sortant.
     """
+    import core
     from core import AgentResult, AgentRunner, run_task
     from core.events import EventBus, EventType
     from core.llm_client import LLMResponse
@@ -794,9 +822,26 @@ def compat_smoke(settings: Settings) -> int:
     if "tronqué" not in registry.observation(shaped):
         problems.append("l'observation d'un ToolSpec n'est pas bornée par le registre")
 
+    # Chemin 4 : chaque symbole réexporté par `core` doit exister une fois
+    # figé. Les réexports PEP 562 résolvent leur module à la première lecture :
+    # un module absent de l'archive PyInstaller ne se voit qu'ici — c'est ainsi
+    # que `core.runner` a manqué dans l'exécutable de la 1.1.3.
+    resolved = 0
+    missing: list[str] = []
+    for symbol in core.__all__:
+        try:
+            getattr(core, symbol)
+        except Exception as exc:  # noqa: BLE001 - on rapporte le manque, on n'arrête pas
+            missing.append(f"{symbol} ({type(exc).__name__})")
+        else:
+            resolved += 1
+    if missing:
+        problems.append("symboles de core introuvables : " + ", ".join(missing))
+
     print(f"  AgentRunner : run_id={run_id or '(vide)'}, {len(events)} événement(s)")
     print(f"  run_task    : {len(second_events)} événement(s)")
     print(f"  ToolSpec    : {len(registry.names())} outil(s) converti(s)")
+    print(f"  Symboles    : {resolved}/{len(core.__all__)} réexport(s) résolu(s)")
     if problems:
         for problem in problems:
             print(f"  !!   {problem}", file=sys.stderr)
@@ -1221,6 +1266,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.clean or args.clean_apply:
         return _clean(settings, apply=args.clean_apply)
+
+    if args.redact_logs or args.redact_logs_apply:
+        return _redact_logs(settings, apply=args.redact_logs_apply)
 
     if args.notify_install:
         from core.notify import install_notifications

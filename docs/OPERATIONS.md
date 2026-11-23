@@ -370,10 +370,19 @@ préflight, la détection du fournisseur, le masquage des journaux et cette page
 en dérivent. Un fournisseur ajouté là est aussitôt reconnu, refusé chez les
 autres et masqué, sans autre modification.
 
+Le masquage s'applique au moment de l'écriture : une clé consignée par une
+version antérieure à la 1.1.3 est encore en clair dans les journaux déjà
+écrits. `python app.py --redact-logs` les relit et annonce les lignes
+concernées ; `--redact-logs-apply` les masque réellement (l'aperçu ne réécrit
+rien). Le périmètre est limité aux journaux et aux données de l'autonomie : le
+journal d'audit n'est jamais réécrit, sous peine de rompre la chaîne
+d'empreintes.
+
 Règles :
 
 - un préfixe d'un autre fournisseur (`sk-proj-`, `sk-svcacct-`, `sk-ant-`,
-  `sk-or-`, `sk-mistral-`, `gsk_`, `AIza`, `AQ.`) est refusé en le nommant :
+  `sk-or-`, `sk-mistral-`, `gsk_`, `AIza`, `AQ.`, `xai-`, `pplx-`, `fw_`) est
+  refusé en le nommant :
   la clé n'irait pas loin sur `api.deepseek.com` ;
 - la clé doit commencer par `sk-` ;
 - elle doit contenir au moins **20 caractères** au total, préfixe compris ;
@@ -386,8 +395,9 @@ Règles :
 Pour les autres fournisseurs, `config.api_key_problem()` ne refuse que le
 vide, un espace interne, une longueur inférieure à 12 caractères et les
 valeurs d'exemple : OpenAI (`sk-proj-`), Gemini (`AIza` ou `AQ.`), Groq
-(`gsk_`) et Anthropic (`sk-ant-`) ont des formats incompatibles avec un
-préfixe unique, et leur HTTP 401 est plus précis qu'une devinette locale.
+(`gsk_`), Anthropic (`sk-ant-`), xAI (`xai-`), Perplexity (`pplx-`) et
+Fireworks (`fw_`) ont des formats incompatibles avec un préfixe unique, et
+leur HTTP 401 est plus précis qu'une devinette locale.
 
 Anthropic est servi par le client unique quand `llm.backend = "anthropic"` :
 l'API Messages impose son endpoint `/messages`, la clé dans `x-api-key`, la

@@ -171,6 +171,24 @@ def test_approval_from_the_command_line_runs_the_stored_task(monkeypatch) -> Non
         assert store.find("abc12345")["state"] == "executed"
 
 
+def test_a_proposal_keeps_its_task_verbatim() -> None:
+    """Décision figée : la tâche d'une proposition n'est pas masquée.
+
+    Elle sera exécutée telle qu'elle a été approuvée ; un masque ferait
+    exécuter autre chose que ce que l'humain a lu. Les journaux, eux, restent
+    masqués (`AutonomyJournal`).
+    """
+    with tmpdir("proposition-verbatim") as tmp:
+        store = ProposalStore(Path(tmp) / "proposals.jsonl")
+        task = "range les rapports avec la clé sk-proj-AbCdEf0123456789AbCdEf0123456789"
+        assert store.append({"type": "proposal", "id": "v1", "state": "pending", "task": task})
+
+        stored = store.find("v1")
+        assert stored is not None
+        assert stored["task"] == task, stored
+        assert "MASQUÉ" not in json.dumps(stored, ensure_ascii=False)
+
+
 def test_approving_an_unknown_proposal_changes_nothing(monkeypatch) -> None:
     import app as app_module
     import config as config_module

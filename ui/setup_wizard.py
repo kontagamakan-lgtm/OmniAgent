@@ -103,6 +103,14 @@ _PROVIDER_SETTINGS: dict[str, tuple[str, str, str, str]] = {
         "mistral-small-latest",
         "mistral-large-latest",
     ),
+    "xai": ("XAI_API_KEY", "grok-4", "grok-4", "grok-4"),
+    "perplexity": ("PERPLEXITY_API_KEY", "sonar", "sonar", "sonar-pro"),
+    "fireworks": (
+        "FIREWORKS_API_KEY",
+        "accounts/fireworks/models/llama-v3p3-70b-instruct",
+        "accounts/fireworks/models/llama-v3p3-70b-instruct",
+        "accounts/fireworks/models/llama-v3p3-70b-instruct",
+    ),
     #: Tout autre service parlant `/chat/completions` : l'adresse et le modèle
     #: viennent des champs de l'assistant.
     "custom": ("OMNIAGENT_API_KEY", "", "", ""),
@@ -118,6 +126,9 @@ PROVIDER_CHOICES: tuple[tuple[str, str], ...] = (
     ("Groq", "groq"),
     ("OpenRouter", "openrouter"),
     ("Mistral", "mistral"),
+    ("xAI (Grok)", "xai"),
+    ("Perplexity", "perplexity"),
+    ("Fireworks AI", "fireworks"),
     ("Autre (compatible OpenAI)", "custom"),
 )
 _LABELS = {slug: label for label, slug in PROVIDER_CHOICES if slug != "auto"}
