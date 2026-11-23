@@ -334,6 +334,7 @@ _OTHER_VENDOR_PREFIXES = (
     ("sk-mistral-", "Mistral"),
     ("gsk_", "Groq"),
     ("AIza", "Google Gemini"),
+    ("AQ.", "Google Gemini"),
 )
 
 _MIN_DEEPSEEK_KEY_LENGTH = 20
@@ -438,7 +439,7 @@ def api_key_problem(key: str, *, provider: str, origin: str) -> str:
     # exactement le bug qu'on corrige. Seule une valeur qui *est* un exemple,
     # ou un corps fait d'un caractère répété, est refusée.
     body = clean
-    for prefix in ("sk-proj-", "sk-ant-", "sk-", "gsk_", "AIza"):
+    for prefix in ("sk-proj-", "sk-ant-", "sk-", "gsk_", "AIza", "AQ."):
         if clean.startswith(prefix):
             body = clean[len(prefix) :]
             break
@@ -1790,10 +1791,14 @@ _DEFAULT_ENV_EXAMPLE = """\
 # OmniAgent Windows — secrets locaux (ne jamais committer ce fichier)
 # Copiez .env.example vers .env puis renseignez vos clés.
 
-# Backend cloud (DeepSeek, compatible OpenAI, API Messages d'Anthropic)
+# Clés des fournisseurs cloud (une seule suffit, les autres restent vides)
 DEEPSEEK_API_KEY=
 OPENAI_API_KEY=
 ANTHROPIC_API_KEY=
+GEMINI_API_KEY=
+GROQ_API_KEY=
+OPENROUTER_API_KEY=
+MISTRAL_API_KEY=
 
 # Recherche Brave (optionnel, sans clé le moteur est ignoré)
 BRAVE_API_KEY=

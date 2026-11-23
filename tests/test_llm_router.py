@@ -20,6 +20,7 @@ from core.llm_router import (  # noqa: E402
     DEAD,
     EXHAUSTED,
     LLMRouter,
+    _scrub,
     detect_provider,
     to_anthropic_messages,
 )
@@ -72,8 +73,19 @@ def test_detects_providers_from_key_prefixes() -> None:
     assert detect_provider("sk-or-v1-abcdef") == "openrouter"
     assert detect_provider("gsk_abcdef123456") == "groq"
     assert detect_provider("AIzaSyAbcdef123456") == "gemini"
+    # Format actuel de Google AI Studio, qui n'a plus rien à voir avec `AIza`.
+    assert detect_provider("AQ.fake-clede-test-0123456789abcdef") == "gemini"
     assert detect_provider("sk-proj-abcdef123456") == "openai"
     assert detect_provider("sk-ds-abcdef123456") == "deepseek"
+
+
+def test_scrub_masque_les_cles_gemini_au_format_courant() -> None:
+    """`AQ.` est le format neuf : une clé recopiée dans une erreur doit disparaître."""
+    key = "AQ.fake-clede-test-0123456789abcdef"
+    masque = _scrub(f"clé refusée (HTTP 400) : {key} rejetée")
+    assert key not in masque
+    assert "[clé masquée]" in masque
+    assert "AQ.fake" not in masque
 
 
 def test_detects_deepseek_and_openai_behind_the_shared_sk_prefix() -> None:

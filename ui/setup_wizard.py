@@ -77,11 +77,13 @@ _PROVIDER_SETTINGS: dict[str, tuple[str, str, str, str]] = {
         "claude-haiku-4-5",
         "claude-opus-4-1",
     ),
+    #: Les modèles 2.5 ne sont plus ouverts aux nouvelles clés et les gammes
+    #: `pro` demandent un compte payant : 3.5 Flash sert les trois rôles.
     "gemini": (
         "GEMINI_API_KEY",
-        "gemini-2.5-flash",
-        "gemini-2.5-flash",
-        "gemini-2.5-pro",
+        "gemini-3.5-flash",
+        "gemini-3.5-flash",
+        "gemini-3.5-flash",
     ),
     "groq": (
         "GROQ_API_KEY",

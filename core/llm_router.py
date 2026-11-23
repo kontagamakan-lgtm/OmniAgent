@@ -57,7 +57,11 @@ DEAD = "DEAD"
 _STATES = {ACTIVE, COOLDOWN, EXHAUSTED, DEAD}
 _SERVICE_PREFIX = "llm."
 _KEY_ID = re.compile(r"^[0-9a-f]{12}$")
-_SECRET_LOOKS_LIKE = re.compile(r"(sk|gsk|AIza)[A-Za-z0-9_\-]{6,}")
+#: Les clés Gemini récentes commencent par `AQ.` et non plus `AIza` : sans
+#: cette branche, une clé recopiée dans un message d'erreur resterait lisible.
+_SECRET_LOOKS_LIKE = re.compile(
+    r"((?:sk|gsk|AIza)[A-Za-z0-9_\-]{6,}|AQ\.[A-Za-z0-9_\-]{6,})"
+)
 
 
 def _now() -> float:
@@ -100,7 +104,7 @@ PROVIDERS: dict[str, Provider] = {
         "Google Gemini",
         "https://generativelanguage.googleapis.com/v1beta/openai",
         "openai",
-        ("AIza",),
+        ("AIza", "AQ."),
     ),
     "groq": Provider(
         "groq", "Groq", "https://api.groq.com/openai/v1", "openai",
@@ -145,7 +149,7 @@ def detect_provider(key: str) -> str:
             return "openai"
     if clean.startswith("gsk_"):
         return "groq"
-    if clean.startswith("AIza"):
+    if clean.startswith(("AIza", "AQ.")):
         return "gemini"
     if clean.startswith("sk-") and _DEEPSEEK_KEY_BODY.match(clean[3:]):
         return "deepseek"
@@ -171,10 +175,13 @@ CATALOGUE: tuple[ModelSpec, ...] = (
     ModelSpec("openai", "gpt-5", "GPT-5", 98, ("reasoning", "coding", "tool_calling")),
     ModelSpec("anthropic", "claude-opus-4-1", "Claude Opus 4.1", 97, ("reasoning", "coding")),
     ModelSpec("openai", "gpt-5-mini", "GPT-5 mini", 92, ("coding", "fast_research", "tool_calling")),
-    ModelSpec("gemini", "gemini-2.5-pro", "Gemini 2.5 Pro", 95, ("reasoning", "fast_research")),
+    ModelSpec(
+        "gemini", "gemini-3.5-flash", "Gemini 3.5 Flash", 95,
+        ("reasoning", "fast_research", "tool_calling"),
+    ),
     ModelSpec("anthropic", "claude-sonnet-4-5", "Claude Sonnet 4.5", 94, ("coding", "tool_calling")),
     ModelSpec("deepseek", "deepseek-reasoner", "DeepSeek Reasoner", 90, ("reasoning", "coding")),
-    ModelSpec("gemini", "gemini-2.5-flash", "Gemini 2.5 Flash", 88, ("fast_research", "tool_calling")),
+    ModelSpec("gemini", "gemini-3.5-flash-lite", "Gemini 3.5 Flash Lite", 82, ("fast_research",)),
     ModelSpec("mistral", "mistral-large-latest", "Mistral Large", 87, ("coding", "tool_calling")),
     ModelSpec("deepseek", "deepseek-chat", "DeepSeek Chat", 86, ("coding", "fast_research")),
     ModelSpec("groq", "llama-3.3-70b-versatile", "Llama 3.3 70B (Groq)", 84, ("fast_research", "tool_calling")),
