@@ -47,7 +47,7 @@ from key_formats import all_prefixes, foreign_prefixes
 
 APP_NAME = "OmniAgent Windows"
 APP_ID = "OmniAgent"
-APP_VERSION = "1.1.3"
+APP_VERSION = "1.2.0"
 CONFIG_SCHEMA_VERSION = 1
 #: Version du format des fichiers de trace. À incrémenter quand la forme des
 #: enregistrements change : un lecteur peut alors refuser ou migrer.
