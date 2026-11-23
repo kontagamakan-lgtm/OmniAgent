@@ -381,8 +381,7 @@ d'empreintes.
 Règles :
 
 - un préfixe d'un autre fournisseur (`sk-proj-`, `sk-svcacct-`, `sk-ant-`,
-  `sk-or-`, `sk-mistral-`, `gsk_`, `AIza`, `AQ.`, `xai-`, `pplx-`, `fw_`) est
-  refusé en le nommant :
+    `sk-or-`, `sk-mistral-`, `gsk_`, `AIza`, `AQ.`, `xai-`, `pplx-`, `fw_`) est refusé en le nommant :
   la clé n'irait pas loin sur `api.deepseek.com` ;
 - la clé doit commencer par `sk-` ;
 - elle doit contenir au moins **20 caractères** au total, préfixe compris ;
@@ -700,3 +699,41 @@ python -m core.replay --import-bundle bundle.json
 
 La migration crée une copie `.v2.bak` avant réécriture et refuse un format plus
 récent. Le schéma d'export est `docs/export.schema.json`.
+
+## Publier une version
+
+La publication ne se déclenche **plus sur un tag poussé** : le tag est le
+résultat de la publication, pas son déclencheur. Un échec de construction ne
+laisse donc plus de tag `v*` derrière lui — et comme une règle du dépôt interdit
+de le déplacer comme de le supprimer, c'était auparavant la seule issue : sauter
+une version (1.2.0 → 1.2.1 le 23 novembre, alors que la 1.2.0 n'avait jamais
+existé pour personne).
+
+Déroulé :
+
+1. Incrémenter `APP_VERSION` dans `config.py` **et** le repli `MyAppVersion` de
+   `installer/OmniAgent.iss` (un test les relie).
+2. Fusionner la PR et attendre le check agrégé `Vérifications obligatoires`
+   vert sur `master` : c'est lui que la gate exige.
+3. **Actions → Publication → Run workflow**, branche `master`, champ
+   `version` = `APP_VERSION` (ex. `1.2.2`). `republish` reste décoché sauf pour
+   remplacer volontairement une release existante.
+4. La fin du workflow crée le tag : `gh release create vX --target <sha>`.
+
+Ce que la gate vérifie avant la première minute de construction
+(`build_smoke/check_release_gate.py`) :
+
+- `--version` égale `APP_VERSION` — sinon la release s'annoncerait dans une
+  version que les binaires ne portent pas ;
+- l'état du tag : absent (création), présent sur **le même commit** sans release
+  (reprise après un téléversement interrompu), ou release déjà publiée (refus
+  sans `--republish`) ;
+- le check agrégé du commit construit, avec attente tant qu'il court.
+
+Un tag qui désigne **un autre commit** est refusé avec le motif : le ruleset
+`tags de publication` interdit `update` et `deletion`, donc ce commit ne peut
+plus être publié sous cette version. Deux issues seulement : relancer la
+publication depuis le commit du tag, ou incrémenter `APP_VERSION`.
+
+Ne jamais pousser un tag `v*` à la main : il ne déclencherait plus rien, et il
+occuperait la version, puisque le workflow refuse ensuite de le déplacer.

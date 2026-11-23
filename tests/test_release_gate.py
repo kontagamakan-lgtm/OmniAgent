@@ -14,8 +14,11 @@ from check_release_gate import (  # noqa: E402
     await_required_check,
     check_tag_version,
     evaluate_check_runs,
+    evaluate_publish_state,
     expected_tag,
+    fetch_tag_commit,
     parse_app_version,
+    release_exists,
     resolve_commit,
 )
 
@@ -193,6 +196,97 @@ def test_no_wait_still_accepts_a_green_check() -> None:
     await_required_check(fetch, timeout_s=0.0, clock=clock, sleep=clock.sleep)
     assert len(calls) == 1
     assert clock.sleeps == []
+
+
+def test_un_tag_absent_est_cree_a_la_fin() -> None:
+    """Cas normal : rien n'existe, la construction peut aboutir au tag."""
+    assert (
+        evaluate_publish_state("v1.2.2", "a" * 40, tag_sha=None, has_release=False)
+        == "create"
+    )
+
+
+def test_un_tag_sans_release_se_reprend() -> None:
+    """Échec après création du tag (téléversement) : on reprend, sans sauter de version."""
+    sha = "a" * 40
+    assert (
+        evaluate_publish_state("v1.2.2", sha, tag_sha=sha, has_release=False)
+        == "resume"
+    )
+
+
+def test_un_sha_abrege_designe_le_meme_commit() -> None:
+    """`--sha b0b61c6` et le SHA complet rendu par l'API sont le même commit.
+
+    Sans cela, la reprise d'une publication refusait son propre commit : le
+    message affichait deux fois le même SHA court.
+    """
+    sha = "b0b61c6" + "d" * 33
+    assert (
+        evaluate_publish_state("v1.2.2", "b0b61c6", tag_sha=sha, has_release=False)
+        == "resume"
+    )
+
+
+def test_un_tag_sur_un_autre_commit_refuse_la_publication() -> None:
+    """La 1.2.0 : le ruleset interdit de déplacer le tag, donc on refuse tôt.
+
+    Accepter reviendrait à publier sous un tag dont le contenu n'est pas celui
+    qu'on vient de construire et de vérifier.
+    """
+    with pytest.raises(GateError) as caught:
+        evaluate_publish_state(
+            "v1.2.0", "a" * 40, tag_sha="b" * 40, has_release=False
+        )
+    message = str(caught.value)
+    assert "v1.2.0" in message and "b" * 7 in message
+    assert "Incrémentez APP_VERSION" in message
+
+
+def test_une_release_existante_demande_republish() -> None:
+    sha = "a" * 40
+    with pytest.raises(GateError, match="--republish"):
+        evaluate_publish_state("v1.2.1", sha, tag_sha=sha, has_release=True)
+    assert (
+        evaluate_publish_state(
+            "v1.2.1", sha, tag_sha=sha, has_release=True, republish=True
+        )
+        == "republish"
+    )
+
+
+def _refs(**entries: tuple[int, dict[str, object]]) -> object:
+    def get(path: str, _token: str) -> tuple[int, dict[str, object]]:
+        for suffix, answer in entries.items():
+            if path.endswith(suffix.replace("__", "/")):
+                return answer
+        return 404, {}
+
+    return get
+
+
+def test_un_tag_absent_rend_none() -> None:
+    get = _refs()
+    assert fetch_tag_commit("o/r", "v9.9.9", "t", get=get) is None  # type: ignore[arg-type]
+
+
+def test_un_tag_annote_est_detache_jusqu_au_commit() -> None:
+    """`refs/tags` désigne l'objet `tag` : comparer son SHA refuserait toujours."""
+
+    def get(path: str, _token: str) -> tuple[int, dict[str, object]]:
+        if path.endswith("/git/ref/tags/v1.2.2"):
+            return 200, {"object": {"sha": "t" * 40, "type": "tag"}}
+        if path.endswith("/git/tags/" + "t" * 40):
+            return 200, {"object": {"sha": "c" * 40, "type": "commit"}}
+        return 404, {}
+
+    assert fetch_tag_commit("o/r", "v1.2.2", "t", get=get) == "c" * 40  # type: ignore[arg-type]
+
+
+def test_une_release_absente_rend_faux() -> None:
+    assert release_exists("o/r", "v9.9.9", "t", get=_refs()) is False  # type: ignore[arg-type]
+    present = _refs(**{"releases/tags/v1.2.1": (200, {"tag_name": "v1.2.1"})})
+    assert release_exists("o/r", "v1.2.1", "t", get=present) is True  # type: ignore[arg-type]
 
 
 def test_resolve_commit_reports_a_missing_tag() -> None:

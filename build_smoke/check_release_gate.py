@@ -23,9 +23,22 @@ Deux règles que le workflow de publication énonçait sans les vérifier :
    cours ; une conclusion déjà mauvaise (échec, annulation) échoue sans
    attendre, puisqu'une attente n'y changerait rien.
 
+3. **Un tag n'existe que pour une version publiée.** Le tag est créé par le
+   workflow, à la fin, une fois les paquets construits et vérifiés. La
+   publication ne se déclenche plus sur un tag poussé : un échec de
+   construction ne laisse donc aucun tag `v*` derrière lui. Avant, l'échec de
+   la 1.2.0 a laissé un tag immuable (règle du dépôt interdisant `update` et
+   `deletion`), et la seule issue était de sauter une version.
+   `evaluate_publish_state` refuse aussi de « réparer » un tag qui pointe sur
+   un autre commit que celui qui vient d'être construit : le déplacer est
+   impossible, et republier sous ce tag tromperait sur son contenu.
+
 Usage :
-    python build_smoke/check_release_gate.py --tag v1.0.2 \
+    python build_smoke/check_release_gate.py --version 1.0.2 \
         --repo kontagamakan-lgtm/OmniAgent --require-ci
+
+L'ancien appel `--tag v1.0.2` reste accepté pour republier une version
+historique.
 
 `--tag` accepte aussi le nom de référence poussé (`GITHUB_REF_NAME`) ; le
 commit est résolu par `git rev-parse`, dans le dépôt courant.
@@ -212,6 +225,128 @@ def await_required_check(
         sleep(pause)
 
 
+def _api_get(path: str, token: str) -> tuple[int, dict[str, object]]:
+    """GET de l'API GitHub ; rend (statut, charge utile), 404 compris.
+
+    Un 404 n'est pas une anomalie ici : il signifie « ce tag » ou « cette
+    release » n'existe pas, ce que la publication doit distinguer d'une panne.
+    """
+    url = f"{API}{path}"
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {token}",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "omniagent-release-gate",
+    }
+    last = ""
+    for attempt in range(1, _ATTEMPTS + 1):
+        request = urllib.request.Request(url, headers=headers)
+        try:
+            with urllib.request.urlopen(request, timeout=20) as response:
+                payload = json.load(response)
+                return response.status, payload if isinstance(payload, dict) else {}
+        except urllib.error.HTTPError as error:
+            if error.code == 404:
+                return 404, {}
+            body = error.read().decode("utf-8", "replace")[:300]
+            raise GateError(
+                f"l'API GitHub a répondu {error.code} pour {path} : {body}"
+            ) from error
+        except (urllib.error.URLError, TimeoutError, OSError) as error:
+            last = str(error)
+            if attempt < _ATTEMPTS:
+                time.sleep(_BACKOFF_S * attempt)
+                continue
+            raise GateError(f"impossible de joindre l'API GitHub : {last}") from error
+    raise GateError(f"impossible de joindre l'API GitHub : {last}")
+
+
+def fetch_tag_commit(
+    repo: str, tag: str, token: str, *, get: Callable[..., tuple[int, dict[str, object]]] = _api_get
+) -> str | None:
+    """Commit pointé par un tag, `None` s'il n'existe pas.
+
+    Un tag annoté désigne d'abord un objet `tag`, dont `object.sha` porte le
+    commit : comparer le SHA du tag annoté à celui de la construction
+    refuserait toujours une reprise légitime.
+    """
+    status, payload = get(f"/repos/{repo}/git/ref/tags/{tag}", token)
+    if status == 404:
+        return None
+    target = payload.get("object") if isinstance(payload.get("object"), dict) else {}
+    sha = str(target.get("sha") or "")
+    if not sha:
+        raise GateError(f"réponse inattendue pour le tag {tag} : {payload!r:.200}")
+    if str(target.get("type") or "") == "tag":
+        status, annotated = get(f"/repos/{repo}/git/tags/{sha}", token)
+        if status == 404:
+            raise GateError(f"le tag annoté {tag} est introuvable ({sha[:7]})")
+        inner = annotated.get("object") if isinstance(annotated.get("object"), dict) else {}
+        sha = str(inner.get("sha") or "")
+        if not sha:
+            raise GateError(f"tag annoté {tag} sans commit cible")
+    return sha
+
+
+def release_exists(
+    repo: str, tag: str, token: str, *, get: Callable[..., tuple[int, dict[str, object]]] = _api_get
+) -> bool:
+    """Vrai si une release est publiée pour ce tag."""
+    status, _payload = get(f"/repos/{repo}/releases/tags/{tag}", token)
+    return status != 404
+
+
+#: Longueur minimale d'un SHA abrégé pour qu'il identifie un commit.
+_MIN_SHA = 7
+
+
+def same_commit(left: str, right: str) -> bool:
+    """Vrai si les deux désignent le même commit, abréviation comprise.
+
+    `git rev-parse HEAD` rend 40 caractères, l'API aussi, mais un SHA saisi à la
+    main en fait souvent 7 : une comparaison stricte refuserait alors une
+    reprise parfaitement légitime (« le tag pointe déjà sur b0b61c6, alors que
+    la construction vient de b0b61c6 »).
+    """
+    first, second = left.strip().lower(), right.strip().lower()
+    if len(first) < _MIN_SHA or len(second) < _MIN_SHA:
+        return False
+    return first.startswith(second) or second.startswith(first)
+
+
+def evaluate_publish_state(
+    tag: str,
+    sha: str,
+    *,
+    tag_sha: str | None,
+    has_release: bool,
+    republish: bool = False,
+) -> str:
+    """Action autorisée pour ce tag : `create`, `resume` ou `republish`.
+
+    Lève `GateError` quand la seule issue serait de sauter une version, en le
+    disant, plutôt qu'en échouant plus loin sur un refus de l'API.
+    """
+    if tag_sha and not same_commit(tag_sha, sha):
+        raise GateError(
+            f"le tag « {tag} » pointe déjà sur {tag_sha[:7]}, alors que la "
+            f"construction vient de {sha[:7]} : une règle du dépôt interdit de "
+            "le déplacer comme de le supprimer, donc ce commit ne peut pas "
+            "être publié sous cette version. Incrémentez APP_VERSION, ou "
+            "relancez la publication depuis le commit du tag."
+        )
+    if has_release:
+        if not republish:
+            raise GateError(
+                f"une release existe déjà pour « {tag} » : utilisez --republish "
+                "pour la remplacer volontairement."
+            )
+        return "republish"
+    if tag_sha:
+        return "resume"
+    return "create"
+
+
 def fetch_check_runs(repo: str, sha: str, token: str) -> dict[str, object]:
     """Check-runs du commit, avec quelques essais sur incident réseau."""
     url = f"{API}/repos/{repo}/commits/{sha}/check-runs?per_page=100"
@@ -246,7 +381,15 @@ def fetch_check_runs(repo: str, sha: str, token: str) -> dict[str, object]:
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--tag", required=True, help="tag à publier (ex. v1.0.2)")
+    parser.add_argument(
+        "--version", help="version à publier (ex. 1.0.2) ; le tag est « v » + version"
+    )
+    parser.add_argument("--tag", help="tag à publier (ex. v1.0.2), ancien appel")
+    parser.add_argument(
+        "--republish",
+        action="store_true",
+        help="remplacer une release déjà publiée pour ce tag",
+    )
     parser.add_argument(
         "--repo",
         default=os.environ.get("GITHUB_REPOSITORY", "").strip(),
@@ -290,13 +433,47 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv[1:])
 
     try:
-        version = parse_app_version(Path(args.config).read_text(encoding="utf-8"))
-        expected = check_tag_version(args.tag, version, force=args.force_version)
-        print(
-            f"OK : tag {args.tag} cohérent avec APP_VERSION={version}"
-            + (" (forcé)" if args.force_version else "")
-            + ("" if args.tag == expected else f" ; attendu {expected}")
+        declared = parse_app_version(Path(args.config).read_text(encoding="utf-8"))
+        if args.version:
+            version = args.version.strip()
+            if version != declared:
+                raise GateError(
+                    f"--version {version} ne correspond pas à APP_VERSION={declared} "
+                    "dans config.py : la release s'annoncerait dans une version "
+                    "que les binaires ne portent pas."
+                )
+            tag = expected_tag(version)
+        elif args.tag:
+            version = declared
+            tag = args.tag
+            expected = check_tag_version(tag, version, force=args.force_version)
+            print(
+                f"OK : tag {tag} cohérent avec APP_VERSION={version}"
+                + (" (forcé)" if args.force_version else "")
+                + ("" if tag == expected else f" ; attendu {expected}")
+            )
+        else:
+            raise GateError("précisez --version (publication) ou --tag (republier)")
+
+        if not args.repo:
+            raise GateError("dépôt inconnu : renseignez --repo ou GITHUB_REPOSITORY.")
+        token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or ""
+        if not token:
+            raise GateError(
+                "aucun jeton : renseignez GH_TOKEN pour vérifier l'état du tag."
+            )
+        sha = args.sha.strip() or resolve_commit(tag)
+        # Avant l'attente de CI : un tag déjà pris doit se dire tout de suite,
+        # pas après dix minutes de check-runs.
+        state = evaluate_publish_state(
+            tag,
+            sha,
+            tag_sha=fetch_tag_commit(args.repo, tag, token),
+            has_release=release_exists(args.repo, tag, token),
+            republish=args.republish,
         )
+        print(f"OK : tag {tag} -> {state} sur {sha[:7]} (APP_VERSION={version}).")
+
         if args.require_ci and os.environ.get("OMNIAGENT_SKIP_CI_CHECK", "").strip() in {
             "1",
             "true",
@@ -307,26 +484,16 @@ def main(argv: list[str]) -> int:
             # demandé, jamais déduit.
             print("ATTENTION : contrôle de CI explicitement ignoré.")
         elif args.require_ci:
-            if not args.repo:
-                raise GateError(
-                    "dépôt inconnu : renseignez --repo ou GITHUB_REPOSITORY."
-                )
-            token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or ""
-            if not token:
-                raise GateError(
-                    "aucun jeton : renseignez GH_TOKEN pour vérifier la CI."
-                )
-            sha = args.sha.strip() or resolve_commit(args.tag)
             payload = await_required_check(
                 lambda: fetch_check_runs(args.repo, sha, token),
                 args.required_check,
                 timeout_s=args.wait_check,
                 log=lambda message: print(message, flush=True),
             )
-            state = evaluate_check_runs(payload, args.required_check)
+            check = evaluate_check_runs(payload, args.required_check)
             print(
-                f"OK : {args.tag} -> {sha[:7]}, check « {args.required_check} » "
-                f"{state}."
+                f"OK : {tag} -> {sha[:7]}, check « {args.required_check} » "
+                f"{check}."
             )
     except GateError as error:
         print(f"ECHEC : {error}", file=sys.stderr)

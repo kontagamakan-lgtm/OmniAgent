@@ -1,23 +1,28 @@
 name: Publication
 
-# Sur un tag `v*`, rejoue la vérification, construit les trois paquets, les
-# compresse et crée une GitHub Release avec les empreintes SHA-256. Le tag doit
-# pointer sur un commit déjà passé par la CI : ce workflow revérifie tout de
-# même, pour ne jamais publier un binaire non testé.
+# Le tag n'est plus le déclencheur, il est le résultat : ce workflow construit,
+# vérifie et publie, puis c'est `gh release create --target` qui crée le tag.
+#
+# Pousser le tag d'abord rendait chaque échec définitif. La 1.2.0 l'a montré :
+# la composition des notes a échoué, le tag `v1.2.0` est resté, sans release, et
+# une règle du dépôt interdit de le déplacer comme de le supprimer. Réparer
+# imposait donc de sauter une version (1.2.0 → 1.2.1), alors que 1.2.0 n'a
+# jamais existé pour personne. Ici, un échec avant la dernière étape ne laisse
+# aucun tag ; un échec après (téléversement interrompu) se reprend sur le même
+# tag, puisque le commit construit est alors celui que le tag désigne.
 
 on:
-  push:
-    tags: ["v*"]
-  # Republier sans créer de nouveau tag : le tag à publier est saisi à la main
-  # et c'est lui qui est extrait, pas la branche depuis laquelle on déclenche.
-  # GitHub n'indexe un workflow qu'à l'occasion d'un push qui modifie ce
-  # fichier : c'est aussi ce qui le fait apparaître dans la liste.
   workflow_dispatch:
     inputs:
-      tag:
-        description: "Tag existant à republier (ex. v1.0.1)"
+      version:
+        description: "Version à publier = APP_VERSION de config.py (ex. 1.2.2)"
         required: true
         type: string
+      republish:
+        description: "Remplacer une release déjà publiée pour cette version"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -26,16 +31,13 @@ jobs:
   release:
     name: Construire et publier
     runs-on: windows-latest
-    # Publication sans approbation manuelle : le tag poussé suffit à lancer la
-    # construction et la mise en ligne. Les garde-fous restants sont le controle
-    # de coherence tag/APP_VERSION et l'exigence d'un check agrege vert.
+    # Publication sans approbation manuelle : le lancement manuel suffit à
+    # construire et mettre en ligne. Les garde-fous sont le contrôle de
+    # cohérence version/`APP_VERSION`, l'état du tag avant construction, et
+    # l'exigence d'un check agrégé vert sur le commit construit.
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
-        with:
-          # En manuel, on construit exactement le tag demandé et non la tête de
-          # la branche depuis laquelle le workflow est lancé.
-          ref: ${{ inputs.tag || github.ref }}
 
       - uses: actions/setup-python@v7
         with:
@@ -51,22 +53,26 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements-dev.txt -r requirements-ci.txt
 
-      # Deux règles que ce workflow énonçait sans les vérifier : le tag décrit
-      # le contenu publié (APP_VERSION nomme l'installateur), et le commit
-      # publié a déjà passé la CI. Les contrôler ici évite de dépenser
-      # quatre-vingt-dix minutes de construction avant de découvrir l'écart.
+      # Trois règles, toutes vérifiées ici : la version demandée est celle que
+      # portent les binaires, le tag n'est pas déjà pris par un autre commit
+      # (impossible à corriger ensuite), et le commit a déjà passé la CI.
+      # Tout échoue avant la première minute de construction.
       # `RELEASE_FORCE_VERSION_MISMATCH=1` (variable du dépôt) autorise la
-      # republication volontaire d'un tag historique.
-      - name: Garde-fous de publication (tag, version, CI)
+      # republication volontaire d'un tag historique, `--republish` celle d'une
+      # release existante.
+      - name: Garde-fous de publication (version, état du tag, CI)
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+          RELEASE_VERSION: ${{ inputs.version }}
           OMNIAGENT_FORCE_VERSION: ${{ vars.RELEASE_FORCE_VERSION_MISMATCH }}
           OMNIAGENT_SKIP_CI_CHECK: ${{ vars.RELEASE_SKIP_CI_CHECK }}
         shell: bash
-        run: >-
-          python build_smoke/check_release_gate.py --tag "$RELEASE_TAG"
-          --repo "${{ github.repository }}" --sha "$(git rev-parse HEAD)" --require-ci
+        run: |
+          extra=""
+          if [ "${{ inputs.republish }}" = "true" ]; then extra="--republish"; fi
+          python build_smoke/check_release_gate.py \
+            --version "$RELEASE_VERSION" --repo "${{ github.repository }}" \
+            --sha "$(git rev-parse HEAD)" --require-ci $extra
 
       - name: Ruff (F, B, E9)
         run: >-
@@ -180,17 +186,16 @@ jobs:
           Compress-Archive -Path dist/OmniAgent/* -DestinationPath dist/OmniAgent.zip
           Compress-Archive -Path dist/OmniAgent-lite/* -DestinationPath dist/OmniAgent-lite.zip
 
-      - name: Créer la GitHub Release
+      # Dernière étape, et c'est elle qui crée le tag : tout ce qui peut échouer
+      # pour une raison de code (compilation, tests, notes) est passé avant.
+      - name: Publier la release et son tag
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-          # Un déclenchement manuel explique le tag qu'il publie ; un push de tag
-          # retombe sur le nom de la référence poussée.
-          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          $tag = $env:RELEASE_TAG
-          if (-not $tag) { throw "aucun tag à publier" }
           $version = (Select-String -Path config.py -Pattern '^APP_VERSION = "([^"]+)"').Matches[0].Groups[1].Value
+          $tag = "v$version"
+          $sha = (& git rev-parse HEAD).Trim()
           $assets = @(
             "dist/OmniAgent.zip",
             "dist/OmniAgent-lite.zip",
@@ -234,6 +239,8 @@ jobs:
             gh release upload $tag @assets --clobber
             gh release edit $tag --notes-file $notes
           } else {
-            gh release create $tag @assets --title $tag --notes-file $notes
+            # Ni release ni tag : `--target` crée le tag sur le commit qui vient
+            # d'être construit et validé, jamais sur un autre.
+            gh release create $tag @assets --target $sha --title $tag --notes-file $notes
           }
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
