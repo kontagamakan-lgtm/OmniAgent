@@ -416,10 +416,11 @@ def api_key_problem(key: str, *, provider: str, origin: str) -> str:
     """Préflight d'une clé pour le fournisseur choisi, sans révéler sa valeur.
 
     DeepSeek impose son préfixe et sa longueur ; les autres fournisseurs n'ont
-    pas de format commun (``sk-proj-`` chez OpenAI, ``AIza`` chez Gemini,
-    ``gsk_`` chez Groq), donc seuls le vide, un espace interne, une longueur
-    dérisoire et les valeurs d'exemple sont refusés ici. Le reste est laissé au
-    fournisseur : son HTTP 401 est plus précis qu'une devinette locale.
+    pas de format commun (``sk-proj-`` chez OpenAI, ``AIza`` ou ``AQ.`` chez
+    Gemini, ``gsk_`` chez Groq), donc seuls le vide, un espace interne, une
+    longueur dérisoire et les valeurs d'exemple sont refusés ici. Le reste est
+    laissé au fournisseur : son HTTP 401 est plus précis qu'une devinette
+    locale.
     """
     if provider == "deepseek":
         return deepseek_key_problem(key, origin=origin)

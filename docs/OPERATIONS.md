@@ -368,8 +368,8 @@ diagnostics et aux clés ajoutées au routeur multi-LLM.
 Règles :
 
 - un préfixe d'un autre fournisseur (`sk-proj-`, `sk-svcacct-`, `sk-ant-`,
-  `sk-or-`, `sk-mistral-`, `gsk_`, `AIza`) est refusé en le nommant : la clé
-  n'irait pas loin sur `api.deepseek.com` ;
+  `sk-or-`, `sk-mistral-`, `gsk_`, `AIza`, `AQ.`) est refusé en le nommant :
+  la clé n'irait pas loin sur `api.deepseek.com` ;
 - la clé doit commencer par `sk-` ;
 - elle doit contenir au moins **20 caractères** au total, préfixe compris ;
 - les valeurs d'exemple sont refusées : les marqueurs `test`, `fake`, `dummy`,
@@ -380,9 +380,9 @@ Règles :
 
 Pour les autres fournisseurs, `config.api_key_problem()` ne refuse que le
 vide, un espace interne, une longueur inférieure à 12 caractères et les
-valeurs d'exemple : OpenAI (`sk-proj-`), Gemini (`AIza`), Groq (`gsk_`) et
-Anthropic (`sk-ant-`) ont des formats incompatibles avec un préfixe unique, et
-leur HTTP 401 est plus précis qu'une devinette locale.
+valeurs d'exemple : OpenAI (`sk-proj-`), Gemini (`AIza` ou `AQ.`), Groq
+(`gsk_`) et Anthropic (`sk-ant-`) ont des formats incompatibles avec un
+préfixe unique, et leur HTTP 401 est plus précis qu'une devinette locale.
 
 Anthropic est servi par le client unique quand `llm.backend = "anthropic"` :
 l'API Messages impose son endpoint `/messages`, la clé dans `x-api-key`, la

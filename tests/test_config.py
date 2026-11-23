@@ -254,6 +254,20 @@ def test_env_example_matches_the_init_template() -> None:
     )
 
 
+def test_operations_documente_tous_les_prefixes_refuses() -> None:
+    """Chaque préfixe refusé par `config.py` doit rester cité dans le manuel."""
+    manual = (Path(config.__file__).resolve().parent / "docs" / "OPERATIONS.md").read_text(
+        encoding="utf-8"
+    )
+    missing = [
+        prefix for prefix, _ in config._OTHER_VENDOR_PREFIXES if f"`{prefix}`" not in manual
+    ]
+    assert missing == [], (
+        "préfixes refusés par `config.py` mais absents de docs/OPERATIONS.md : "
+        + ", ".join(missing)
+    )
+
+
 def test_l_index_semantique_refuse_le_clair_hors_localhost() -> None:
     settings = config.Settings()
     settings.embedding.base_url = "http://vecteurs.exemple.invalid/v1"
