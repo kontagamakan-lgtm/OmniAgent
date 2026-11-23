@@ -12,7 +12,7 @@
 ## Si cette PR touche `.github/workflows/`
 
 - [ ] Le job agrégé s'appelle toujours `Vérifications obligatoires` : c'est le seul check exigé par la protection de `master`. Le renommer, c'est bloquer toutes les fusions.
-- [ ] `release.yml` garde la cohérence tag/`APP_VERSION` et le contrôle de CI verte (`build_smoke/check_release_gate.py`).
+- [ ] `release.yml` publie **à la demande** : `--version` doit égaler `APP_VERSION`, l'état du tag est contrôlé avant construction, et le tag n'est créé qu'à la fin (`gh release create --target`). Un échec de construction ne doit laisser aucun tag `v*` derrière lui.
 - [ ] Le remplacement d'assets reste réversible : les assets présents sont republiés en `precedent-*` avant `--clobber`.
 
 ## Notes de version
