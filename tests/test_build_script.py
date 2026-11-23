@@ -9,7 +9,10 @@ n'est plus acceptée ou qu'une recette manque.
 
 from __future__ import annotations
 
+import ast
+import importlib.util
 import re
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -118,6 +121,78 @@ def test_package_embeds_the_interface_theme_and_the_installer_copies_it() -> Non
     assert 'Source: "{#SourcePath}\\..\\dist\\OmniAgent\\*"' in installer, installer
     assert "recursesubdirs createallsubdirs" in installer, (
         "l'installateur doit copier les sous-dossiers du paquet"
+    )
+
+
+#: Répertoires dont les imports ne partent pas dans l'exécutable.
+_NOT_SHIPPED = frozenset({"tests", "build", "dist", "data", ".git", ".venv", "installer"})
+
+
+def _dynamic_targets() -> dict[str, str]:
+    """Cible -> « fichier:ligne » pour chaque import dynamique littéral.
+
+    PyInstaller ne suit pas un nom calculé à l'exécution : `__import__`,
+    `importlib.import_module` et les aides du type `FileManager._require`
+    doivent déclarer leur cible en `hiddenimports`, sinon le module manque
+    silencieusement une fois figé.
+    """
+    targets: dict[str, str] = {}
+    for path in sorted(ROOT.rglob("*.py")):
+        if _NOT_SHIPPED & set(path.relative_to(ROOT).parts):
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+        except SyntaxError:  # fichier de données ou fragment : hors périmètre
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not node.args:
+                continue
+            function = node.func
+            name = (
+                function.id
+                if isinstance(function, ast.Name)
+                else getattr(function, "attr", "")
+            )
+            if name not in {"__import__", "import_module"} and not name.endswith(
+                "_require"
+            ):
+                continue
+            argument = node.args[0]
+            if not (isinstance(argument, ast.Constant) and isinstance(argument.value, str)):
+                continue
+            targets.setdefault(
+                argument.value,
+                f"{path.relative_to(ROOT).as_posix()}:{node.lineno}",
+            )
+    return targets
+
+
+def test_dynamic_imports_are_declared_as_hidden_imports() -> None:
+    """Tout module importé par une chaîne doit être déclaré et installable."""
+    from pyinstaller_recipe import hidden_imports
+
+    declared = {name.split(".")[0] for name in hidden_imports()}
+    declared |= {"core", "tools", "ui", "security"}  # analysés statiquement
+    targets = _dynamic_targets()
+    assert targets, "aucun import dynamique détecté : le balayage est cassé"
+
+    undeclared = {
+        top: origin
+        for target, origin in targets.items()
+        for top in [target.split(".")[0]]
+        if top not in declared and top not in sys.stdlib_module_names
+    }
+    assert undeclared == {}, (
+        "module importé dynamiquement mais absent des imports cachés : "
+        + ", ".join(f"{top} ({origin})" for top, origin in sorted(undeclared.items()))
+    )
+
+    unresolvable = [
+        name for name in hidden_imports() if importlib.util.find_spec(name) is None
+    ]
+    assert unresolvable == [], (
+        "import caché introuvable (faute de frappe ou dépendance manquante) : "
+        + ", ".join(unresolvable)
     )
 
 
