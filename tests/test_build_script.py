@@ -213,6 +213,48 @@ def test_hidden_imports_cover_the_lazily_resolved_core_submodules() -> None:
     )
 
 
+#: Lignes de vérification du README : `python tests/test_x.py :: N/M`.
+_COUNTER = re.compile(r"^python tests/(test_\w+)\.py\s+:: (\d+)/(\d+)$", re.M)
+_GOLDEN = re.compile(r"^python tests/golden_traces\.py\s+:: (\d+) scénarios", re.M)
+
+
+def test_readme_test_counters_match_the_test_files() -> None:
+    """Les compteurs du README sont une promesse : ils doivent être vrais.
+
+    Quatre des cinq annoncés avaient dérivé (crypto, redaction, vault,
+    integration) : un lecteur lançait la commande et croyait à une régression
+    ou à un test manquant. Le nombre affiché est celui des `test_*` du module,
+    exactement ce que `support.run` exécute.
+    """
+    readme = README.read_text(encoding="utf-8")
+    counters = _COUNTER.findall(readme)
+    assert counters, "aucun compteur `python tests/test_*.py :: N/M` dans le README"
+
+    mismatches = []
+    for module, shown, total in counters:
+        source = (ROOT / "tests" / f"{module}.py").read_text(
+            encoding="utf-8", errors="replace"
+        )
+        declared = len(re.findall(r"^def test_", source, re.M))
+        if shown != str(declared) or total != str(declared):
+            mismatches.append(
+                f"{module}.py : README {shown}/{total}, {declared} test(s) réels"
+            )
+    assert mismatches == [], "compteurs du README périmés : " + "; ".join(mismatches)
+
+    golden = _GOLDEN.search(readme)
+    assert golden is not None, "le README ne cite plus les golden traces"
+    sys.path.insert(0, str(ROOT / "tests"))
+    try:
+        import golden_traces
+    finally:
+        sys.path.pop(0)
+    assert int(golden.group(1)) == len(golden_traces.SCENARIOS), (
+        f"golden traces : README {golden.group(1)}, "
+        f"{len(golden_traces.SCENARIOS)} scénario(s) réels"
+    )
+
+
 def test_all_builds_main_and_lite_and_no_smoke_disables_smokes() -> None:
     text = _text()
     all_match = re.search(r'if "%ALL%"=="1" \((.*?)\n\)', text, re.S)

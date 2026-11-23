@@ -547,11 +547,11 @@ pas ou si ses drapeaux divergent du contrat.
 ### Vérification
 
 ```bat
-python tests/test_crypto.py        :: 16/16
-python tests/test_redaction.py     :: 17/17
-python tests/test_vault.py         :: 16/16
+python tests/test_crypto.py        :: 17/17
+python tests/test_redaction.py     :: 18/18
+python tests/test_vault.py         :: 30/30
 python tests/test_file_manager.py  :: 28/28
-python tests/test_integration.py   :: 3/3
+python tests/test_integration.py   :: 13/13
 python tests/golden_traces.py      :: 9 scénarios hors ligne (golden)
 python -m ruff check --select F,B,E9 security tools
 ```
