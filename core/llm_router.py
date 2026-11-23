@@ -37,6 +37,7 @@ import httpx
 
 from config import APP_ID, Settings, deepseek_key_problem
 from core.errors import LLMError
+from key_formats import KEY_FORMATS, KEY_LIKE, KeyFormat, attribution
 from core.llm_client import LLMResponse
 from core.react_parser import ParsedToolCall, decode_arguments
 
@@ -57,11 +58,6 @@ DEAD = "DEAD"
 _STATES = {ACTIVE, COOLDOWN, EXHAUSTED, DEAD}
 _SERVICE_PREFIX = "llm."
 _KEY_ID = re.compile(r"^[0-9a-f]{12}$")
-#: Les clés Gemini récentes commencent par `AQ.` et non plus `AIza` : sans
-#: cette branche, une clé recopiée dans un message d'erreur resterait lisible.
-_SECRET_LOOKS_LIKE = re.compile(
-    r"((?:sk|gsk|AIza)[A-Za-z0-9_\-]{6,}|AQ\.[A-Za-z0-9_\-]{6,})"
-)
 
 
 def _now() -> float:
@@ -74,7 +70,7 @@ def _iso() -> str:
 
 def _scrub(text: str) -> str:
     """Retire toute apparence de clé d'une chaîne destinée aux traces."""
-    return _SECRET_LOOKS_LIKE.sub("[clé masquée]", str(text or ""))[:300]
+    return KEY_LIKE.sub("[clé masquée]", str(text or ""))[:300]
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,45 +82,36 @@ class Provider:
     prefixes: tuple[str, ...] = ()
 
 
-PROVIDERS: dict[str, Provider] = {
-    "openai": Provider(
-        "openai", "OpenAI", "https://api.openai.com/v1", "openai",
-        ("sk-proj-", "sk-"),
-    ),
-    "anthropic": Provider(
-        "anthropic", "Anthropic", "https://api.anthropic.com/v1", "anthropic",
-        ("sk-ant-",),
-    ),
-    "deepseek": Provider(
-        "deepseek", "DeepSeek", "https://api.deepseek.com/v1", "openai",
-        ("sk-ds-",),
-    ),
-    "gemini": Provider(
-        "gemini",
-        "Google Gemini",
+#: Endpoint et protocole de chaque fournisseur ; le libellé et les préfixes
+#: de clé viennent de `key_formats.KEY_FORMATS`, seule liste à tenir.
+_ENDPOINTS: dict[str, tuple[str, str]] = {
+    "openai": ("https://api.openai.com/v1", "openai"),
+    "anthropic": ("https://api.anthropic.com/v1", "anthropic"),
+    "deepseek": ("https://api.deepseek.com/v1", "openai"),
+    "gemini": (
         "https://generativelanguage.googleapis.com/v1beta/openai",
         "openai",
-        ("AIza", "AQ."),
     ),
-    "groq": Provider(
-        "groq", "Groq", "https://api.groq.com/openai/v1", "openai",
-        ("gsk_",),
-    ),
-    "openrouter": Provider(
-        "openrouter",
-        "OpenRouter",
-        "https://openrouter.ai/api/v1",
-        "openai",
-        ("sk-or-",),
-    ),
-    "mistral": Provider(
-        "mistral", "Mistral", "https://api.mistral.ai/v1", "openai",
-        ("sk-mistral-",),
-    ),
-    "ollama": Provider(
-        "ollama", "Ollama (local)", "", "ollama",
-    ),
+    "groq": ("https://api.groq.com/openai/v1", "openai"),
+    "openrouter": ("https://openrouter.ai/api/v1", "openai"),
+    "mistral": ("https://api.mistral.ai/v1", "openai"),
+    "ollama": ("", "ollama"),
 }
+
+
+def _provider(key_format: KeyFormat) -> Provider:
+    base_url, style = _ENDPOINTS[key_format.slug]
+    return Provider(
+        key_format.slug, key_format.label, base_url, style, key_format.prefixes
+    )
+
+
+PROVIDERS: dict[str, Provider] = {
+    key_format.slug: _provider(key_format) for key_format in KEY_FORMATS
+}
+
+#: (préfixe, fournisseur) du plus spécifique au plus général.
+_ATTRIBUTION = attribution()
 
 
 #: Clé DeepSeek classique : `sk-` suivi de 32 caractères hexadécimaux. OpenAI
@@ -141,20 +128,12 @@ def detect_provider(key: str) -> str:
     toujours imposer un fournisseur explicite.
     """
     clean = str(key or "").strip()
-    for prefix in ("sk-ant-", "sk-or-", "sk-proj-", "sk-ds-", "sk-mistral-"):
-        if clean.startswith(prefix):
-            for provider in PROVIDERS.values():
-                if prefix in provider.prefixes:
-                    return provider.slug
-            return "openai"
-    if clean.startswith("gsk_"):
-        return "groq"
-    if clean.startswith(("AIza", "AQ.")):
-        return "gemini"
-    if clean.startswith("sk-") and _DEEPSEEK_KEY_BODY.match(clean[3:]):
-        return "deepseek"
-    if clean.startswith("sk-"):
-        return "openai"
+    for prefix, slug in _ATTRIBUTION:
+        if not clean.startswith(prefix):
+            continue
+        if prefix == "sk-" and _DEEPSEEK_KEY_BODY.match(clean[3:]):
+            return "deepseek"
+        return slug
     raise ValueError(
         "fournisseur indétectable : préfixe de clé inconnu, choisissez-le explicitement"
     )
