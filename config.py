@@ -502,6 +502,29 @@ class LLMConfig:
             return ""
         return deepseek_key_problem(key, origin=self.api_key_env)
 
+    def model_problem(self) -> str:
+        """Préflight des noms de modèles, avant toute requête au fournisseur.
+
+        Les noms de modèles Gemini n'utilisent que des tirets : une variante
+        collée avec des soulignés (`gemini_3.8_flash`) partait telle quelle et
+        revenait en HTTP 404 « models/… is not found for API version v1main »,
+        un message qui ne dit pas quel champ corriger. Le contrôle est limité à
+        Gemini : une étiquette Ollama (`Q4_K_M`) ou un déploiement Azure
+        contiennent légitimement des soulignés.
+        """
+        if "generativelanguage.googleapis.com" not in self.base_url:
+            return ""
+        for name in ("model", "fast_model", "reasoning_model"):
+            value = str(getattr(self, name) or "").strip()
+            if "_" not in value:
+                continue
+            return (
+                f"llm.{name} = « {value} » : un nom de modèle Gemini s'écrit "
+                f"avec des tirets, pas des soulignés "
+                f"(essayez « {value.replace('_', '-')} »)"
+            )
+        return ""
+
     def has_credentials(self) -> bool:
         if self.backend == "ollama":
             return True
@@ -1182,6 +1205,10 @@ class Settings:
         llm = self.llm
         if not llm.model.strip():
             err("llm.model", "aucun modèle de génération défini")
+        model_problem = llm.model_problem()
+        if model_problem:
+            # Nom de modèle impossible : le fournisseur répondrait 404.
+            err("llm.model", model_problem)
         if not (0.0 <= llm.temperature <= 2.0):
             err("llm.temperature", "doit être comprise entre 0.0 et 2.0")
         if not (0.0 < llm.top_p <= 1.0):

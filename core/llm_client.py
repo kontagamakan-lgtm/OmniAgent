@@ -169,6 +169,11 @@ class LLMClient:
             if not self.cfg.ollama_base_url.strip():
                 raise ConfigError("ollama_base_url est vide", code="missing_ollama_url")
             return
+        model_problem = self.cfg.model_problem()
+        if model_problem:
+            # Inutile d'appeler le fournisseur : il répondrait 404 « model is
+            # not found », sans nommer le champ de configuration fautif.
+            raise ConfigError(model_problem, code="llm_invalid_model")
         problem = self.cfg.api_key_problem()
         if problem:
             raise LLMAuthError(

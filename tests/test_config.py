@@ -34,6 +34,55 @@ def tmpdir() -> Iterator[Path]:
         shutil.rmtree(target, ignore_errors=True)
 
 
+def test_un_nom_de_modele_gemini_avec_soulignes_est_refuse_avant_l_appel() -> None:
+    """Un nom collé avec des soulignés revenait en HTTP 404 sans nommer le champ.
+
+    `gemini_3.8_flash` n'existe pas : le fournisseur répondait « models/… is
+    not found for API version v1main », message qui ne dit ni quel champ
+    corriger ni comment l'écrire. Le préflight le nomme avant la requête.
+    """
+    from core.errors import ConfigError
+    from core.llm_client import LLMClient
+
+    llm = config.LLMConfig(
+        backend="openai_compatible",
+        base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+        api_key_env="GEMINI_API_KEY",
+        model="gemini_3.8_flash",
+    )
+    problem = llm.model_problem()
+    assert problem, "un nom souligné doit être refusé"
+    assert "llm.model" in problem and "gemini-3.8-flash" in problem, problem
+
+    settings = config.Settings()
+    settings.llm = llm
+    reported = [
+        issue for issue in settings.validate() if issue.field == "llm.model"
+    ]
+    assert reported, "`--check` doit rapporter l'erreur"
+    assert any(issue.level == "error" for issue in reported), reported
+
+    try:
+        LLMClient(llm).complete([{"role": "user", "content": "ping"}])
+    except ConfigError as exc:
+        assert "gemini-3.8-flash" in str(exc), exc
+    else:  # pragma: no cover - le préflight doit intercepter
+        raise AssertionError("une requête a été tentée avec un modèle invalide")
+
+
+def test_les_soulignes_restent_valides_hors_de_gemini() -> None:
+    """Étiquettes Ollama et déploiements Azure contiennent des soulignés."""
+    ollama = config.LLMConfig(backend="ollama", model="qwen2.5:14b_q4_k_m")
+    assert ollama.model_problem() == ""
+
+    azure = config.LLMConfig(
+        backend="openai_compatible",
+        base_url="https://exemple.openai.azure.com/openai",
+        model="deploiement_interne",
+    )
+    assert azure.model_problem() == ""
+
+
 def test_defaults_are_valid() -> None:
     settings = config.Settings()
     errors = [i for i in settings.validate() if i.level == "error"]
