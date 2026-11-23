@@ -87,12 +87,15 @@ jobs:
         run: >-
           python -m pytest -q --cov=core --cov=tools --cov=security --cov=config
           --cov-report=term:skip-covered --cov-fail-under=78
+          --ignore=tests/test_import_isolation.py
 
       - name: Pytest
         if: matrix.python-version != '3.11'
         env:
           OMNIAGENT_SLOW_TESTS: "1"
-        run: python -m pytest -q
+        # L'isolation des imports lance 68 interpréteurs pour un résultat qui ne
+        # dépend pas de la version de Python : un job dédié s'en charge une fois.
+        run: python -m pytest -q --ignore=tests/test_import_isolation.py
 
       # Le code est annoté partout ; Ruff ne lit que F/B/E9 et ne voit aucun
       # type. `mypy.ini` déclare la dette mesurée : les modules encore exemptés
@@ -205,6 +208,36 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+  isolation:
+    # Chaque fichier de tests est importé dans un interpréteur neuf : 68
+    # processus, trois fois le même coût s'il suivait la matrice, pour un
+    # résultat indépendant de la version de Python. Un job unique suffit et
+    # tourne en parallèle des autres.
+    name: Imports isolés (chaque module de tests seul)
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+            requirements-ci.txt
+
+      # Le test importe chaque module dans un interpréteur neuf avec tout
+      # l'environnement installé : mêmes dépendances que la matrice.
+      - name: Installer les dépendances (versions figées)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt -r requirements-ci.txt
+
+      - name: Chaque fichier de tests s'importe seul
+        run: python -m pytest tests/test_import_isolation.py -q
+
   build:
     name: build.bat --all et contrôles de fumée
     needs: tests
@@ -303,7 +336,7 @@ jobs:
   # façon stable.
   obligatoires:
     name: Vérifications obligatoires
-    needs: [tests, ui-tk, build]
+    needs: [tests, ui-tk, build, isolation]
     # `always()` : sans cela, un job sauté (par exemple `build` quand `tests`
     # échoue) empêcherait l'agrégateur de tourner et laisserait le check en
     # attente plutôt qu'en échec.
@@ -311,16 +344,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Résultat des trois jobs attendus
+      - name: Résultat des quatre jobs attendus
         env:
           RESULTAT_TESTS: ${{ needs['tests'].result }}
           RESULTAT_UI_TK: ${{ needs['ui-tk'].result }}
           RESULTAT_BUILD: ${{ needs['build'].result }}
+          RESULTAT_ISOLATION: ${{ needs['isolation'].result }}
         run: |
-          printf 'tests=%s ui-tk=%s build=%s\n' \
-            "$RESULTAT_TESTS" "$RESULTAT_UI_TK" "$RESULTAT_BUILD"
+          printf 'tests=%s ui-tk=%s build=%s isolation=%s\n' \
+            "$RESULTAT_TESTS" "$RESULTAT_UI_TK" "$RESULTAT_BUILD" "$RESULTAT_ISOLATION"
           echecs=""
-          for entree in "tests=$RESULTAT_TESTS" "ui-tk=$RESULTAT_UI_TK" "build=$RESULTAT_BUILD"; do
+          for entree in "tests=$RESULTAT_TESTS" "ui-tk=$RESULTAT_UI_TK" "build=$RESULTAT_BUILD" "isolation=$RESULTAT_ISOLATION"; do
             cas="${entree#*=}"
             if [ "$cas" != "success" ]; then
               echecs="$echecs ${entree%%=*}($cas)"
@@ -330,4 +364,4 @@ jobs:
             echo "::error::job(s) requis non réussis :$echecs"
             exit 1
           fi
-          echo "Les trois jobs requis ont réussi."
+          echo "Les quatre jobs requis ont réussi."
