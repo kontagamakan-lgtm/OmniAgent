@@ -1732,6 +1732,57 @@ def test_llm_client_maps_http_errors(monkeypatch) -> None:
         client.close()
 
 
+def test_the_provider_error_body_is_redacted_before_reaching_the_message(monkeypatch) -> None:
+    """Un fournisseur qui recopie la clé reçue ne doit pas la diffuser.
+
+    Certains proxys renvoient l'en-tête `Authorization` dans leur message
+    d'erreur ; ce corps part dans l'exception, donc dans l'interface et les
+    journaux.
+    """
+    monkeypatch.setenv("TEST_LLM_KEY", VALID_TEST_KEY)
+
+    def echoing(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            400, text=f'refus : Authorization: Bearer {VALID_TEST_KEY}'
+        )
+
+    client = _client(echoing)
+    try:
+        try:
+            client.complete([{"role": "user", "content": "x"}])
+        except LLMError as exc:
+            rendered = str(exc)
+        else:
+            raise AssertionError("HTTP 400 doit lever LLMError")
+    finally:
+        client.close()
+
+    assert VALID_TEST_KEY not in rendered, rendered
+    assert "MASQUÉ" in rendered, rendered
+
+
+def test_a_non_json_body_is_redacted_in_the_error_details(monkeypatch) -> None:
+    monkeypatch.setenv("TEST_LLM_KEY", VALID_TEST_KEY)
+
+    def garbage(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=f"<html>{VALID_TEST_KEY}</html>")
+
+    client = _client(garbage)
+    try:
+        try:
+            client.complete([{"role": "user", "content": "x"}])
+        except LLMResponseError as exc:
+            details = json.dumps(exc.details, ensure_ascii=False)
+            rendered = str(exc)
+        else:
+            raise AssertionError("une réponse non JSON doit lever LLMResponseError")
+    finally:
+        client.close()
+
+    assert VALID_TEST_KEY not in details, details
+    assert VALID_TEST_KEY not in rendered, rendered
+
+
 def test_llm_client_retries_rate_limit_then_succeeds(monkeypatch) -> None:
     monkeypatch.setenv("TEST_LLM_KEY", VALID_TEST_KEY)
     attempts = {"count": 0}

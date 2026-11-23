@@ -45,6 +45,7 @@ from core.errors import (
 )
 from core.ratelimit import RequestBudget
 from core.react_parser import ParsedToolCall, decode_arguments
+from security.redaction import redact, redactor
 
 __all__ = ["LLMClient", "LLMResponse"]
 
@@ -213,7 +214,11 @@ class LLMClient:
         status = response.status_code
         if status < 400:
             return
-        snippet = body.strip().replace("\n", " ")[:300]
+        # Le fournisseur — ou le proxy placé devant lui — peut recopier dans son
+        # message d'erreur l'en-tête `Authorization` qu'il vient de recevoir.
+        # Ce corps part dans l'exception, donc dans l'interface et les journaux :
+        # il est masqué avant d'y entrer.
+        snippet = redact(body.strip().replace("\n", " "))[:300]
         if status in {401, 403}:
             raise LLMAuthError(
                 f"accès refusé par le fournisseur (HTTP {status}) : vérifiez la clé "
@@ -263,7 +268,8 @@ class LLMClient:
             data = response.json()
         except (json.JSONDecodeError, ValueError) as exc:
             raise LLMResponseError(
-                "réponse du fournisseur non JSON", details={"body": body[:300]}
+                "réponse du fournisseur non JSON",
+                details={"body": redact(body[:300])},
             ) from exc
         if not isinstance(data, dict):
             raise LLMResponseError("réponse du fournisseur de type inattendu")
@@ -291,7 +297,10 @@ class LLMClient:
     def _parse_openai(self, data: dict[str, Any]) -> LLMResponse:
         choices = data.get("choices")
         if not isinstance(choices, list) or not choices:
-            raise LLMResponseError("réponse sans 'choices' exploitable", details=data)
+            raise LLMResponseError(
+                "réponse sans 'choices' exploitable",
+                details=redactor.redact_data(data),
+            )
         first = choices[0] if isinstance(choices[0], dict) else {}
         message = first.get("message") if isinstance(first.get("message"), dict) else {}
         text = message.get("content") or ""

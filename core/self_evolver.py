@@ -46,6 +46,7 @@ from core.skill_loader import (
     SkillLoader,
     validate_skill_source,
 )
+from security.redaction import redactor
 from tools.base import FunctionTool, Tool, object_schema, param
 
 __all__ = [
@@ -173,12 +174,17 @@ class _Journal:
         self.max_bytes = max(4096, int(max_bytes))
 
     def append(self, record: Mapping[str, Any]) -> None:
+        """Écrit une entrée masquée.
+
+        Le journal consigne des erreurs de cycle et des extraits de recherche
+        web : du texte libre où une clé recopiée par un modèle ou par une page
+        n'a rien à faire.
+        """
+        payload = redactor.redact_data({"at": _now(), **dict(record)})
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             with self.path.open("a", encoding="utf-8") as handle:
-                handle.write(
-                    json.dumps({"at": _now(), **dict(record)}, ensure_ascii=False) + "\n"
-                )
+                handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
             self._trim()
         except OSError:
             logger.debug("journal d'évolution inécrivable", exc_info=True)

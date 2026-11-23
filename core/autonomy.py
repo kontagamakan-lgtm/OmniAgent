@@ -30,6 +30,7 @@ from config import APP_ID, Settings
 from core.cost import estimate_cost, load_prices
 from core.events import EventType
 from core.locking import LockTimeout, file_lock
+from security.redaction import redactor
 
 __all__ = [
     "GOALS_NAME",
@@ -133,8 +134,15 @@ class AutonomyJournal:
         self.max_bytes = max(1, int(max_bytes))
 
     def append(self, record: dict[str, Any]) -> bool:
-        """Écrit une ligne ; un journal inaccessible ne casse pas la session."""
-        body = {"at": datetime.now(tz=timezone.utc).isoformat(), **record}
+        """Écrit une ligne ; un journal inaccessible ne casse pas la session.
+
+        Le journal reçoit du texte libre — extrait de la réponse du modèle,
+        message d'erreur, règle de politique — qui peut recopier une clé vue
+        dans le contexte. Il est masqué avant écriture, comme les traces.
+        """
+        body = redactor.redact_data(
+            {"at": datetime.now(tz=timezone.utc).isoformat(), **record}
+        )
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             with file_lock(self._lock_path()):
